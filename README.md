@@ -74,6 +74,31 @@ curl -s -X PATCH localhost:3000/v1/admin/agents/$AG/draft "${H[@]}" -d "{\"mcpSe
 curl -s -X POST localhost:3000/v1/admin/agents/$AG/publish "${H[@]}" -d '{}'  # Agent 새 버전 배포
 ```
 
+### 위젯 붙여 보기 (W-01 ~ W-05)
+
+```bash
+npm run build:ui                # apps/widget → apps/widget/dist/loader.js (React · Shadow DOM, 한 파일)
+npm run start:dev               # API 서버가 /widget/v1/ 로 위젯 파일을 함께 제공
+ID=$(npm run -s dev:identity-token -- --sub user-1)
+open "http://localhost:3000/widget/v1/demo.html?key=wk_pub_demo&token=$ID"
+```
+
+고객사 페이지에는 로더 한 줄만 넣는다. 위젯은 Shadow DOM 안에 그려져 고객사 CSS 와 섞이지 않는다.
+
+```html
+<script>
+  // 로그인 사용자 연동(signed_token) 위젯: 고객사 서버가 서명한 identity token 을 넘긴다 (로더보다 먼저)
+  window.TheOneAISettings = { getIdentityToken: () => fetch('/my/widget-token').then((r) => r.text()) };
+</script>
+<script src="https://<api-host>/widget/v1/loader.js" data-widget-key="wk_pub_..." async></script>
+<!-- 로그인 · 로그아웃 뒤: window.TheOneAI.identify({ token }) / window.TheOneAI.destroy() -->
+```
+
+- 화면: 런처(승인 대기 배지) · 홈(인사 · 진행 중 작업 · 추천 · 첨부) · 대화(실행 계획 카드 · 재계획 표시 · Tool 진행 · 스트리밍 답변 · 결과 검증 · 산출물 다운로드 · 피드백) · 승인 카드(인자 · 위험도 · 원문 JSON · task 범위 · 수정 요청 · 만료 시간) · 실패 · 일시정지 카드(재개 · 처음부터) · 실행 중 추가 지시 · 중지 · 작업 목록(상태 탭).
+- 테마는 콘솔 위젯 설정(C-09)의 브랜드 색 · 위치 · 다크 모드를 따른다 — 브랜드 색 위 글자색은 대비(WCAG 4.5:1)로 자동. 폭 480px 이하에서는 전체 화면.
+- SSE 는 `fetch` 스트림으로 받고(세션 토큰을 헤더로), 끊기면 `Last-Event-ID` 로 이어 받는다. 마크다운은 HTML 을 쓰지 않고 React 요소로만 그린다(링크는 http(s) 만).
+- 개발: `npm run dev:widget`(변경 시 다시 빌드). 위젯 소스는 `apps/widget`, 위젯 · 콘솔 공용 코드는 `apps/shared`.
+
 ## LLM 모델 설정
 
 Agent Loop 는 역할마다 다른 모델을 쓴다 (`model_configs`, 화면 C-03 “모델 구성”). OpenAI · DeepSeek · Gemini 는 모두 각 사의 **OpenAI 호환 Chat Completions API** 로 호출하며, provider 별 차이는 [`src/llm/provider-params.ts`](src/llm/provider-params.ts) 에서 맞춘다.
@@ -114,6 +139,7 @@ curl -N localhost:3000/v1/tasks/$TASK/events -H "Authorization: Bearer $TOKEN"  
 ```bash
 npm test             # 단위 테스트
 npm run test:e2e     # e2e — 실제 PostgreSQL · Redis 필요 (docker compose). 테스트 DB 를 매번 새로 만들고 마이그레이션을 적용한다
+                     # 먼저 위젯을 빌드하고(pretest:e2e) 설치된 Chromium(Playwright)으로 화면을 시험한다. 화면 저장: UI_SCREENSHOT_DIR=<폴더>
 npm run lint && npm run typecheck && npm run build
 ```
 
@@ -139,11 +165,14 @@ Tool 은 [test/tools.e2e-spec.ts](test/tools.e2e-spec.ts) 가 확인한다: tool
 
 Reflection · Context Compression 은 [test/reflection.e2e-spec.ts](test/reflection.e2e-spec.ts) 가 확인한다: 긴 대화 → 창 밖 메시지 8개 요약 · 저장 · 계획 · 작업 · 답변 프롬프트에 포함, 다음 작업은 새로 밀려난 2개만 이전 요약에 합침, 짧은 대화는 요약 안 함, 작업 노트가 길면 앞 단계 노트 압축(단계 기록 · 토큰) · 답변은 줄인 노트 사용, 재계획에 거부된 Tool 호출 전달, 작업의 실패 · 재계획 사유가 기억 추출로, 검증 오류 → 정정 메시지(두 번째 assistant 메시지) → 다시 검증, `selfCorrection` 끄면 정정 안 함.
 
+위젯 화면은 [test/ui-widget.e2e-spec.ts](test/ui-widget.e2e-spec.ts) 가 빌드한 `loader.js` 를 데모 페이지에 넣고 브라우저로 확인한다: 런처 → 홈(인사 · 고지 문구), 요청 → 실행 계획 · 스트리밍 답변 → 결과 검증 · 피드백 저장, 승인 카드(설명 · 인자 · 위험도) → 승인 → 같은 인자로 Tool 실행 → 완료, 실패 카드 → 멈춘 단계부터 재개 → 완료, 작업 목록 탭 → 항목을 누르면 그 대화, 모바일 폭 전체 화면 · 최소화. 콘솔용 API(초안 편집 · 버전 복원 · 위젯 설정 · Secret 교체 · 업로드 · 산출물 · 대화 보기)는 [test/console-api.e2e-spec.ts](test/console-api.e2e-spec.ts).
+
 ## 구현 현황
 
 | 범위 | 상태 |
 |---|---|
 | 프로젝트 · DB 기반 (스키마, RLS, 마이그레이션, 시드) | 완료 |
+| 위젯 화면 W-01 ~ W-05 (`apps/widget` → `/widget/v1/loader.js`): 런처 · 홈 · 대화(계획 · 스트리밍 · 결과 검증 · 산출물 · 피드백) · 승인 카드 · 실패 · 재개 · 추가 지시 · 작업 목록, 첨부 업로드, 테마 · 다크 모드 · 모바일 전체 화면, Shadow DOM 격리 | 완료 |
 | Widget API: `POST /v1/widget/bootstrap`, 대화 · 메시지, 작업 목록 · 상세 · 중지, SSE (`Last-Event-ID` 재전송, 응답 스트림 스냅샷) | 완료 |
 | 비동기 실행: BullMQ `agent-tasks`, Worker heartbeat, 단계 · checkpoint 저장, 최대 단계 · 시간 제한, 중지 처리 | 완료 |
 | LLM 연동: OpenAI 호환 클라이언트(OpenAI · DeepSeek · Gemini), 스트리밍 · tool call 파싱 · 재시도 · 대체 모델 · 역할별 추론 강도 | 완료 — DeepSeek 는 실제 API 로 확인, OpenAI · Gemini 는 키가 없어 단위 테스트(요청 형식)까지만 |
@@ -151,25 +180,27 @@ Reflection · Context Compression 은 [test/reflection.e2e-spec.ts](test/reflect
 | 콘솔 인증: `POST /v1/admin/auth/login`(scrypt) · `GET /v1/admin/me`, 역할 가드(Owner > Admin > Operator > Viewer, 매 요청 DB 재확인), 감사 로그 | 완료 — refresh 쿠키 회전 · 로그아웃은 콘솔 UI 단계 |
 | MCP (C-04 · C-05): Streamable HTTP 연결(공식 SDK v2 — 2026-07-28 우선, 2025 계열 서버 자동 호환), SSRF 방어(스킴 · 호스트 · DNS 해석 · 연결 시점 IP 검사, 메타데이터 IP 항상 차단), API Key(Secret 저장소), 연결 테스트 · Tool 탐색 · 검증(JSON Schema · 숨은 지시문 · 보이지 않는 문자 · 민감정보 · 제안 등급), 포함 Tool · 등록 → 새 Registry 버전, Tool 정책, 재탐색 변경 감지 → 운영자 승인, `mcp-sync` 주기 잡(장애 → error · 복구, 헬스 p95 · 오류율), 비활성화 · 삭제, Registry 버전 · diff API | 완료 — stdio(Docker Sandbox) 실행형 · OAuth 인증 · 이미지 서명 검증은 Sandbox 단계 |
 | Skill (C-06): zip 업로드(zip-slip · 심볼릭 링크 · 크기 · 파일 수 검사), SKILL.md 파싱(줄 번호 오류), 신뢰 검증 6항목, 버전(내용 해시 · 중복 · 충돌) · 파일 미리보기 · 비교 · 활성화 → 새 Registry 버전 · 비활성화, Agent 허용 목록, 위젯 추천 카드. 실행: 계획에는 metadata 만, `skill` 단계에서 본문 · 파일 목록 로딩, `skill.read_file`, allowed-tools 로 Tool 범위 제한(서버 강제), 저장 파일 해시 재확인 | 완료 — Git 출처 · 서명 · test-runs · 스크립트 실행(Sandbox) · MCP 서버 Skill 은 이후 |
-| Agent MCP 허용 목록: 초안(배포 버전 복사) → 배포, 실행 시 허용 목록 · 서버 상태 · Tool 사용 여부 확인(`not_allowed` · `tool_unavailable`) | 완료 — 초안 편집은 MCP 허용 목록만 (지침 · 모델 · 정책 편집은 C-03 단계) |
+| Agent MCP 허용 목록: 초안(배포 버전 복사) → 배포, 실행 시 허용 목록 · 서버 상태 · Tool 사용 여부 확인(`not_allowed` · `tool_unavailable`) | 완료 — 초안에서 지침 · 환영 문구 · 역할별 모델 · 실행 · Memory 정책 · MCP · Skill 허용 목록 편집, 버전 목록 · 복원 · 초안 버리기 |
 | Tool Registry · Dispatcher: 작업별 Registry 버전 고정, 인자 검증(zod), 권한 판단(등급 정책 → Tool 재정의 → 조건 규칙), 읽기 Tool 병렬 실행, 시간 제한 · 취소 전파, 멱등 Tool 재시도, `tool_executions` 기록(거부 포함) · 민감정보 마스킹, `tool.called` · `tool.result` · `tool.denied` | 완료 — 내장 Tool 2개(`builtin.calculate`, `builtin.current_time`). 승인 필요 Tool 은 승인 흐름으로 실행 |
-| 비용 계산 (`tasks.cost_amount`) | 다음 단계 — 모델별 단가표 필요. 토큰 수는 기록 중 |
 | 재개 · 복구: checkpoint 재개(계획 · 노트 · 다음 단계 · 보낸 답변) · 처음부터 다시 · 일시정지 · 실행 중 추가 지시(steer) · agent-recovery(heartbeat 끊김 → 마지막 checkpoint 부터, 한도 3회) · Worker 종료 시 넘기기 · 소유권 확인 · 콘솔 작업 목록 · 트레이스 · 단계 상세 · 일시정지 · 중지 · 재개 | 완료 |
 | 승인 (W-03 · C-07): 승인 필요 Tool → 승인 요청 · `waiting_approval`(Worker 해제) → 결정 후 같은 호출부터 재개(진행 중 대화 checkpoint), once · task 범위, user · operator · user_and_operator, 인자 해시 · 사용 처리, 거절 사유 → 모델, 만료(`approval-expiry`) → paused, 중지 시 취소, 위젯 결정 API · 콘솔 목록 · 이력 · 대리 결정, 등급 정책 · 조건 규칙 관리(감사 로그), 정책 강화는 즉시 · 완화는 새 작업부터 | 완료 |
 | Context Compression: 최근 대화 창 밖 메시지 → 대화별 누적 요약(증분, 시스템 프롬프트에 데이터로), 작업 노트 압축(`context.compress_notes`), 작업 단계의 오래된 Tool 결과 축약 | 완료 |
 | Reflection: 재계획에 실패 · 거부된 Tool 호출 목록, 답변 검증 오류 → 정정 메시지 한 번 · 다시 검증(`selfCorrection`), 작업의 실패 · 재계획 · 검증 오류 → 처리 요령 기억의 근거 | 완료 |
-| 업로드 · 산출물 다운로드 | 다음 단계 (명세 §2.6) |
+| 업로드 · 산출물 (명세 §2.6): 업로드 등록 → 내용 PUT(크기 · sha256 확인) → 메시지 첨부 → 텍스트 · CSV · JSON 첨부는 작업 Context 에 데이터로, `builtin.create_file` 산출물(md · txt · csv · json), 작업 산출물 목록 · 다운로드(위젯 · 콘솔) | 완료 — S3 presigned URL 은 운영 저장소 단계 |
 | Memory (C-08): 작업 완료 → `memory-ingest`(Memory 역할이 사용자 사실 · 선호 / 요약 / 처리 요령 추출, 마스킹 · 지시문 격리 · 중복 병합 · 보존 기간), 임베딩(`local` 해시 · OpenAI · Gemini), Context 구성(사용자 프로필 + pgvector 유사도, 사용자 격리), 콘솔 검색(의미 · 키워드) · 격리 해제 · 수정(재임베딩) · 고정 · 삭제 · 사용자 데이터 삭제 | 완료 — 운영 임베딩은 키가 없어 `local` 로만 확인 |
 | Billing: 모델 호출 사용량(역할 · 실제 응답 모델별, 기억 추출 포함) → `usage_records` · 작업 비용(테넌트 단가), 사용량 보고(일별 · 모델별 · 용도별 · 단가 없는 호출), 월 한도(`BUDGET_EXCEEDED`), 단가 · 한도 관리(감사 로그) | 완료 — 단가는 테넌트가 등록 (플랫폼 기본 단가 없음) |
 | 대시보드 지표 (C-01): `metrics-rollup`(일별 집계 SQL 함수) · `GET /admin/metrics`(기간 KPI · 직전 기간 비교 · 목표 · 최근 실패 · 피드백), 결과 피드백 API | 완료 — 평가셋 성공률은 평가셋 실행(C-03) 단계 |
 | Marketplace (P2): Skill 게시(검증 통과 버전 · 파일 내용 주소 복사 · 플랫폼 Ed25519 서명) · 설치(서명 · 파일 해시 확인 → 업로드와 같은 검증 → 검토 대기 버전) · 새 버전 · 철회 · 이름 충돌, MCP 서버 템플릿 공유(비밀값 제외 · 등록 마법사용) | 완료 — 플랫폼 운영자 검수 · 유료 판매는 범위 밖 |
 | `retention` 주기 잡 | 다음 단계 (명세 §6) — `agent-recovery` · `mcp-sync` · `memory-ingest` · `approval-expiry` · `metrics-rollup` 는 완료 |
-| Admin API · 콘솔 | 다음 단계 |
+| 콘솔 화면 (C-01 ~ C-09) | 다음 단계 — 화면이 쓰는 Admin API 는 완료 |
 | 요청 제한 · OpenTelemetry · Vault 연동 (`SECRETS_BACKEND=local` 은 개발 전용, production 에서 시작 거부) | 다음 단계 |
 
 ## 코드 구조
 
 ```
+apps/
+├── widget/                        위젯(W-01 ~ W-05) — loader.tsx(Shadow DOM 마운트 · 공개 API) · App · views · components · run(SSE → 실행 상태) · api
+└── shared/                        위젯 · 콘솔 공용 — 상태 색 · 라벨, 날짜 · 숫자 형식, fetch SSE(Last-Event-ID 재연결), 안전한 마크다운
 src/
 ├── main.ts · worker.ts            API 서버 · Agent Worker 진입점 (별도 프로세스)
 ├── app.module.ts · worker.module.ts

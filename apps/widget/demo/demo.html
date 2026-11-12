@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TheOneAI 위젯 데모</title>
+<style>
+  body { margin: 0; font-family: system-ui, -apple-system, 'Apple SD Gothic Neo', sans-serif; background: #f4f5f7; color: #16181d; }
+  main { max-width: 720px; margin: 0 auto; padding: 48px 24px; }
+  code { background: #e9ebef; padding: 2px 6px; border-radius: 4px; }
+  label { display: block; margin: 16px 0 6px; font-weight: 600; }
+  input { width: 100%; box-sizing: border-box; padding: 10px; border: 1px solid #c9cdd3; border-radius: 8px; font: inherit; }
+  button { margin-top: 12px; padding: 10px 16px; border: none; border-radius: 8px; background: #4f46e5; color: #fff; font: inherit; cursor: pointer; }
+</style>
+</head>
+<body>
+<main>
+  <h1>위젯 데모 페이지</h1>
+  <p>고객사 페이지처럼 위젯 로더 한 줄을 넣은 페이지입니다. 오른쪽 아래 버튼으로 위젯을 엽니다.</p>
+  <p>로그인 사용자 연동(서명 토큰) 위젯이면, 고객사 서버 역할로 만든 identity token 을 넣어 주세요 —
+    <code>npm run dev:identity-token -- --sub user-1</code></p>
+  <label for="token">identity token</label>
+  <input id="token" placeholder="eyJhbGciOi...">
+  <button id="identify" type="button">이 토큰으로 연결</button>
+</main>
+<script>
+  // URL 의 ?key=&token= 으로도 받는다 (개발 편의)
+  const params = new URLSearchParams(location.search);
+  window.TheOneAISettings = {
+    widgetKey: params.get('key') || 'wk_pub_demo',
+    identityToken: params.get('token') || undefined,
+  };
+  document.getElementById('identify').addEventListener('click', () => {
+    const token = document.getElementById('token').value.trim();
+    if (token) window.TheOneAI.identify({ token });
+  });
+</script>
+<script src="./loader.js" async></script>
+</body>
+</html>
