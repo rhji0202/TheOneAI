@@ -1,0 +1,1252 @@
+// =============================================================================
+// TheOneAI · Embedded AI Agent — 데이터 모델 v0.1
+// 기준: 기획안 v2.0 · 화면 설계 v1.0 (docs/screen-design.md)
+//
+// 규칙
+//  - 테넌트 데이터를 담는 모든 테이블은 tenant_id 를 가지며 PostgreSQL RLS 로 격리한다.
+//    정책 · 역할 · 추가 인덱스: prisma/sql/001_rls_and_indexes.sql
+//  - 테이블은 복수형 snake_case(@@map), 컬럼은 snake_case(@map).
+//  - ID 는 UUIDv7 (시간순 → B-tree 지역성). 이벤트 · 감사 로그만 bigint 시퀀스.
+//  - enum 값은 API 에 그대로 노출되는 소문자 snake_case.
+//  - "*_by_id" 컬럼은 users.id 를 가리키지만 FK 를 두지 않는다 (사용자 삭제 후에도 이력 보존).
+//  - Secret 값은 저장하지 않는다. "*_ref" 컬럼에 Vault 참조(vault://...)만 저장한다.
+// =============================================================================
+
+generator client {
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+// 접속 URL 은 prisma.config.ts 에서 주입한다 (Prisma 7).
+datasource db {
+  provider   = "postgresql"
+  extensions = [vector, pg_trgm]
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum MemberRole {
+  owner
+  admin
+  operator
+  viewer
+
+  @@map("member_role")
+}
+
+enum AgentVersionStatus {
+  draft
+  published
+  archived
+
+  @@map("agent_version_status")
+}
+
+enum ProviderKind {
+  anthropic
+  openai_compatible
+  bedrock
+  vertex
+
+  @@map("provider_kind")
+}
+
+enum ModelRole {
+  planner
+  executor
+  evaluator
+
+  @@map("model_role")
+}
+
+enum MessageRole {
+  user
+  assistant
+  system
+
+  @@map("message_role")
+}
+
+enum TaskStatus {
+  queued
+  running
+  waiting_approval
+  paused
+  recovering
+  completed
+  failed
+  cancelled
+
+  @@map("task_status")
+}
+
+enum StepType {
+  context
+  plan
+  tool
+  skill
+  evaluate
+  respond
+
+  @@map("step_type")
+}
+
+enum StepStatus {
+  pending
+  running
+  succeeded
+  failed
+  skipped
+  waiting_approval
+  cancelled
+
+  @@map("step_status")
+}
+
+enum McpTransport {
+  streamable_http
+  stdio_sandbox
+
+  @@map("mcp_transport")
+}
+
+enum McpAuthType {
+  none
+  api_key
+  oauth
+
+  @@map("mcp_auth_type")
+}
+
+enum McpServerStatus {
+  draft
+  pending_review
+  connected
+  error
+  disabled
+
+  @@map("mcp_server_status")
+}
+
+enum TrustStatus {
+  verified
+  needs_review
+  rejected
+
+  @@map("trust_status")
+}
+
+enum McpToolState {
+  active
+  pending_change
+  removed
+
+  @@map("mcp_tool_state")
+}
+
+enum SchemaCheck {
+  valid
+  warning
+  error
+
+  @@map("schema_check")
+}
+
+enum SecurityCheck {
+  passed
+  warning
+  failed
+
+  @@map("security_check")
+}
+
+enum PermissionLevel {
+  read
+  write
+  external_send
+  delete
+  financial
+
+  @@map("permission_level")
+}
+
+enum ApprovalMode {
+  auto
+  require_approval
+  always_approval
+  block
+
+  @@map("approval_mode")
+}
+
+enum Approver {
+  user
+  operator
+  user_and_operator
+
+  @@map("approver")
+}
+
+enum RuleEffect {
+  require_operator
+  block
+
+  @@map("rule_effect")
+}
+
+enum RiskLevel {
+  low
+  medium
+  high
+
+  @@map("risk_level")
+}
+
+enum ApprovalStatus {
+  pending
+  approved
+  rejected
+  expired
+  cancelled
+
+  @@map("approval_status")
+}
+
+enum ApprovalScope {
+  once
+  task
+
+  @@map("approval_scope")
+}
+
+enum Decision {
+  approve
+  reject
+
+  @@map("decision")
+}
+
+enum ToolSource {
+  mcp
+  sandbox
+  builtin
+  skill_script
+
+  @@map("tool_source")
+}
+
+enum ToolExecutionStatus {
+  running
+  succeeded
+  failed
+  timeout
+  denied
+  cancelled
+
+  @@map("tool_execution_status")
+}
+
+enum SkillSource {
+  upload
+  git
+  marketplace
+
+  @@map("skill_source")
+}
+
+enum SkillStatus {
+  active
+  pending_review
+  inactive
+  verification_failed
+
+  @@map("skill_status")
+}
+
+enum VerificationStatus {
+  pending
+  passed
+  failed
+
+  @@map("verification_status")
+}
+
+enum MemoryType {
+  episodic
+  semantic
+  procedural
+
+  @@map("memory_type")
+}
+
+enum MemoryScope {
+  user
+  agent
+
+  @@map("memory_scope")
+}
+
+enum MemorySourceType {
+  user_message
+  tool_result
+  external_document
+  reflection
+  manual
+
+  @@map("memory_source_type")
+}
+
+enum MemoryStatus {
+  active
+  quarantined
+
+  @@map("memory_status")
+}
+
+enum ArtifactOrigin {
+  user_upload
+  task_output
+
+  @@map("artifact_origin")
+}
+
+enum FeedbackRating {
+  helpful
+  not_helpful
+
+  @@map("feedback_rating")
+}
+
+enum IdentityMode {
+  anonymous
+  signed_token
+
+  @@map("identity_mode")
+}
+
+enum ActorType {
+  user
+  end_user
+  agent
+  system
+
+  @@map("actor_type")
+}
+
+enum EvalRunStatus {
+  queued
+  running
+  completed
+  failed
+
+  @@map("eval_run_status")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tenant · 사용자
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// 고객사(조직). RLS 의 기준.
+model Tenant {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  name      String
+  slug      String   @unique
+  plan      String   @default("standard")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  users                  User[]
+  endUsers               EndUser[]
+  agents                 Agent[]
+  agentVersions          AgentVersion[]
+  providers              Provider[]
+  modelConfigs           ModelConfig[]
+  agentVersionMcpServers AgentVersionMcpServer[]
+  agentVersionSkills     AgentVersionSkill[]
+  conversations          Conversation[]
+  messages               Message[]
+  tasks                  Task[]
+  taskSteps              TaskStep[]
+  taskEvents             TaskEvent[]
+  toolRegistryVersions   ToolRegistryVersion[]
+  mcpServers             McpServer[]
+  mcpTools               McpTool[]
+  toolExecutions         ToolExecution[]
+  toolPolicies           ToolPolicy[]
+  toolPolicyRules        ToolPolicyRule[]
+  approvals              Approval[]
+  skills                 Skill[]
+  skillVersions          SkillVersion[]
+  memories               Memory[]
+  artifacts              Artifact[]
+  feedbacks              Feedback[]
+  widgetConfigs          WidgetConfig[]
+  auditLogs              AuditLog[]
+  metricsDaily           MetricDaily[]
+  evalCases              EvalCase[]
+  evalRuns               EvalRun[]
+
+  @@map("tenants")
+}
+
+/// 콘솔 멤버 (운영자). 위젯 사용자는 EndUser.
+model User {
+  id           String     @id @default(uuid(7)) @db.Uuid
+  tenantId     String     @map("tenant_id") @db.Uuid
+  email        String
+  name         String
+  role         MemberRole @default(viewer)
+  passwordHash String?    @map("password_hash")
+  ssoSubject   String?    @map("sso_subject")
+  lastLoginAt  DateTime?  @map("last_login_at") @db.Timestamptz(3)
+  disabledAt   DateTime?  @map("disabled_at") @db.Timestamptz(3)
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, email])
+  @@map("users")
+}
+
+/// 위젯 최종 사용자. 콘솔에는 가명(pseudonym)으로만 표시한다.
+model EndUser {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  tenantId    String    @map("tenant_id") @db.Uuid
+  /// 고객사 서버가 서명한 identity token 의 sub. 익명이면 null.
+  externalId  String?   @map("external_id")
+  /// 익명 모드의 브라우저 식별자.
+  anonymousId String?   @map("anonymous_id")
+  /// 콘솔 표시용 가명 (예: user_8f2a).
+  pseudonym   String
+  locale      String?
+  lastSeenAt  DateTime? @map("last_seen_at") @db.Timestamptz(3)
+  /// 사용자 데이터 삭제 요청 처리 시각 (C-08).
+  erasedAt    DateTime? @map("erased_at") @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+  tasks         Task[]
+  memories      Memory[]
+  artifacts     Artifact[]
+  feedbacks     Feedback[]
+
+  @@unique([tenantId, externalId])
+  @@unique([tenantId, anonymousId])
+  @@unique([tenantId, pseudonym])
+  @@map("end_users")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Agent · 버전 · 모델
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Agent {
+  id                 String    @id @default(uuid(7)) @db.Uuid
+  tenantId           String    @map("tenant_id") @db.Uuid
+  name               String
+  description        String?
+  avatarUrl          String?   @map("avatar_url")
+  /// 현재 배포된 버전. 새 작업은 이 버전으로 시작한다.
+  publishedVersionId String?   @unique @map("published_version_id") @db.Uuid
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  archivedAt         DateTime? @map("archived_at") @db.Timestamptz(3)
+
+  tenant           Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  publishedVersion AgentVersion?  @relation("AgentPublishedVersion", fields: [publishedVersionId], references: [id])
+  versions         AgentVersion[] @relation("AgentVersions")
+  conversations    Conversation[]
+  tasks            Task[]
+  memories         Memory[]
+  widgetConfigs    WidgetConfig[]
+  metricsDaily     MetricDaily[]
+  evalCases        EvalCase[]
+
+  @@unique([tenantId, name])
+  @@map("agents")
+}
+
+/// Agent 설정의 불변 스냅샷. 초안(draft)은 Agent 당 1개 (부분 유니크 인덱스, SQL 참고).
+model AgentVersion {
+  id              String             @id @default(uuid(7)) @db.Uuid
+  tenantId        String             @map("tenant_id") @db.Uuid
+  agentId         String             @map("agent_id") @db.Uuid
+  version         Int
+  status          AgentVersionStatus @default(draft)
+  welcomeMessage  String             @map("welcome_message")
+  systemPrompt    String             @map("system_prompt")
+  /// ExecutionPolicy — docs/data-model.md §4.1
+  executionPolicy Json               @map("execution_policy")
+  /// MemoryPolicy — docs/data-model.md §4.2
+  memoryPolicy    Json               @map("memory_policy")
+  changeNote      String?            @map("change_note")
+  createdById     String?            @map("created_by_id") @db.Uuid
+  publishedById   String?            @map("published_by_id") @db.Uuid
+  publishedAt     DateTime?          @map("published_at") @db.Timestamptz(3)
+  createdAt       DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant       Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agent        Agent                   @relation("AgentVersions", fields: [agentId], references: [id], onDelete: Cascade)
+  publishedFor Agent?                  @relation("AgentPublishedVersion")
+  modelConfigs ModelConfig[]
+  mcpServers   AgentVersionMcpServer[]
+  skills       AgentVersionSkill[]
+  tasks        Task[]
+  evalRuns     EvalRun[]
+
+  @@unique([agentId, version])
+  @@index([tenantId, agentId, status])
+  @@map("agent_versions")
+}
+
+/// LLM Provider 연결. API Key 는 secretRef(Vault)로만 참조.
+model Provider {
+  id        String       @id @default(uuid(7)) @db.Uuid
+  tenantId  String       @map("tenant_id") @db.Uuid
+  name      String
+  kind      ProviderKind
+  baseUrl   String?      @map("base_url")
+  secretRef String       @map("secret_ref")
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  modelConfigs ModelConfig[] @relation("ModelConfigProvider")
+  fallbackFor  ModelConfig[] @relation("ModelConfigFallbackProvider")
+
+  @@unique([tenantId, name])
+  @@map("providers")
+}
+
+/// 역할별 모델 설정 (C-03 모델 구성).
+model ModelConfig {
+  id                 String    @id @default(uuid(7)) @db.Uuid
+  tenantId           String    @map("tenant_id") @db.Uuid
+  agentVersionId     String    @map("agent_version_id") @db.Uuid
+  role               ModelRole
+  providerId         String    @map("provider_id") @db.Uuid
+  model              String
+  maxOutputTokens    Int       @map("max_output_tokens")
+  temperature        Float     @default(0)
+  fallbackProviderId String?   @map("fallback_provider_id") @db.Uuid
+  fallbackModel      String?   @map("fallback_model")
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant           Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agentVersion     AgentVersion @relation(fields: [agentVersionId], references: [id], onDelete: Cascade)
+  provider         Provider     @relation("ModelConfigProvider", fields: [providerId], references: [id])
+  fallbackProvider Provider?    @relation("ModelConfigFallbackProvider", fields: [fallbackProviderId], references: [id])
+
+  @@unique([agentVersionId, role])
+  @@map("model_configs")
+}
+
+/// Agent 버전별 MCP 서버 허용 목록 (C-03 Tools · Skills).
+model AgentVersionMcpServer {
+  tenantId       String  @map("tenant_id") @db.Uuid
+  agentVersionId String  @map("agent_version_id") @db.Uuid
+  mcpServerId    String  @map("mcp_server_id") @db.Uuid
+  enabled        Boolean @default(true)
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agentVersion AgentVersion @relation(fields: [agentVersionId], references: [id], onDelete: Cascade)
+  mcpServer    McpServer    @relation(fields: [mcpServerId], references: [id], onDelete: Cascade)
+
+  @@id([agentVersionId, mcpServerId])
+  @@map("agent_version_mcp_servers")
+}
+
+/// Agent 버전별 Skill 허용 목록.
+model AgentVersionSkill {
+  tenantId       String  @map("tenant_id") @db.Uuid
+  agentVersionId String  @map("agent_version_id") @db.Uuid
+  skillId        String  @map("skill_id") @db.Uuid
+  enabled        Boolean @default(true)
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agentVersion AgentVersion @relation(fields: [agentVersionId], references: [id], onDelete: Cascade)
+  skill        Skill        @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@id([agentVersionId, skillId])
+  @@map("agent_version_skills")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 대화 · 메시지
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Conversation {
+  id            String    @id @default(uuid(7)) @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  agentId       String    @map("agent_id") @db.Uuid
+  endUserId     String    @map("end_user_id") @db.Uuid
+  title         String?
+  lastMessageAt DateTime? @map("last_message_at") @db.Timestamptz(3)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agent    Agent     @relation(fields: [agentId], references: [id])
+  endUser  EndUser   @relation(fields: [endUserId], references: [id], onDelete: Cascade)
+  messages Message[]
+  tasks    Task[]
+
+  @@index([tenantId, endUserId, lastMessageAt(sort: Desc)])
+  @@map("conversations")
+}
+
+model Message {
+  id             String      @id @default(uuid(7)) @db.Uuid
+  tenantId       String      @map("tenant_id") @db.Uuid
+  conversationId String      @map("conversation_id") @db.Uuid
+  role           MessageRole
+  /// 콘텐츠 블록 배열: [{ type: 'text', text }, { type: 'attachment', artifactId }]
+  content        Json
+  /// 이 메시지가 속한 작업 (최종 응답 · 실행 중 추가 지시).
+  taskId         String?     @map("task_id") @db.Uuid
+  idempotencyKey String?     @map("idempotency_key")
+  createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant        Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation  Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  task          Task?        @relation("TaskMessages", fields: [taskId], references: [id], onDelete: SetNull)
+  triggeredTask Task?        @relation("TaskTrigger")
+  attachments   Artifact[]
+
+  @@unique([conversationId, idempotencyKey])
+  @@index([conversationId, createdAt])
+  @@map("messages")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 작업 · 단계(checkpoint) · 이벤트
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// 장기 작업. HTTP 요청이 아니라 BullMQ Worker 가 실행한다.
+model Task {
+  id                   String     @id @default(uuid(7)) @db.Uuid
+  tenantId             String     @map("tenant_id") @db.Uuid
+  agentId              String     @map("agent_id") @db.Uuid
+  /// 시작 시점의 Agent 버전 (배포가 바뀌어도 이 버전으로 끝까지 실행).
+  agentVersionId       String     @map("agent_version_id") @db.Uuid
+  /// 시작 시점의 Tool Registry 버전 (MCP · Skill 변경과 무관하게 고정).
+  registryVersionId    String     @map("registry_version_id") @db.Uuid
+  conversationId       String     @map("conversation_id") @db.Uuid
+  endUserId            String     @map("end_user_id") @db.Uuid
+  triggerMessageId     String?    @unique @map("trigger_message_id") @db.Uuid
+  title                String
+  status               TaskStatus @default(queued)
+  /// 현재 계획 { version, steps: [{ index, title, kind, toolName?, requiresApproval }] }
+  plan                 Json?
+  planVersion          Int        @default(0) @map("plan_version")
+  totalSteps           Int?       @map("total_steps")
+  completedSteps       Int        @default(0) @map("completed_steps")
+  retryCount           Int        @default(0) @map("retry_count")
+  replanCount          Int        @default(0) @map("replan_count")
+  inputTokens          Int        @default(0) @map("input_tokens")
+  outputTokens         Int        @default(0) @map("output_tokens")
+  costAmount           Decimal    @default(0) @map("cost_amount") @db.Decimal(14, 6)
+  costCurrency         String     @default("USD") @map("cost_currency") @db.Char(3)
+  queueJobId           String?    @map("queue_job_id")
+  workerId             String?    @map("worker_id")
+  traceId              String?    @map("trace_id")
+  /// 마지막으로 checkpoint 가 저장된 단계 (재개 기준점).
+  lastCheckpointStepId String?    @map("last_checkpoint_step_id") @db.Uuid
+  /// Worker heartbeat. recovery.worker 가 stalled 작업을 찾는 데 사용.
+  lastHeartbeatAt      DateTime?  @map("last_heartbeat_at") @db.Timestamptz(3)
+  pauseRequestedAt     DateTime?  @map("pause_requested_at") @db.Timestamptz(3)
+  cancelRequestedAt    DateTime?  @map("cancel_requested_at") @db.Timestamptz(3)
+  pausedReason         String?    @map("paused_reason")
+  failureCode          String?    @map("failure_code")
+  failureMessage       String?    @map("failure_message")
+  queuedAt             DateTime   @default(now()) @map("queued_at") @db.Timestamptz(3)
+  startedAt            DateTime?  @map("started_at") @db.Timestamptz(3)
+  finishedAt           DateTime?  @map("finished_at") @db.Timestamptz(3)
+  createdAt            DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant          Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agent           Agent               @relation(fields: [agentId], references: [id])
+  agentVersion    AgentVersion        @relation(fields: [agentVersionId], references: [id])
+  registryVersion ToolRegistryVersion @relation(fields: [registryVersionId], references: [id])
+  conversation    Conversation        @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  endUser         EndUser             @relation(fields: [endUserId], references: [id], onDelete: Cascade)
+  triggerMessage  Message?            @relation("TaskTrigger", fields: [triggerMessageId], references: [id], onDelete: SetNull)
+  messages        Message[]           @relation("TaskMessages")
+  steps           TaskStep[]
+  events          TaskEvent[]
+  toolExecutions  ToolExecution[]
+  approvals       Approval[]
+  artifacts       Artifact[]
+  feedbacks       Feedback[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, endUserId, createdAt(sort: Desc)])
+  @@index([tenantId, agentId, createdAt(sort: Desc)])
+  @@index([status, lastHeartbeatAt])
+  @@map("tasks")
+}
+
+/// 실행 단계 + checkpoint. 단계가 끝날 때마다 재개용 상태를 저장한다.
+model TaskStep {
+  id            String     @id @default(uuid(7)) @db.Uuid
+  tenantId      String     @map("tenant_id") @db.Uuid
+  taskId        String     @map("task_id") @db.Uuid
+  /// 실행 순서 (1부터). 재계획 · 재시도로 늘어난다.
+  seq           Int
+  planVersion   Int        @map("plan_version")
+  /// 계획 상의 단계 번호 (위젯 계획 카드의 n / total). context · evaluate 단계는 null.
+  planIndex     Int?       @map("plan_index")
+  type          StepType
+  /// 예: context.build, planner.revise, sales-db.query, report-writer
+  name          String
+  status        StepStatus @default(pending)
+  /// 같은 값이면 병렬로 실행된 묶음.
+  parallelGroup String?    @map("parallel_group")
+  summary       String?
+  /// 마스킹된 입력 · 출력. 큰 출력은 outputRef(S3 key).
+  input         Json?
+  output        Json?
+  outputRef     String?    @map("output_ref")
+  /// Evaluator 판단 { verdict: 'pass'|'replan'|'fail', reason, planDiff? }
+  evaluation    Json?
+  attempts      Int        @default(0)
+  inputTokens   Int        @default(0) @map("input_tokens")
+  outputTokens  Int        @default(0) @map("output_tokens")
+  /// 재개용 상태 스냅샷 — docs/data-model.md §4.3. 크면 checkpointRef(S3 key).
+  checkpoint    Json?
+  checkpointRef String?    @map("checkpoint_ref")
+  checkpointAt  DateTime?  @map("checkpoint_at") @db.Timestamptz(3)
+  startedAt     DateTime?  @map("started_at") @db.Timestamptz(3)
+  finishedAt    DateTime?  @map("finished_at") @db.Timestamptz(3)
+  durationMs    Int?       @map("duration_ms")
+  createdAt     DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  task           Task            @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  toolExecutions ToolExecution[]
+  approvals      Approval[]
+
+  @@unique([taskId, seq])
+  @@index([taskId, checkpointAt])
+  @@map("task_steps")
+}
+
+/// SSE 이벤트 아웃박스. id 가 SSE 의 id(Last-Event-ID) 가 되어 재연결 시 누락분을 재전송한다.
+model TaskEvent {
+  id        BigInt   @id @default(autoincrement())
+  tenantId  String   @map("tenant_id") @db.Uuid
+  taskId    String   @map("task_id") @db.Uuid
+  /// plan.created, step.started, tool.called, approval.required, message.delta ...
+  type      String
+  payload   Json
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, id])
+  @@index([createdAt])
+  @@map("task_events")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tool Registry · MCP · 실행 기록
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// 승인된 Tool · Skill 구성의 불변 스냅샷. 실행 중 작업은 이 버전을 고정해 사용한다.
+model ToolRegistryVersion {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  version       Int
+  /// { tools: [{ mcpToolId, server, name, schemaHash, level, mode }], skills: [{ skillId, versionId }] }
+  snapshot      Json
+  /// 직전 버전 대비 변경 요약 (C-04 Registry 변경 이력).
+  changeSummary Json?    @map("change_summary")
+  createdById   String?  @map("created_by_id") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tasks          Task[]
+  toolExecutions ToolExecution[]
+
+  @@unique([tenantId, version])
+  @@map("tool_registry_versions")
+}
+
+model McpServer {
+  id                     String          @id @default(uuid(7)) @db.Uuid
+  tenantId               String          @map("tenant_id") @db.Uuid
+  name                   String
+  description            String?
+  transport              McpTransport
+  /// streamable_http 의 엔드포인트.
+  endpointUrl            String?         @map("endpoint_url")
+  /// stdio_sandbox 의 이미지 (다이제스트 고정: repo@sha256:...).
+  image                  String?
+  imageSignatureVerified Boolean         @default(false) @map("image_signature_verified")
+  authType               McpAuthType     @default(none) @map("auth_type")
+  secretRef              String?         @map("secret_ref")
+  /// egress 허용 호스트. 사설 · 링크로컬 · 메타데이터 IP 는 allowPrivateNetwork 가 아니면 차단.
+  allowedHosts           String[]        @default([]) @map("allowed_hosts")
+  allowPrivateNetwork    Boolean         @default(false) @map("allow_private_network")
+  status                 McpServerStatus @default(draft)
+  statusReason           String?         @map("status_reason")
+  trust                  TrustStatus     @default(needs_review)
+  protocolVersion        String?         @map("protocol_version")
+  lastSyncedAt           DateTime?       @map("last_synced_at") @db.Timestamptz(3)
+  healthP95Ms            Int?            @map("health_p95_ms")
+  healthErrorRate        Float?          @map("health_error_rate")
+  createdById            String?         @map("created_by_id") @db.Uuid
+  createdAt              DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt              DateTime?       @map("deleted_at") @db.Timestamptz(3)
+
+  tenant        Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tools         McpTool[]
+  agentVersions AgentVersionMcpServer[]
+
+  @@unique([tenantId, name])
+  @@map("mcp_servers")
+}
+
+model McpTool {
+  id                   String          @id @default(uuid(7)) @db.Uuid
+  tenantId             String          @map("tenant_id") @db.Uuid
+  serverId             String          @map("server_id") @db.Uuid
+  name                 String
+  title                String?
+  description          String?
+  inputSchema          Json            @map("input_schema")
+  outputSchema         Json?           @map("output_schema")
+  /// inputSchema + description 의 해시. 재탐색 시 변경 감지에 사용.
+  schemaHash           String          @map("schema_hash")
+  schemaCheck          SchemaCheck     @map("schema_check")
+  schemaIssues         Json?           @map("schema_issues")
+  securityCheck        SecurityCheck   @map("security_check")
+  securityIssues       Json?           @map("security_issues")
+  permissionLevel      PermissionLevel @default(write) @map("permission_level")
+  /// 등급 기본 정책(tool_policies)을 Tool 단위로 재정의.
+  approvalModeOverride ApprovalMode?   @map("approval_mode_override")
+  enabled              Boolean         @default(false)
+  state                McpToolState    @default(active)
+  /// 재탐색에서 감지된 변경. 운영자 검토 전까지 반영하지 않는다.
+  pendingChange        Json?           @map("pending_change")
+  createdAt            DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  server         McpServer       @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  toolExecutions ToolExecution[]
+  approvals      Approval[]
+
+  @@unique([serverId, name])
+  @@index([tenantId, enabled])
+  @@map("mcp_tools")
+}
+
+/// 모든 Tool 호출 기록 (거부된 호출 포함 → 무단 Tool 호출 지표).
+model ToolExecution {
+  id                String              @id @default(uuid(7)) @db.Uuid
+  tenantId          String              @map("tenant_id") @db.Uuid
+  taskId            String              @map("task_id") @db.Uuid
+  stepId            String              @map("step_id") @db.Uuid
+  registryVersionId String              @map("registry_version_id") @db.Uuid
+  source            ToolSource
+  mcpToolId         String?             @map("mcp_tool_id") @db.Uuid
+  /// server.tool 형식 (예: google-drive.upload_file, sandbox.python)
+  toolName          String              @map("tool_name")
+  attempt           Int                 @default(1)
+  status            ToolExecutionStatus @default(running)
+  deniedReason      String?             @map("denied_reason")
+  input             Json?
+  output            Json?
+  outputRef         String?             @map("output_ref")
+  errorCode         String?             @map("error_code")
+  errorMessage      String?             @map("error_message")
+  /// { image, cpu, memoryMb, timeoutSec, network: 'none'|'allowlist' }
+  sandbox           Json?
+  startedAt         DateTime            @default(now()) @map("started_at") @db.Timestamptz(3)
+  finishedAt        DateTime?           @map("finished_at") @db.Timestamptz(3)
+  durationMs        Int?                @map("duration_ms")
+
+  tenant          Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  task            Task                @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  step            TaskStep            @relation(fields: [stepId], references: [id], onDelete: Cascade)
+  registryVersion ToolRegistryVersion @relation(fields: [registryVersionId], references: [id])
+  mcpTool         McpTool?            @relation(fields: [mcpToolId], references: [id], onDelete: SetNull)
+
+  @@index([taskId])
+  @@index([tenantId, startedAt])
+  @@index([tenantId, status, startedAt])
+  @@map("tool_executions")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 권한 정책 · 승인
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// 권한 등급별 기본 정책 (C-07). 테넌트당 등급별 1행.
+model ToolPolicy {
+  id             String          @id @default(uuid(7)) @db.Uuid
+  tenantId       String          @map("tenant_id") @db.Uuid
+  level          PermissionLevel
+  mode           ApprovalMode
+  approver       Approver?
+  allowTaskScope Boolean         @default(false) @map("allow_task_scope")
+  ttlSeconds     Int             @default(900) @map("ttl_seconds")
+  updatedById    String?         @map("updated_by_id") @db.Uuid
+  updatedAt      DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, level])
+  @@map("tool_policies")
+}
+
+/// 조건 규칙. 기본 정책을 강화만 할 수 있다 (완화 불가).
+model ToolPolicyRule {
+  id          String           @id @default(uuid(7)) @db.Uuid
+  tenantId    String           @map("tenant_id") @db.Uuid
+  name        String
+  description String?
+  /// 대상 Tool 패턴 (예: payment.refund, google-drive.*). null 이면 level 로 매칭.
+  toolPattern String?          @map("tool_pattern")
+  level       PermissionLevel?
+  /// RuleCondition — docs/data-model.md §4.4
+  condition   Json
+  effect      RuleEffect
+  priority    Int              @default(100)
+  enabled     Boolean          @default(true)
+  createdById String?          @map("created_by_id") @db.Uuid
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, enabled, priority])
+  @@map("tool_policy_rules")
+}
+
+model Approval {
+  id                String          @id @default(uuid(7)) @db.Uuid
+  tenantId          String          @map("tenant_id") @db.Uuid
+  taskId            String          @map("task_id") @db.Uuid
+  stepId            String          @map("step_id") @db.Uuid
+  mcpToolId         String?         @map("mcp_tool_id") @db.Uuid
+  toolName          String          @map("tool_name")
+  permissionLevel   PermissionLevel @map("permission_level")
+  riskLevel         RiskLevel       @map("risk_level")
+  /// 화면 표시용 인자 (마스킹 완료).
+  args              Json
+  /// 실제 인자의 해시. 승인 후 인자가 바뀌면 재승인.
+  argsHash          String          @map("args_hash")
+  /// 요청 사유 (사용자 요청 근거 · 정책 매칭 결과).
+  reason            String
+  matchedRuleIds    String[]        @default([]) @map("matched_rule_ids") @db.Uuid
+  requiredApprover  Approver        @map("required_approver")
+  status            ApprovalStatus  @default(pending)
+  scope             ApprovalScope   @default(once)
+  userDecision      Decision?       @map("user_decision")
+  userComment       String?         @map("user_comment")
+  userDecidedAt     DateTime?       @map("user_decided_at") @db.Timestamptz(3)
+  operatorDecision  Decision?       @map("operator_decision")
+  operatorId        String?         @map("operator_id") @db.Uuid
+  operatorComment   String?         @map("operator_comment")
+  operatorDecidedAt DateTime?       @map("operator_decided_at") @db.Timestamptz(3)
+  expiresAt         DateTime        @map("expires_at") @db.Timestamptz(3)
+  resolvedAt        DateTime?       @map("resolved_at") @db.Timestamptz(3)
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  task    Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  step    TaskStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
+  mcpTool McpTool? @relation(fields: [mcpToolId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, status, expiresAt])
+  @@index([taskId])
+  @@map("approvals")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Skill
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Skill {
+  id              String      @id @default(uuid(7)) @db.Uuid
+  tenantId        String      @map("tenant_id") @db.Uuid
+  name            String
+  source          SkillSource
+  gitRepoUrl      String?     @map("git_repo_url")
+  status          SkillStatus @default(pending_review)
+  activeVersionId String?     @unique @map("active_version_id") @db.Uuid
+  createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt       DateTime?   @map("deleted_at") @db.Timestamptz(3)
+
+  tenant        Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  activeVersion SkillVersion?       @relation("SkillActiveVersion", fields: [activeVersionId], references: [id])
+  versions      SkillVersion[]      @relation("SkillVersions")
+  agentVersions AgentVersionSkill[]
+
+  @@unique([tenantId, name])
+  @@map("skills")
+}
+
+model SkillVersion {
+  id                 String             @id @default(uuid(7)) @db.Uuid
+  tenantId           String             @map("tenant_id") @db.Uuid
+  skillId            String             @map("skill_id") @db.Uuid
+  /// semver (예: 1.3.0)
+  version            String
+  description        String
+  allowedTools       String[]           @default([]) @map("allowed_tools")
+  /// SKILL.md frontmatter 원본
+  frontmatter        Json
+  contentHash        String             @map("content_hash")
+  /// S3 prefix (SKILL.md · templates · references · scripts)
+  bundleKey          String             @map("bundle_key")
+  /// [{ path, size, sha256, kind: 'skill'|'doc'|'template'|'script' }]
+  files              Json
+  gitRef             String?            @map("git_ref")
+  gitCommit          String?            @map("git_commit")
+  signatureVerified  Boolean            @default(false) @map("signature_verified")
+  verificationStatus VerificationStatus @default(pending) @map("verification_status")
+  /// [{ check: 'source'|'hash'|'signature'|'script_static'|'instruction_risk'|'tool_scope', status, detail }]
+  verification       Json               @default("[]")
+  createdById        String?            @map("created_by_id") @db.Uuid
+  createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  skill     Skill  @relation("SkillVersions", fields: [skillId], references: [id], onDelete: Cascade)
+  activeFor Skill? @relation("SkillActiveVersion")
+
+  @@unique([skillId, version])
+  @@map("skill_versions")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Memory (pgvector)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// 장기 기억. Working Memory 는 task_steps.checkpoint 에 있다.
+/// embedding 은 Prisma 가 다루지 못하므로 $queryRaw 로 읽고 쓴다. HNSW 인덱스는 SQL 참고.
+model Memory {
+  id                   String                       @id @default(uuid(7)) @db.Uuid
+  tenantId             String                       @map("tenant_id") @db.Uuid
+  agentId              String                       @map("agent_id") @db.Uuid
+  /// scope = user 일 때만 값이 있다.
+  endUserId            String?                      @map("end_user_id") @db.Uuid
+  type                 MemoryType
+  scope                MemoryScope
+  title                String?
+  content              String
+  embedding            Unsupported("vector(1536)")?
+  embeddingModel       String?                      @map("embedding_model")
+  sourceType           MemorySourceType             @map("source_type")
+  sourceTaskIds        String[]                     @default([]) @map("source_task_ids") @db.Uuid
+  sourceConversationId String?                      @map("source_conversation_id") @db.Uuid
+  confidence           Float                        @default(1)
+  needsVerification    Boolean                      @default(false) @map("needs_verification")
+  status               MemoryStatus                 @default(active)
+  quarantineReason     String?                      @map("quarantine_reason")
+  pinned               Boolean                      @default(false)
+  useCount             Int                          @default(0) @map("use_count")
+  lastUsedAt           DateTime?                    @map("last_used_at") @db.Timestamptz(3)
+  expiresAt            DateTime?                    @map("expires_at") @db.Timestamptz(3)
+  createdAt            DateTime                     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime                     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agent   Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  endUser EndUser? @relation(fields: [endUserId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, agentId, type, status])
+  @@index([tenantId, endUserId])
+  @@index([expiresAt])
+  /// 키워드 검색 (C-08). 한국어 부분 일치를 위해 trigram GIN.
+  @@index([content(ops: raw("gin_trgm_ops"))], type: Gin, map: "memories_content_trgm")
+  @@map("memories")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 산출물 · 피드백
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Artifact {
+  id          String         @id @default(uuid(7)) @db.Uuid
+  tenantId    String         @map("tenant_id") @db.Uuid
+  taskId      String?        @map("task_id") @db.Uuid
+  messageId   String?        @map("message_id") @db.Uuid
+  endUserId   String?        @map("end_user_id") @db.Uuid
+  origin      ArtifactOrigin
+  fileName    String         @map("file_name")
+  mimeType    String         @map("mime_type")
+  sizeBytes   BigInt         @map("size_bytes")
+  storageKey  String         @unique @map("storage_key")
+  sha256      String?
+  previewable Boolean        @default(false)
+  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  expiresAt   DateTime?      @map("expires_at") @db.Timestamptz(3)
+
+  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  task    Task?    @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  message Message? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  endUser EndUser? @relation(fields: [endUserId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  @@index([tenantId, createdAt])
+  @@map("artifacts")
+}
+
+model Feedback {
+  id        String         @id @default(uuid(7)) @db.Uuid
+  tenantId  String         @map("tenant_id") @db.Uuid
+  taskId    String         @map("task_id") @db.Uuid
+  endUserId String         @map("end_user_id") @db.Uuid
+  rating    FeedbackRating
+  comment   String?
+  createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  task    Task    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  endUser EndUser @relation(fields: [endUserId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, endUserId])
+  @@map("feedbacks")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Widget
+// ─────────────────────────────────────────────────────────────────────────────
+
+model WidgetConfig {
+  id                      String       @id @default(uuid(7)) @db.Uuid
+  tenantId                String       @map("tenant_id") @db.Uuid
+  agentId                 String       @map("agent_id") @db.Uuid
+  name                    String
+  /// 페이지에 노출되는 공개 키 (wk_pub_...).
+  publicKey               String       @unique @map("public_key")
+  /// identity token 서명 검증용 Secret (Vault 참조).
+  secretRef               String       @map("secret_ref")
+  /// 재발급 직후 유예 기간 동안 함께 허용하는 이전 Secret.
+  previousSecretRef       String?      @map("previous_secret_ref")
+  previousSecretExpiresAt DateTime?    @map("previous_secret_expires_at") @db.Timestamptz(3)
+  allowedOrigins          String[]     @default([]) @map("allowed_origins")
+  identityMode            IdentityMode @default(signed_token) @map("identity_mode")
+  /// { brandColor, position: 'bottom-right'|'bottom-left', darkMode: 'system'|'light'|'dark' }
+  theme                   Json
+  /// { autoOpen, language, attachments: { types, maxMb }, noticeText, showPoweredBy }
+  behavior                Json
+  enabled                 Boolean      @default(true)
+  createdAt               DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt               DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agent  Agent  @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("widget_configs")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 감사 · 지표 · 평가
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// 감사 로그 (append-only: 애플리케이션 역할에 UPDATE · DELETE 권한 없음).
+model AuditLog {
+  id         BigInt    @id @default(autoincrement())
+  tenantId   String    @map("tenant_id") @db.Uuid
+  actorType  ActorType @map("actor_type")
+  actorId    String?   @map("actor_id")
+  /// 예: task.cancel, approval.decide, mcp_server.register, memory.delete
+  action     String
+  targetType String    @map("target_type")
+  targetId   String?   @map("target_id")
+  metadata   Json?
+  ip         String?   @db.Inet
+  userAgent  String?   @map("user_agent")
+  traceId    String?   @map("trace_id")
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@index([tenantId, targetType, targetId])
+  @@map("audit_logs")
+}
+
+/// 일 단위 품질 지표 집계 (C-01). metrics-rollup 잡이 갱신한다.
+model MetricDaily {
+  tenantId            String   @map("tenant_id") @db.Uuid
+  agentId             String   @map("agent_id") @db.Uuid
+  date                DateTime @db.Date
+  tasksTotal          Int      @default(0) @map("tasks_total")
+  tasksSucceeded      Int      @default(0) @map("tasks_succeeded")
+  tasksFailed         Int      @default(0) @map("tasks_failed")
+  toolCalls           Int      @default(0) @map("tool_calls")
+  toolSucceeded       Int      @default(0) @map("tool_succeeded")
+  /// 권한 검증에서 거부된 호출 수 (목표 0).
+  toolDenied          Int      @default(0) @map("tool_denied")
+  recoveriesAttempted Int      @default(0) @map("recoveries_attempted")
+  recoveriesSucceeded Int      @default(0) @map("recoveries_succeeded")
+  /// 승인 요청 + 수동 재개 + 운영자 개입 수.
+  humanInterventions  Int      @default(0) @map("human_interventions")
+  inputTokens         BigInt   @default(0) @map("input_tokens")
+  outputTokens        BigInt   @default(0) @map("output_tokens")
+  costAmount          Decimal  @default(0) @map("cost_amount") @db.Decimal(16, 6)
+  totalDurationMs     BigInt   @default(0) @map("total_duration_ms")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agent  Agent  @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, agentId, date])
+  @@map("metrics_daily")
+}
+
+/// 고정 평가셋 (Task Success Rate 측정 · C-03 테스트 실행).
+model EvalCase {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  agentId   String   @map("agent_id") @db.Uuid
+  name      String
+  input     String
+  /// 성공 판정 기준 { mustCallTools?, mustNotCallTools?, rubric, expectedArtifacts? }
+  criteria  Json
+  tags      String[] @default([])
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agent  Agent  @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@map("eval_cases")
+}
+
+model EvalRun {
+  id             String        @id @default(uuid(7)) @db.Uuid
+  tenantId       String        @map("tenant_id") @db.Uuid
+  agentVersionId String        @map("agent_version_id") @db.Uuid
+  status         EvalRunStatus @default(queued)
+  caseCount      Int           @default(0) @map("case_count")
+  passedCount    Int           @default(0) @map("passed_count")
+  /// [{ caseId, passed, taskId, reason }]
+  results        Json?
+  createdById    String?       @map("created_by_id") @db.Uuid
+  startedAt      DateTime?     @map("started_at") @db.Timestamptz(3)
+  finishedAt     DateTime?     @map("finished_at") @db.Timestamptz(3)
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agentVersion AgentVersion @relation(fields: [agentVersionId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, agentVersionId])
+  @@map("eval_runs")
+}
