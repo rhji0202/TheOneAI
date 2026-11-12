@@ -8,6 +8,7 @@ import { type Page, type PageQuery, toPage } from '../common/http/pagination.js'
 import { TaskEventsService } from '../events/task-events.service.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import { PrismaService, type TenantTx } from '../infrastructure/database/prisma.service.js';
+import { ToolRegistryService } from '../tools/tool-registry.service.js';
 import { AGENT_TASKS_QUEUE, type AgentTaskJobData } from '../infrastructure/queue/queues.js';
 import {
   BLOCKING_STATUSES,
@@ -44,6 +45,7 @@ export class ConversationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly events: TaskEventsService,
+    private readonly registry: ToolRegistryService,
     @InjectQueue(AGENT_TASKS_QUEUE) private readonly queue: Queue<AgentTaskJobData>,
   ) {}
 
@@ -161,7 +163,8 @@ export class ConversationsService {
         });
         if (!agent?.publishedVersionId || agent.archivedAt)
           throw new AppError(503, 'AGENT_NOT_PUBLISHED');
-        const registryVersionId = await this.latestRegistryVersion(tx, tenantId);
+        // 작업은 생성 시점의 Tool Registry 버전을 끝까지 쓴다 (내장 Tool 이 바뀌었으면 새 버전 생성)
+        const registryVersionId = await this.registry.ensureCurrentVersion(tx, tenantId);
 
         const title = titleFromContent(input.content);
         const message = await tx.message.create({
@@ -214,8 +217,11 @@ export class ConversationsService {
       if (isUniqueViolation(err, 'tasks_one_active_per_conversation')) {
         throw new AppError(409, 'TASK_ALREADY_ACTIVE');
       }
-      if (idempotencyKey && isUniqueViolation(err, 'idempotency_key')) {
-        result = await run(); // 먼저 커밋된 요청의 결과를 돌려준다.
+      const lostRace =
+        (idempotencyKey && isUniqueViolation(err, 'idempotency_key')) ||
+        isUniqueViolation(err, 'tool_registry_versions_tenant_id_version_key');
+      if (lostRace) {
+        result = await run(); // 먼저 커밋된 요청 · Registry 버전을 기준으로 다시 처리한다.
       } else {
         throw err;
       }
@@ -278,21 +284,6 @@ export class ConversationsService {
     });
     if (!conversation) throw AppError.notFound('대화를 찾을 수 없습니다');
     return conversation;
-  }
-
-  /** 새 작업이 고정할 Registry 버전. 아직 없으면 빈 v1 을 만든다. */
-  private async latestRegistryVersion(tx: TenantTx, tenantId: string): Promise<string> {
-    const latest = await tx.toolRegistryVersion.findFirst({
-      where: { tenantId },
-      orderBy: { version: 'desc' },
-      select: { id: true },
-    });
-    if (latest) return latest.id;
-    const created = await tx.toolRegistryVersion.create({
-      data: { tenantId, version: 1, snapshot: { tools: [], skills: [] } },
-      select: { id: true },
-    });
-    return created.id;
   }
 }
 

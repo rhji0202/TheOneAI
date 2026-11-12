@@ -1,31 +1,65 @@
 import { Injectable } from '@nestjs/common';
-import type { LlmMessage, LlmResponse, LlmStreamEvent } from '../llm/llm.types.js';
+import {
+  addUsage,
+  emptyUsage,
+  type LlmMessage,
+  type LlmStreamEvent,
+  type LlmUsage,
+} from '../llm/llm.types.js';
+import { ToolDispatcherService } from '../tools/tool-dispatcher.service.js';
+import type { ResolvedTool, Toolset } from '../tools/tool-registry.service.js';
 import type { AgentContext } from './context-builder.js';
 import type { ModelRouter } from './model-router.js';
 import {
-  EXECUTOR_REASON_ROLE,
-  EXECUTOR_RESPOND_ROLE,
+  EXECUTOR_WORK_ROLE,
+  MAX_TOOL_ROUNDS,
   type PlanView,
+  type PromptTool,
   renderNotes,
   renderPlan,
+  respondRole,
   systemPrompt,
   type WorkNote,
 } from './prompts.js';
+import type { RunContext } from './run-context.js';
 
-/** Execute — reason 단계(내부 작업)와 respond 단계(사용자 답변 스트리밍). Tool 호출은 4단계에서 여기에 더한다. */
+export interface WorkInput {
+  ctx: RunContext;
+  router: ModelRouter;
+  context: AgentContext;
+  plan: PlanView;
+  stepIndex: number;
+  notes: WorkNote[];
+  toolset: Toolset;
+  /** 모델에게 제공할 Tool (차단 정책 제외). approval 은 설명에 “승인 필요” 표시 */
+  tools: ResolvedTool[];
+  requiresApproval: (tool: ResolvedTool) => boolean;
+}
+
+export interface WorkResult {
+  content: string;
+  usage: LlmUsage;
+  toolCalls: number;
+}
+
+/**
+ * Execute — 작업 단계(reason · tool)와 최종 답변(respond).
+ * 작업 단계는 모델이 Tool 을 부르고(서버가 검증 · 실행) 결과를 받아 다시 판단하는 반복이다.
+ */
 @Injectable()
 export class ExecutorService {
-  reason(
-    router: ModelRouter,
-    context: AgentContext,
-    plan: PlanView,
-    stepIndex: number,
-    notes: WorkNote[],
-    signal: AbortSignal,
-  ): Promise<LlmResponse> {
+  constructor(private readonly dispatcher: ToolDispatcherService) {}
+
+  async work(input: WorkInput): Promise<WorkResult> {
+    const { ctx, router, context, plan, stepIndex, notes, toolset } = input;
     const step = plan.steps[stepIndex - 1]!;
+    const definitions = toolset.definitions(input.tools, (tool) =>
+      input.requiresApproval(tool)
+        ? '[Requires user approval — not available yet; do not call.]'
+        : null,
+    );
     const messages: LlmMessage[] = [
-      { role: 'system', content: systemPrompt(context.tenantPrompt, EXECUTOR_REASON_ROLE) },
+      { role: 'system', content: systemPrompt(context.tenantPrompt, EXECUTOR_WORK_ROLE) },
       ...context.history,
       {
         role: 'user',
@@ -34,11 +68,45 @@ export class ExecutorService {
           `Goal: ${plan.goal}`,
           `Plan:\n${renderPlan(plan, stepIndex)}`,
           `Working notes from earlier steps:\n${renderNotes(notes)}`,
-          `Current step ${stepIndex}: ${step.title}\nInstructions: ${step.instructions || '(none)'}`,
+          `Current step ${stepIndex}: ${step.title}${step.tool ? `\nSuggested tool: ${step.tool}` : ''}\nInstructions: ${step.instructions || '(none)'}`,
         ].join('\n\n'),
       },
     ];
-    return router.complete('executor', { messages }, signal);
+
+    let usage = emptyUsage();
+    let toolCalls = 0;
+    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      const res = await router.complete(
+        'executor',
+        { messages, tools: definitions.length > 0 ? definitions : undefined },
+        ctx.signal,
+      );
+      usage = addUsage(usage, res.usage);
+      if (res.toolCalls.length === 0) return { content: res.content.trim(), usage, toolCalls };
+
+      messages.push({ role: 'assistant', content: res.content || null, toolCalls: res.toolCalls });
+      const results = await this.dispatcher.dispatchAll(ctx, toolset, res.toolCalls, stepIndex);
+      toolCalls += res.toolCalls.length;
+      res.toolCalls.forEach((call, i) => {
+        messages.push({ role: 'tool', toolCallId: call.id, content: results[i]!.content });
+      });
+    }
+
+    // Tool 왕복 한도 — 지금까지 얻은 것으로 정리하게 한다 (Tool 없이 호출)
+    messages.push({
+      role: 'user',
+      content:
+        'The tool call limit for this step has been reached. Write the notes for this step from what you have.',
+    });
+    // Tool 정의는 그대로 보내고(이전 tool 메시지와 짝이 맞도록) 호출만 막는다
+    const final = await router.complete(
+      'executor',
+      { messages, tools: definitions.length > 0 ? definitions : undefined, toolChoice: 'none' },
+      ctx.signal,
+    );
+    const content =
+      final.content.trim() || 'Tool call limit reached before this step could be summarized.';
+    return { content, usage: addUsage(usage, final.usage), toolCalls };
   }
 
   respond(
@@ -46,6 +114,7 @@ export class ExecutorService {
     context: AgentContext,
     plan: PlanView,
     notes: WorkNote[],
+    tools: PromptTool[],
     signal: AbortSignal,
   ): AsyncGenerator<LlmStreamEvent> {
     const respondStep = plan.steps.find((s) => s.kind === 'respond');
@@ -58,7 +127,7 @@ export class ExecutorService {
       {
         role: 'system',
         content:
-          systemPrompt(context.tenantPrompt, EXECUTOR_RESPOND_ROLE) +
+          systemPrompt(context.tenantPrompt, respondRole(tools)) +
           (guidance.length ? `\n\n${guidance.join('\n\n')}` : ''),
       },
       ...context.history,

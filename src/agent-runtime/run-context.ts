@@ -30,6 +30,8 @@ export interface StepDefinition {
   planIndex?: number;
   input?: Record<string, unknown>;
   parallelGroup?: string;
+  /** false 면 planIndex 를 기록만 하고 계획 카드 상태 · 진행률은 바꾸지 않는다 (작업 단계 안의 Tool 호출) */
+  trackPlan?: boolean;
 }
 
 export interface StepOutcome<T> {
@@ -40,7 +42,12 @@ export interface StepOutcome<T> {
   /** true 면 단계 완료 후 재개용 checkpoint 를 저장한다 */
   checkpoint?: boolean;
   usage?: { inputTokens: number; outputTokens: number };
+  /** 예외 없이 끝났지만 실행하지 않았거나(skipped) 실패로 남길 때 (예: 거부된 Tool 호출) */
+  status?: 'succeeded' | 'failed' | 'skipped';
 }
+
+/** RunContext.record 안에서 이벤트를 남기는 함수 */
+export type EmitEvent = (type: string, data: unknown) => Promise<void>;
 
 const CANCEL_POLL_MS = 500;
 
@@ -124,6 +131,7 @@ export class RunContext {
     }
     const startedAt = new Date();
     const stepId = uuidv7();
+    const tracked = def.trackPlan === false ? undefined : def.planIndex;
 
     await this.commit(async (tx) => {
       await tx.taskStep.create({
@@ -143,7 +151,7 @@ export class RunContext {
           startedAt,
         },
       });
-      await this.setPlanStepStatus(tx, def.planIndex, 'running');
+      await this.setPlanStepStatus(tx, tracked, 'running');
       return [
         await this.append(tx, 'step.started', {
           seq,
@@ -171,7 +179,7 @@ export class RunContext {
             output: { error: err instanceof RuntimeError ? err.code : status },
           },
         });
-        await this.setPlanStepStatus(tx, def.planIndex, status);
+        await this.setPlanStepStatus(tx, tracked, status);
         return [
           await this.append(tx, 'step.completed', {
             seq,
@@ -193,12 +201,13 @@ export class RunContext {
     const finishedAt = new Date();
     const durationMs = finishedAt.getTime() - startedAt.getTime();
     const checkpoint = outcome.checkpoint ? this.buildCheckpoint(def.planIndex) : null;
+    const status = outcome.status ?? 'succeeded';
 
     await this.commit(async (tx) => {
       await tx.taskStep.update({
         where: { id: stepId },
         data: {
-          status: 'succeeded',
+          status,
           finishedAt,
           durationMs,
           summary: outcome.summary ?? null,
@@ -211,11 +220,11 @@ export class RunContext {
             : {}),
         },
       });
-      await this.setPlanStepStatus(tx, def.planIndex, 'succeeded');
+      await this.setPlanStepStatus(tx, tracked, status);
       await tx.task.update({
         where: { id: this.task.id },
         data: {
-          ...(def.planIndex
+          ...(tracked
             ? {
                 completedSteps:
                   this.plan?.steps.filter((s) => s.status === 'succeeded').length ?? 0,
@@ -228,7 +237,7 @@ export class RunContext {
         await this.append(tx, 'step.completed', {
           seq,
           planIndex: def.planIndex ?? null,
-          status: 'succeeded',
+          status,
           durationMs,
           summary: outcome.summary ?? null,
           checkpointSaved: checkpoint !== null,
@@ -268,6 +277,17 @@ export class RunContext {
     });
     await this.events.clearStream(this.task.id, messageId);
     return { id: messageId, text };
+  }
+
+  /** DB 변경과 이벤트를 한 트랜잭션으로 기록하고, 커밋 후 이벤트를 발행한다 (Tool 실행 기록 등). */
+  async record(fn: (tx: TenantTx, emit: EmitEvent) => Promise<void>): Promise<void> {
+    await this.commit(async (tx) => {
+      const envelopes: TaskEventEnvelope[] = [];
+      await fn(tx, async (type, data) => {
+        envelopes.push(await this.append(tx, type, data));
+      });
+      return envelopes;
+    });
   }
 
   /** 중지 요청 확인: AbortSignal 즉시 + DB 의 cancel_requested_at 을 최대 0.5초 간격으로 */

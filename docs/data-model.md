@@ -115,7 +115,7 @@ JSON 컬럼은 API 경계에서 class-validator DTO 로 검증하고, 아래 Typ
 
 ```ts
 interface ExecutionPolicy {
-  maxSteps: number;            // 기본 20. 초과 시 failed(STEP_LIMIT_EXCEEDED)
+  maxSteps: number;            // 기본 40 (Tool 호출도 한 단계). 초과 시 failed(STEP_LIMIT_EXCEEDED)
   maxDurationSec: number;      // 기본 1800. 승인 대기 시간 제외
   tokenBudget: number;         // 작업당 입력+출력 토큰 상한
   toolRetry: { maxAttempts: number; backoff: 'exponential'; baseMs: number }; // 멱등 Tool 만 자동 재시도
@@ -166,7 +166,30 @@ type RuleCondition =
   | { timeOutside: { days: number[]; from: string; to: string; tz: string } };
 ```
 
-규칙은 기본 정책을 **강화만** 한다. 평가 순서: Tool 등급 기본 정책 → Tool 재정의(`mcp_tools.approval_mode_override`) → 규칙(priority 오름차순). `block` 이 하나라도 맞으면 실행하지 않는다.
+규칙은 기본 정책을 **강화만** 한다. 평가 순서: Tool 등급 기본 정책 → Tool 재정의(`mcp_tools.approval_mode_override`) → 규칙(priority 오름차순). `block` 이 하나라도 맞으면 실행하지 않는다. 형식이 잘못된 조건은 “일치”로 본다(fail-closed) — 잘못 설정한 규칙이 보호를 풀지 않도록.
+
+### 4.5 `tool_registry_versions.snapshot`
+
+```ts
+interface RegistrySnapshot {
+  builtinsHash: string;        // 내장 Tool 구성(이름 · 설명 · 스키마 · 등급)의 sha256
+  tools: Array<{
+    name: string;              // Registry 이름 (builtin.calculate, google-drive.upload_file)
+    source: 'builtin' | 'mcp';
+    description: string;
+    inputSchema: JSONSchema;   // 모델에게 주는 인자 스키마
+    schemaHash: string;
+    level: PermissionLevel;
+    modeOverride: ApprovalMode | null;
+    mcpToolId?: string;
+  }>;
+  skills: unknown[];           // 6단계 (SKILL.md)
+}
+```
+
+- 작업 생성 시 테넌트의 최신 버전을 `tasks.registry_version_id` 로 고정한다. 배포된 내장 Tool 구성(`builtinsHash`)이 최신 버전과 다르면 그 자리에서 다음 버전을 만든다(`changeSummary: { reason: 'builtin_tools_changed', added, removed, changed }`). 동시에 만들다 `(tenant_id, version)` 충돌이 나면 다시 읽는다.
+- MCP Tool 은 운영자 검토 후 새 버전으로 추가된다(5단계). 이전 버전은 바뀌지 않으므로 실행 중 작업은 시작할 때의 Tool 구성으로 끝까지 간다.
+- 모델에게 줄 function 이름은 `.` → `__` (예: `builtin__calculate`). OpenAI 호환 API 의 이름 형식(`^[a-zA-Z0-9_-]{1,64}$`) 때문.
 
 ## 5. 설계 결정
 

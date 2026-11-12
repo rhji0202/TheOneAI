@@ -44,8 +44,8 @@ interface MessageView {
 interface PlanStep {
   index: number;               // 1부터. 위젯 계획 카드의 n / total
   title: string;               // "3월 매출 데이터 조회"
-  kind: 'reason' | 'tool' | 'skill' | 'respond'; // reason = Tool 없이 분석 · 초안 작성
-  toolName?: string;           // "sales-db.query"
+  kind: 'reason' | 'tool' | 'skill' | 'respond'; // reason = Tool 없이 분석 · 초안 작성, tool = Tool 을 써서 조회 · 실행
+  toolName?: string;           // "sales-db.query" — tool 단계가 주로 쓸 Tool (Registry 이름). 단계 안에서 다른 Tool 을 함께 부를 수 있다
   skill?: { name: string; version: string };
   requiresApproval: boolean;   // 정책상 승인 대상이면 true (계획 단계에서 미리 표시)
   status: StepStatus;
@@ -302,7 +302,8 @@ NestJS: 컨트롤러에서 `@Sse()` 대신 `Response` 를 직접 쓰는 `SseStre
 | `step.started` | Execute | `{ seq, planIndex, type, name, parallelGroup? }` | 현재 단계 강조 |
 | `step.completed` | Observe | `{ seq, planIndex, status, durationMs, summary, checkpointSaved }` | 단계 아이콘 · 진행률 |
 | `tool.called` | Execute | `{ seq, executionId, toolName, source, argsPreview }` | Tool 칩 |
-| `tool.result` | Observe | `{ seq, executionId, status, attempt, durationMs, resultPreview }` | Tool 칩 결과 · 재시도 표시 |
+| `tool.result` | Observe | `{ seq, executionId, toolName, status, attempt, durationMs, resultPreview }` — `status`: `succeeded` · `failed` · `timeout`, `attempt`: 시도 횟수(멱등 Tool 재시도 포함) | Tool 칩 결과 · 재시도 표시 |
+| `tool.denied` | 권한 검증 | `{ seq, executionId, toolName, reason: DeniedReason, message }` | Tool 칩 “거부됨” |
 | `approval.required` | 권한 검증 | `{ approval: ApprovalView }` | 승인 카드 · 런처 뱃지 |
 | `approval.resolved` | 승인 처리 | `{ approvalId, status, decidedBy: 'user' \| 'operator' }` | 카드 닫기 |
 | `message.delta` | 응답 생성 | `{ messageId, text }` | 스트리밍 텍스트 |
@@ -321,6 +322,17 @@ NestJS: 컨트롤러에서 `@Sse()` 대신 `Response` 를 직접 쓰는 `SseStre
 | `approval.created` | `ApprovalView & { taskTitle: string; endUserPseudonym: string }` |
 | `approval.resolved` | `{ approvalId, status }` |
 | `tool.denied` | `{ taskId, toolName, reason }` — 무단 Tool 호출 즉시 알림 |
+
+`DeniedReason`
+
+| 값 | 의미 | 무단 호출 지표 |
+|---|---|---|
+| `unknown_tool` | 작업이 고정한 Registry 버전에 없는 Tool (또는 실행 구현이 없는 Tool) | 포함 |
+| `blocked_by_policy` | 등급 정책 · Tool 재정의가 `block` | 포함 |
+| `blocked_by_rule` | 조건 규칙(`tool_policy_rules`, effect `block`)에 걸림. `tool_executions.output.matchedRuleIds` 에 규칙 기록 | 포함 |
+| `approval_required` | 승인이 필요한 Tool. 승인 흐름(개발 순서 10단계) 전까지는 실행하지 않고 이 사유로 거부한다 | 제외 |
+
+거부 · 인자 오류(`INVALID_ARGUMENTS`) · 실행 오류(`TOOL_ERROR`) · 시간 초과(`TOOL_TIMEOUT`)는 모두 `tool_executions` 에 남고, 작업을 실패시키지 않고 모델에게 `{ ok: false, error, message }` 로 돌려준다. 모델이 인자를 고치거나 다른 방법을 찾거나, 답변에서 한계를 밝힌다.
 
 ---
 
@@ -680,9 +692,11 @@ agent.worker (queue: agent-tasks)
   4. Plan 생성/재사용 → plan.created
   5. 단계마다:
        권한 검증 (allowlist → 등급 정책 → Tool 재정의 → 조건 규칙)
-         ├ block           → tool_executions(denied) · tool.denied → 재계획
+         ├ block           → tool_executions(denied) · tool.denied → 거부 결과를 모델에게 돌려줌 (같은 단계에서 계속)
          ├ 승인 필요        → approvals INSERT · approval.required · status = waiting_approval · Job 종료 (Worker 점유 안 함)
+         │                   (4단계 구현: approval_required 로 거부. 승인 흐름은 10단계)
          └ 허용            → 실행 (MCP · Sandbox · Skill) → tool.called / tool.result
+                              읽기 등급 호출이 여러 개면 parallelTools.max 만큼 동시에 (같은 parallelGroup)
        Observe → Evaluate(pass / replan / fail) → task_steps checkpoint 저장 → step.completed
        cancel_requested_at · pause_requested_at 확인 (단계 사이 + AbortSignal 로 Tool 호출 중단)
   6. 최종 응답 생성(message.delta …) → Evaluator 검증 → task.completed

@@ -8,6 +8,7 @@ import { QueueModule } from './infrastructure/queue/queue.module.js';
 import { RedisModule } from './infrastructure/redis/redis.module.js';
 import { SecretsModule } from './infrastructure/secrets/secrets.module.js';
 import { TasksModule } from './tasks/tasks.module.js';
+import { ToolsModule } from './tools/tools.module.js';
 import { WidgetModule } from './widget/widget.module.js';
 
 /** API 서버. Agent 실행은 하지 않는다 (WorkerModule 이 담당). */
@@ -19,6 +20,7 @@ import { WidgetModule } from './widget/widget.module.js';
     SecretsModule,
     QueueModule,
     EventsModule,
+    ToolsModule,
     WidgetModule,
     ConversationsModule,
     TasksModule,

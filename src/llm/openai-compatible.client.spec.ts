@@ -184,6 +184,27 @@ describe('요청 본문 (provider 별)', () => {
         function: { name: 'get_weather', description: 'w', parameters: { type: 'object' } },
       },
     ]);
+    expect(body).not.toHaveProperty('tool_choice');
+  });
+
+  it("toolChoice 'none' 은 tools 와 함께 tool_choice 로 보낸다 (tools 가 없으면 보내지 않음)", async () => {
+    handlers.push(completion('a'), completion('b'));
+    const tools = [{ name: 'f', description: 'f', parameters: { type: 'object' } }];
+    await client().complete({
+      model: 'm',
+      maxOutputTokens: 10,
+      messages: [{ role: 'user', content: 'x' }],
+      tools,
+      toolChoice: 'none',
+    });
+    await client().complete({
+      model: 'm',
+      maxOutputTokens: 10,
+      messages: [{ role: 'user', content: 'x' }],
+      toolChoice: 'none',
+    });
+    expect(received[0]!.body).toMatchObject({ tool_choice: 'none' });
+    expect(received[1]!.body).not.toHaveProperty('tool_choice');
   });
 });
 

@@ -23,6 +23,7 @@ export interface ModelCall {
   messages: LlmMessage[];
   json?: boolean;
   tools?: LlmToolDefinition[];
+  toolChoice?: 'auto' | 'none';
   /** 역할 설정보다 작게 제한할 때 */
   maxOutputTokens?: number;
 }
@@ -119,6 +120,7 @@ export class ModelRouter {
       reasoning: config.reasoning,
       json: call.json,
       tools: call.tools,
+      toolChoice: call.toolChoice,
       signal,
     };
   }

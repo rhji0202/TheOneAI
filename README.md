@@ -87,6 +87,8 @@ e2e 가 확인하는 것: bootstrap(허용 도메인 · identity token 서명 ·
 
 Agent Loop 는 가짜 OpenAI 호환 서버([test/fake-llm-server.ts](test/fake-llm-server.ts))로 검증한다: 계획 → reason → 중간 평가 → 답변 → 검증 순서, 재계획(`plan.revised`), 계획 JSON 오류 시 기본 계획, 모델 오류 · API Key 없음 → `task.failed`, 역할별 모델 · 추론 파라미터 · 인증 헤더, 플랫폼 · 테넌트 지침, 대화 기록 포함, 토큰 사용량 기록. 실제 DeepSeek 로는 수동으로 확인했다(아래).
 
+Tool 은 [test/tools.e2e-spec.ts](test/tools.e2e-spec.ts) 가 확인한다: tool 단계 → 모델의 tool call → 서버 실행 → 결과가 다음 요청 · 답변에 반영, 읽기 Tool 병렬 실행(같은 `parallelGroup`, 결과는 호출 순서), 인자 오류를 모델에게 돌려줘 고치게 함, Tool 왕복 한도(`tool_choice: none` 으로 정리), Registry 에 없는 Tool · 조건 규칙 · 등급 정책 차단(`tool.denied`), 승인 필요 Tool 은 실행하지 않음, 내장 Tool 구성이 바뀌면 새 Registry 버전(이전 버전 불변), 멱등 Tool 재시도, 시간 제한.
+
 ## 구현 현황
 
 | 범위 | 상태 |
@@ -95,7 +97,8 @@ Agent Loop 는 가짜 OpenAI 호환 서버([test/fake-llm-server.ts](test/fake-l
 | Widget API: `POST /v1/widget/bootstrap`, 대화 · 메시지, 작업 목록 · 상세 · 중지, SSE (`Last-Event-ID` 재전송, 응답 스트림 스냅샷) | 완료 |
 | 비동기 실행: BullMQ `agent-tasks`, Worker heartbeat, 단계 · checkpoint 저장, 최대 단계 · 시간 제한, 중지 처리 | 완료 |
 | LLM 연동: OpenAI 호환 클라이언트(OpenAI · DeepSeek · Gemini), 스트리밍 · tool call 파싱 · 재시도 · 대체 모델 · 역할별 추론 강도 | 완료 — DeepSeek 는 실제 API 로 확인, OpenAI · Gemini 는 키가 없어 단위 테스트(요청 형식)까지만 |
-| Agent Loop: Context → Plan → Execute(reason) → Evaluate → 재계획 → Respond(스트리밍) → Verify, 토큰 예산 | 완료 — Tool · Skill · Memory 는 아직 없음 (계획은 reason · respond 단계만) |
+| Agent Loop: Context → Plan → Execute(reason · tool) → Evaluate → 재계획 → Respond(스트리밍) → Verify, 토큰 예산 | 완료 — Skill · Memory 는 아직 없음 |
+| Tool Registry · Dispatcher: 작업별 Registry 버전 고정, 인자 검증(zod), 권한 판단(등급 정책 → Tool 재정의 → 조건 규칙), 읽기 Tool 병렬 실행, 시간 제한 · 취소 전파, 멱등 Tool 재시도, `tool_executions` 기록(거부 포함) · 민감정보 마스킹, `tool.called` · `tool.result` · `tool.denied` | 완료 — 내장 Tool 2개(`builtin.calculate`, `builtin.current_time`). 승인 필요 Tool 은 승인 흐름(10단계) 전까지 `approval_required` 로 거부 |
 | 비용 계산 (`tasks.cost_amount`) | 다음 단계 — 모델별 단가표 필요. 토큰 수는 기록 중 |
 | 승인 결정 · 재개(`resume`) · steer · 업로드 · 산출물 다운로드 | 다음 단계 (명세 §2.4 · §2.5 · §2.6) |
 | `agent-recovery` · `approval-expiry` · `memory-ingest` 등 주기 잡 | 다음 단계 (명세 §6) |
@@ -119,6 +122,7 @@ src/
 ├── llm/                           OpenAI 호환 클라이언트 · provider 별 파라미터 · JSON 출력 파싱 · 클라이언트 팩토리
 ├── agent-runtime/                 Agent Loop · 모델 라우터(역할별 · 대체) · Context · Executor · 프롬프트 · RunContext
 ├── planner/ · evaluator/          계획 생성 · 수정 / 중간 평가 · 최종 검증
+├── tools/                         Tool Registry(버전 스냅샷) · 권한 정책 · Dispatcher · 내장 Tool · 마스킹 · 규칙 조건
 ├── workers/                       agent-tasks 프로세서 · 작업 실행 수명주기
 └── agents/                        실행 · Memory 정책 스키마
 ```
@@ -134,13 +138,20 @@ src/
 
 reason 단계가 있으면 첫 토큰이 늦다(그동안 위젯은 계획 · 단계 진행을 SSE 로 보여 준다). reason 결과 스트리밍 · 단계 병렬화는 이후 개선 대상.
 
+Tool 연결 후 (2026-11-12, executor `deepseek-v4-flash`):
+
+| 요청 | 계획 | 소요 · 첫 토큰 | 결과 |
+|---|---|---|---|
+| “지금 서울 시간 알려주고 1234*5678 계산해줘” | tool 1 + respond | 9.4s · 7.2s | 모델이 `current_time` · `calculate` 를 한 번에 요청 → 병렬 실행, 7,006,652 · 현재 시각 정확, 검증 4/4 |
+| “내일 서울 날씨 어때? 월 39,000원 18개월이면 총 얼마?” | tool 2 + respond | 14.0s · 11.1s | 날씨 Tool 이 없음을 밝히고 702,000원 계산, 검증 4/4. 처음엔 1단계에서 2단계 계산까지 해 버려 중복 호출 → 작업 단계 프롬프트에 “현재 단계만 · 노트 재사용” 추가 후 중복 없음 |
+
 ## 개발 순서 (기획안 12장)
 
 1. NestJS 프로젝트 · DB 기반 ✅
 2. Widget 과 SSE 스트리밍 ✅
 3. Agent Loop ✅ (OpenAI · DeepSeek · Gemini)
-4. Tool Registry · Tool Dispatcher ← 다음
-5. MCP 동적 연결
+4. Tool Registry · Tool Dispatcher ✅ (내장 Tool, 권한 정책 · 규칙, 병렬 · 재시도 · 시간 제한)
+5. MCP 동적 연결 ← 다음
 6. SKILL.md Loader
 7. BullMQ 비동기 작업 (기본 파이프라인 ✅, 복구 · 주기 잡은 8단계와 함께)
 8. Checkpoint · Recovery

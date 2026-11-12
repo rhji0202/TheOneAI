@@ -3,19 +3,25 @@ import { EvaluatorService } from '../evaluator/evaluator.service.js';
 import type { LlmUsage } from '../llm/llm.types.js';
 import { PlannerService } from '../planner/planner.service.js';
 import type { PlanStep } from '../tasks/plan.js';
+import { type PolicySet, ToolPermissionService } from '../tools/tool-permission.service.js';
+import {
+  type ResolvedTool,
+  ToolRegistryService,
+  type Toolset,
+} from '../tools/tool-registry.service.js';
 import { type AgentRuntime, RuntimeError, type RunResult } from './agent-runtime.js';
 import { ContextBuilder } from './context-builder.js';
 import { ExecutorService } from './executor.service.js';
 import { ModelRouterFactory } from './model-router.js';
-import type { PlanView, WorkNote } from './prompts.js';
+import type { PlanView, PromptTool, WorkNote } from './prompts.js';
 import type { RunContext } from './run-context.js';
 
 /**
- * Agent Loop — Context → Plan → Execute(reason …) → Observe → Evaluate → (재계획) → Respond → Verify
+ * Agent Loop — Context → Plan → Execute(reason · tool …) → Observe → Evaluate → (재계획) → Respond → Verify
  *
  * 단일 Agent 가 역할별 모델(planner · executor · evaluator)을 번갈아 쓴다.
- * 모든 단계는 RunContext.step 으로 기록되어 SSE 이벤트 · task_steps · checkpoint 가 남는다.
- * Tool · MCP · Skill 은 아직 없으므로 계획은 reason / respond 단계로만 이루어진다.
+ * Tool 은 작업 단계에서 모델이 요청하고, 서버의 Tool Dispatcher 가 검증 · 실행한다.
+ * 사용할 수 있는 Tool 은 작업 생성 시 고정한 Registry 버전(tasks.registry_version_id)으로 정해진다.
  */
 @Injectable()
 export class AgentLoopRuntime implements AgentRuntime {
@@ -25,34 +31,58 @@ export class AgentLoopRuntime implements AgentRuntime {
     private readonly planner: PlannerService,
     private readonly executor: ExecutorService,
     private readonly evaluator: EvaluatorService,
+    private readonly registry: ToolRegistryService,
+    private readonly permissions: ToolPermissionService,
   ) {}
 
   async run(ctx: RunContext): Promise<RunResult> {
     const router = await this.routers.forTask(ctx.task);
     const { signal } = ctx;
 
-    // 1) Context
-    const context = await ctx.step({ type: 'context', name: 'context.build' }, async () => {
-      const built = await this.contextBuilder.build(ctx.task);
-      return {
-        value: built,
-        summary: `최근 대화 ${built.history.length}개 · 지침 포함`,
-        output: {
-          historyMessages: built.history.length,
-          tenantPromptChars: built.tenantPrompt.length,
-          memories: 0,
-          skills: 0,
-          tools: 0,
-        },
-      };
-    });
+    // 1) Context — 지침 · 대화 · 사용할 수 있는 Tool
+    const { context, toolset, policies, offered, promptTools } = await ctx.step(
+      { type: 'context', name: 'context.build' },
+      async () => {
+        const built = await this.contextBuilder.build(ctx.task);
+        const tools = await this.registry.loadToolset(
+          ctx.task.tenantId,
+          ctx.task.registryVersionId,
+        );
+        const policy = await this.permissions.load(ctx.task.tenantId);
+        const usable = tools.available.filter((t) => policy.planningMode(t) !== 'blocked');
+        const prompt: PromptTool[] = usable.map((t) => ({
+          llmName: t.llmName,
+          level: t.level,
+          description: t.description,
+          requiresApproval: policy.planningMode(t) === 'approval',
+        }));
+        return {
+          value: {
+            context: built,
+            toolset: tools,
+            policies: policy,
+            offered: usable,
+            promptTools: prompt,
+          },
+          summary: `최근 대화 ${built.history.length}개 · Tool ${usable.length}개`,
+          output: {
+            historyMessages: built.history.length,
+            tenantPromptChars: built.tenantPrompt.length,
+            registryVersionId: ctx.task.registryVersionId,
+            tools: prompt.map((t) => ({ name: t.llmName, requiresApproval: t.requiresApproval })),
+            memories: 0,
+            skills: 0,
+          },
+        };
+      },
+    );
 
     // 2) Plan
     let plan = await ctx.step(
       { type: 'plan', name: 'planner.create', input: { model: router.describe('planner') } },
       async () => {
-        const result = await this.planner.plan(router, context, null, signal);
-        await ctx.setPlan(toPlanSteps(result.plan));
+        const result = await this.planner.plan(router, context, promptTools, null, signal);
+        await ctx.setPlan(toPlanSteps(result.plan, toolset, policies));
         return {
           value: result.plan,
           summary: `${result.plan.steps.length}단계 계획${result.fallback ? ' (기본 계획 사용)' : ''}`,
@@ -62,31 +92,48 @@ export class AgentLoopRuntime implements AgentRuntime {
       },
     );
 
-    // 3) Execute(reason) → Evaluate → 필요하면 재계획
+    // 3) Execute(reason · tool) → Evaluate → 필요하면 재계획
     const notes: WorkNote[] = [];
     for (let revision = 0; ; revision++) {
       for (const [i, step] of plan.steps.entries()) {
-        if (step.kind !== 'reason') continue;
+        if (step.kind === 'respond') continue;
         const planIndex = i + 1;
         await ctx.step(
           {
             type: 'reason',
-            name: 'executor.reason',
+            name: `executor.${step.kind}`,
             planIndex,
-            input: { title: step.title, model: router.describe('executor') },
+            input: {
+              title: step.title,
+              tool: step.tool ?? null,
+              model: router.describe('executor'),
+            },
           },
           async () => {
-            const res = await this.executor.reason(router, context, plan, planIndex, notes, signal);
-            const content = res.content.trim();
-            if (!content) {
+            const res = await this.executor.work({
+              ctx,
+              router,
+              context,
+              plan,
+              stepIndex: planIndex,
+              notes,
+              toolset,
+              tools: offered,
+              requiresApproval: (tool) => policies.planningMode(tool) === 'approval',
+            });
+            if (!res.content) {
               throw new RuntimeError('MODEL_EMPTY_RESPONSE', '모델이 빈 결과를 돌려주었습니다');
             }
-            notes.push({ title: step.title, content });
+            notes.push({ title: step.title, content: res.content });
             ctx.workingMemory.notes = notes;
             return {
-              value: content,
-              summary: firstLine(content),
-              output: { preview: truncate(content, 2_000), chars: content.length },
+              value: res.content,
+              summary: firstLine(res.content),
+              output: {
+                preview: truncate(res.content, 2_000),
+                chars: res.content.length,
+                toolCalls: res.toolCalls,
+              },
               usage: stepUsage(res.usage),
               checkpoint: true,
             };
@@ -94,7 +141,7 @@ export class AgentLoopRuntime implements AgentRuntime {
         );
       }
 
-      if (!plan.steps.some((s) => s.kind === 'reason')) break;
+      if (!plan.steps.some((s) => s.kind !== 'respond')) break;
 
       const assessment = await ctx.step(
         {
@@ -122,10 +169,11 @@ export class AgentLoopRuntime implements AgentRuntime {
           const result = await this.planner.plan(
             router,
             context,
+            promptTools,
             { previous: plan, notes, feedback: assessment.reason },
             signal,
           );
-          await ctx.setPlan(toPlanSteps(result.plan), assessment.reason);
+          await ctx.setPlan(toPlanSteps(result.plan, toolset, policies), assessment.reason);
           return {
             value: result.plan,
             summary: `계획 수정: ${result.plan.steps.length}단계`,
@@ -147,7 +195,7 @@ export class AgentLoopRuntime implements AgentRuntime {
       },
       async () => {
         let usage: LlmUsage | null = null;
-        const stream = this.executor.respond(router, context, plan, notes, signal);
+        const stream = this.executor.respond(router, context, plan, notes, promptTools, signal);
         async function* texts(): AsyncGenerator<string> {
           let produced = false;
           for await (const event of stream) {
@@ -196,13 +244,21 @@ export class AgentLoopRuntime implements AgentRuntime {
   }
 }
 
-function toPlanSteps(plan: PlanView): Array<Omit<PlanStep, 'status'>> {
-  return plan.steps.map((step, i) => ({
-    index: i + 1,
-    title: step.title,
-    kind: step.kind,
-    requiresApproval: false,
-  }));
+function toPlanSteps(
+  plan: PlanView,
+  toolset: Toolset,
+  policies: PolicySet,
+): Array<Omit<PlanStep, 'status'>> {
+  return plan.steps.map((step, i) => {
+    const tool: ResolvedTool | undefined = step.tool ? toolset.byLlmName(step.tool) : undefined;
+    return {
+      index: i + 1,
+      title: step.title,
+      kind: step.kind,
+      ...(tool ? { toolName: tool.name } : {}),
+      requiresApproval: tool ? policies.planningMode(tool) === 'approval' : false,
+    };
+  });
 }
 
 function stepUsage(usage: LlmUsage): { inputTokens: number; outputTokens: number } {

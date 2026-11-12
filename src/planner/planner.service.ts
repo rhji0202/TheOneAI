@@ -1,39 +1,60 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { z } from 'zod';
+import type { AgentContext } from '../agent-runtime/context-builder.js';
+import type { ModelRouter } from '../agent-runtime/model-router.js';
 import {
   MAX_PLAN_STEPS,
-  PLANNER_ROLE,
+  plannerRole,
   type PlanView,
+  type PromptTool,
   renderNotes,
   renderPlan,
   systemPrompt,
   type WorkNote,
 } from '../agent-runtime/prompts.js';
-import type { AgentContext } from '../agent-runtime/context-builder.js';
-import type { ModelRouter } from '../agent-runtime/model-router.js';
 import { parseJsonOutput } from '../llm/json-output.js';
 import { addUsage, emptyUsage, type LlmMessage, type LlmUsage } from '../llm/llm.types.js';
 
-export const plannerOutputSchema = z
-  .object({
-    goal: z.string().trim().min(1).max(500),
-    steps: z
-      .array(
-        z.object({
-          title: z.string().trim().min(1).max(120),
-          kind: z.enum(['reason', 'respond']),
-          instructions: z.string().max(4_000).default(''),
-        }),
-      )
-      .min(1)
-      .max(MAX_PLAN_STEPS),
-  })
-  .refine(
-    (plan) =>
-      plan.steps.filter((s) => s.kind === 'respond').length === 1 &&
-      plan.steps.at(-1)?.kind === 'respond',
-    { message: '"respond" step must appear exactly once, as the last step', path: ['steps'] },
-  );
+/**
+ * 계획 출력 스키마. Tool 단계는 실행 가능한(승인 불필요) Tool 만 가리킬 수 있다.
+ * 형식이 틀리면 오류 내용을 모델에게 돌려줘 한 번 고치게 한다.
+ */
+export function plannerOutputSchema(runnableTools: string[]) {
+  return z
+    .object({
+      goal: z.string().trim().min(1).max(500),
+      steps: z
+        .array(
+          z.object({
+            title: z.string().trim().min(1).max(120),
+            kind: z.enum(['reason', 'tool', 'respond']),
+            tool: z.string().optional(),
+            instructions: z.string().max(4_000).default(''),
+          }),
+        )
+        .min(1)
+        .max(MAX_PLAN_STEPS),
+    })
+    .superRefine((plan, ctx) => {
+      const responds = plan.steps.filter((s) => s.kind === 'respond').length;
+      if (responds !== 1 || plan.steps.at(-1)?.kind !== 'respond') {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['steps'],
+          message: '"respond" step must appear exactly once, as the last step',
+        });
+      }
+      plan.steps.forEach((step, i) => {
+        if (step.kind === 'tool' && (!step.tool || !runnableTools.includes(step.tool))) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['steps', i, 'tool'],
+            message: `"${step.tool ?? ''}" is not an available tool. Use one of: ${runnableTools.join(', ') || '(none — use "reason" or "respond")'}`,
+          });
+        }
+      });
+    });
+}
 
 export interface PlannerResult {
   plan: PlanView;
@@ -56,11 +77,15 @@ export class PlannerService {
   async plan(
     router: ModelRouter,
     context: AgentContext,
+    tools: PromptTool[],
     revision: RevisionInput | null,
     signal: AbortSignal,
   ): Promise<PlannerResult> {
+    const schema = plannerOutputSchema(
+      tools.filter((t) => !t.requiresApproval).map((t) => t.llmName),
+    );
     const messages: LlmMessage[] = [
-      { role: 'system', content: systemPrompt(context.tenantPrompt, PLANNER_ROLE) },
+      { role: 'system', content: systemPrompt(context.tenantPrompt, plannerRole(tools)) },
       ...context.history,
       { role: 'user', content: this.userMessage(context, revision) },
     ];
@@ -69,12 +94,17 @@ export class PlannerService {
     for (let attempt = 0; attempt < 2; attempt++) {
       const res = await router.complete('planner', { messages, json: true }, signal);
       usage = addUsage(usage, res.usage);
-      const parsed = parseJsonOutput(res.content, plannerOutputSchema);
+      const parsed = parseJsonOutput(res.content, schema);
       if (parsed.ok) {
         return {
           plan: {
             goal: parsed.value.goal,
-            steps: parsed.value.steps.map((s) => ({ ...s, title: truncate(s.title, 40) })),
+            steps: parsed.value.steps.map((s) => ({
+              title: truncate(s.title, 40),
+              kind: s.kind,
+              ...(s.kind === 'tool' && s.tool ? { tool: s.tool } : {}),
+              instructions: s.instructions,
+            })),
           },
           usage,
           fallback: false,

@@ -6,6 +6,7 @@ import { QueueModule } from './infrastructure/queue/queue.module.js';
 import { RedisModule } from './infrastructure/redis/redis.module.js';
 import { SecretsModule } from './infrastructure/secrets/secrets.module.js';
 import { WorkersModule } from './workers/workers.module.js';
+import { ToolsModule } from './tools/tools.module.js';
 
 /** Agent Worker 프로세스 (HTTP 없음). API 와 별도로 수평 확장한다. LLM API Key 는 SecretStore 에서 읽는다. */
 @Module({
@@ -16,6 +17,7 @@ import { WorkersModule } from './workers/workers.module.js';
     SecretsModule,
     QueueModule,
     EventsModule,
+    ToolsModule,
     WorkersModule,
   ],
 })

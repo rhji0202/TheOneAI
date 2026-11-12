@@ -2,7 +2,8 @@ import { z } from 'zod';
 
 /** agent_versions.execution_policy — docs/data-model.md §4.1 */
 export const executionPolicySchema = z.object({
-  maxSteps: z.number().int().min(1).max(200).default(20),
+  /** Tool 호출도 한 단계로 센다 */
+  maxSteps: z.number().int().min(1).max(200).default(40),
   maxDurationSec: z.number().int().min(10).max(86_400).default(1_800),
   tokenBudget: z.number().int().min(1_000).default(200_000),
   toolRetry: z

@@ -49,6 +49,7 @@ export function buildChatBody(
       type: 'function',
       function: { name: tool.name, description: tool.description, parameters: tool.parameters },
     }));
+    if (request.toolChoice) body.tool_choice = request.toolChoice;
   }
   if (options.stream) {
     body.stream = true;

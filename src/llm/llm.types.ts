@@ -31,6 +31,8 @@ export interface LlmRequest {
   /** JSON 객체로만 답하도록 요청 (provider 가 거부하면 프롬프트 지시만으로 재시도) */
   json?: boolean;
   tools?: LlmToolDefinition[];
+  /** 'none' 이면 Tool 정의는 보내되 호출하지 않고 글로만 답하게 한다 */
+  toolChoice?: 'auto' | 'none';
   signal?: AbortSignal;
 }
 
