@@ -23,6 +23,7 @@ import type { Prisma } from '../generated/prisma/client.js';
 import { PrismaService, type TenantTx } from '../infrastructure/database/prisma.service.js';
 import type { AgentTaskJobData } from '../infrastructure/queue/queues.js';
 import { TaskQueueService } from '../infrastructure/queue/task-queue.service.js';
+import { BillingService } from '../billing/billing.service.js';
 import { parseStoredPlan } from '../tasks/plan.js';
 
 export const HEARTBEAT_MS = 15_000;
@@ -45,6 +46,7 @@ export class TaskExecutionService {
     private readonly prisma: PrismaService,
     private readonly events: TaskEventsService,
     private readonly queue: TaskQueueService,
+    private readonly billing: BillingService,
     @Inject(AGENT_RUNTIME) private readonly runtime: AgentRuntime,
   ) {}
 
@@ -97,11 +99,19 @@ export class TaskExecutionService {
       claim.info.executionPolicy.maxDurationSec * 1_000,
     );
 
+    // 이번 실행의 모델 사용량 · 비용 — 결과(완료 · 실패 · 중지 …)를 남기기 전에 기록해, 결과 이벤트 시점에 비용이 반영돼 있다
+    const flushUsage = () =>
+      this.billing.flushQuietly(
+        { tenantId, agentId: claim.info.agentId, taskId, purpose: 'task' },
+        ctx.meter,
+      );
     try {
       const result = await this.runtime.run(ctx);
+      await flushUsage();
       await this.complete(ctx, result);
       return 'completed';
     } catch (err) {
+      await flushUsage();
       if (err instanceof TaskCancelledError) {
         await this.finishCancelled(ctx);
         return 'cancelled';
@@ -124,6 +134,7 @@ export class TaskExecutionService {
       clearInterval(heartbeat);
       clearTimeout(deadline);
       this.active.delete(taskId);
+      await flushUsage(); // 결과 기록 중 오류가 나도 사용량은 남긴다 (이미 기록했으면 아무것도 안 함)
     }
   }
 

@@ -1,4 +1,5 @@
 import type { ExecutionPolicy, MemoryPolicy } from '../agents/agent-policies.js';
+import { UsageMeter } from '../billing/usage-meter.js';
 import { uuidv7 } from '../common/uuid.js';
 import { toMessageView } from '../conversations/message-views.js';
 import type { TaskEventEnvelope, TaskEventsService } from '../events/task-events.service.js';
@@ -87,6 +88,8 @@ const CANCEL_POLL_MS = 500;
  */
 export class RunContext {
   readonly workingMemory: Record<string, unknown> = {};
+  /** 이번 실행의 모델 호출 사용량 (끝나면 Worker 가 usage_records · 비용으로 남긴다) */
+  readonly meter = new UsageMeter();
   readonly usage = { inputTokens: 0, outputTokens: 0 };
   private plan: StoredPlan | null;
   private nextSeq: number;

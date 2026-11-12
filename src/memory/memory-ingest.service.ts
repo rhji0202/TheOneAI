@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { memoryPolicySchema } from '../agents/agent-policies.js';
 import type { TaskRunInfo } from '../agent-runtime/run-context.js';
 import { ModelRouterFactory } from '../agent-runtime/model-router.js';
+import { BillingService } from '../billing/billing.service.js';
+import { UsageMeter } from '../billing/usage-meter.js';
 import {
   MEMORY_EXTRACT_ROLE,
   renderNotes,
@@ -58,6 +60,7 @@ export class MemoryIngestService {
     private readonly routers: ModelRouterFactory,
     private readonly embeddings: EmbeddingService,
     private readonly retriever: MemoryRetriever,
+    private readonly billing: BillingService,
   ) {}
 
   async ingest(tenantId: string, taskId: string): Promise<IngestResult> {
@@ -148,34 +151,43 @@ export class MemoryIngestService {
 
     if (!request) return { saved: 0, updated: 0, quarantined: 0, skipped: 'no_request' };
 
-    const router = await this.routers.forTask({
-      tenantId,
-      agentVersionId: task.agentVersionId,
-    } as TaskRunInfo);
-    const res = await router.complete(
-      'evaluator',
-      {
-        json: true,
-        maxOutputTokens: 800,
-        messages: [
-          { role: 'system', content: systemPrompt('', MEMORY_EXTRACT_ROLE) },
-          {
-            role: 'user',
-            content: [
-              `User request:\n${request}`,
-              `Working notes:\n${truncate(renderNotes(notes), 4_000)}`,
-              `Final answer sent to the user:\n${truncate(answer, 3_000)}`,
-              ...(lessons.length
-                ? [
-                    `What went wrong or was corrected during the task (use for procedural lessons):\n${lessons.map((l) => `- ${l}`).join('\n')}`,
-                  ]
-                : []),
-            ].join('\n\n'),
-          },
-        ],
-      },
-      AbortSignal.timeout(60_000),
+    const meter = new UsageMeter();
+    const router = await this.routers.forTask(
+      { tenantId, agentVersionId: task.agentVersionId } as TaskRunInfo,
+      meter,
     );
+    const res = await router
+      .complete(
+        'evaluator',
+        {
+          json: true,
+          maxOutputTokens: 800,
+          messages: [
+            { role: 'system', content: systemPrompt('', MEMORY_EXTRACT_ROLE) },
+            {
+              role: 'user',
+              content: [
+                `User request:\n${request}`,
+                `Working notes:\n${truncate(renderNotes(notes), 4_000)}`,
+                `Final answer sent to the user:\n${truncate(answer, 3_000)}`,
+                ...(lessons.length
+                  ? [
+                      `What went wrong or was corrected during the task (use for procedural lessons):\n${lessons.map((l) => `- ${l}`).join('\n')}`,
+                    ]
+                  : []),
+              ].join('\n\n'),
+            },
+          ],
+        },
+        AbortSignal.timeout(60_000),
+      )
+      .finally(() =>
+        // 기억 추출에 쓴 모델 사용량도 그 작업의 비용으로
+        this.billing.flushQuietly(
+          { tenantId, agentId: task.agentId, taskId, purpose: 'memory' },
+          meter,
+        ),
+      );
     const parsed = parseJsonOutput(res.content, extractionSchema);
     if (!parsed.ok) {
       this.logger.warn(`기억 추출 형식 오류 (${taskId}): ${parsed.error}`);

@@ -60,7 +60,7 @@ export class AgentLoopRuntime implements AgentRuntime {
   ) {}
 
   async run(ctx: RunContext): Promise<RunResult> {
-    const router = await this.routers.forTask(ctx.task);
+    const router = await this.routers.forTask(ctx.task, ctx.meter);
     const { signal } = ctx;
 
     // 1) Context — 지침 · 대화 · 사용할 수 있는 Tool

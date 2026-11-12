@@ -277,6 +277,8 @@ Secret 은 `vault://mcp/<tenantId>/<serverId>` 참조로만 DB 에 남는다. �
 | `approvals.args_hash`                                     | 승인 후 인자가 바뀌면 재승인 (W-03). 키 순서와 무관한 정규화 JSON 의 SHA-256               |
 | `approvals.consumed_at` · `tool_executions.approval_id`   | once 승인은 한 번만 실행에 쓴다 (같은 호출을 다시 하면 다시 묻는다) · 실행을 허락한 승인 추적 |
 | `approvals.summary`                                       | 승인 카드 한 줄 설명 (Tool 설명의 첫 문장)                                                 |
+| `model_prices` · `usage_records`                          | 비용은 실제로 응답한 모델 기준(대체 모델 포함)으로 실행마다 역할 · 모델별 합계를 남긴다. 단가는 테넌트가 등록 (없으면 비용 0 · `priced=false`) |
+| `tenants.monthly_budget`                                  | 이번 달 `usage_records` 비용 합계가 넘으면 새 작업 · 재개를 받지 않는다 (`BUDGET_EXCEEDED`) |
 | `conversations.summary` · `summary_through_id`            | Context Compression — 최근 대화 창(메시지 12개 · 1만2천 자) 밖으로 밀려난 메시지의 누적 요약과, 요약에 반영한 마지막 메시지. 요약은 앞으로만 나아가며 이미 합친 메시지는 다시 요약하지 않는다 |
 | `mcp_tools.pending_change`                                | 재탐색 변경을 자동 반영하지 않고 검토 후 Registry 새 버전 (C-04)                           |
 | `memories.source_type` · `status=quarantined`             | 외부 문서 · Tool 결과에서 온 지시문을 Context 에 넣지 않기 위한 근거 (C-08)                |

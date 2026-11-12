@@ -21,6 +21,9 @@ export interface MemoryIngestJobData {
   taskId: string;
 }
 
+/** metrics_daily 갱신 (주기 잡) */
+export const METRICS_ROLLUP_QUEUE = 'metrics-rollup';
+
 /** 만료된 승인 요청 → expired, 작업 paused (주기 잡) */
 export const APPROVAL_EXPIRY_QUEUE = 'approval-expiry';
 

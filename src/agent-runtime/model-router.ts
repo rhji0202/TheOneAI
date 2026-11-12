@@ -14,6 +14,7 @@ import {
   type LlmToolDefinition,
   type ReasoningEffort,
 } from '../llm/llm.types.js';
+import type { UsageMeter } from '../billing/usage-meter.js';
 import { RuntimeError } from './agent-runtime.js';
 import type { TaskRunInfo } from './run-context.js';
 
@@ -32,6 +33,7 @@ interface Target {
   client: LlmClient;
   label: string;
   model: string;
+  providerKind: string;
 }
 
 interface RoleModel {
@@ -50,7 +52,11 @@ interface RoleModel {
 export class ModelRouter {
   private readonly logger = new Logger(ModelRouter.name);
 
-  constructor(private readonly roles: Record<ModelRole, RoleModel>) {}
+  constructor(
+    private readonly roles: Record<ModelRole, RoleModel>,
+    /** 호출마다 실제로 응답한 모델의 사용량을 센다 (비용 · 사용량 기록) */
+    private readonly meter: UsageMeter | null = null,
+  ) {}
 
   describe(role: ModelRole): string {
     return this.roles[role].primary.label;
@@ -59,8 +65,10 @@ export class ModelRouter {
   async complete(role: ModelRole, call: ModelCall, signal: AbortSignal): Promise<LlmResponse> {
     const config = this.roles[role];
     try {
-      return await config.primary.client.complete(
-        this.request(config, config.primary, call, signal),
+      return this.metered(
+        role,
+        config.primary,
+        await config.primary.client.complete(this.request(config, config.primary, call, signal)),
       );
     } catch (err) {
       if (!this.shouldFallback(err, config, signal))
@@ -69,8 +77,12 @@ export class ModelRouter {
         `${role} 기본 모델 실패 → 대체 모델 ${config.fallback!.label}: ${String(err)}`,
       );
       try {
-        return await config.fallback!.client.complete(
-          this.request(config, config.fallback!, call, signal),
+        return this.metered(
+          role,
+          config.fallback!,
+          await config.fallback!.client.complete(
+            this.request(config, config.fallback!, call, signal),
+          ),
         );
       } catch (fallbackErr) {
         throw toRuntimeError(fallbackErr, config.fallback!, role);
@@ -91,6 +103,7 @@ export class ModelRouter {
         this.request(config, config.primary, call, signal),
       )) {
         started = true;
+        if (event.type === 'done') this.metered(role, config.primary, event.response);
         yield event;
       }
       return;
@@ -102,10 +115,20 @@ export class ModelRouter {
       );
     }
     try {
-      yield* config.fallback!.client.stream(this.request(config, config.fallback!, call, signal));
+      for await (const event of config.fallback!.client.stream(
+        this.request(config, config.fallback!, call, signal),
+      )) {
+        if (event.type === 'done') this.metered(role, config.fallback!, event.response);
+        yield event;
+      }
     } catch (err) {
       throw toRuntimeError(err, config.fallback!, role);
     }
+  }
+
+  private metered(role: ModelRole, target: Target, response: LlmResponse): LlmResponse {
+    this.meter?.record(role, target, response.usage);
+    return response;
   }
 
   private request(config: RoleModel, target: Target, call: ModelCall, signal: AbortSignal) {
@@ -166,7 +189,7 @@ export class ModelRouterFactory {
     private readonly clients: LlmClientFactory,
   ) {}
 
-  async forTask(task: TaskRunInfo): Promise<ModelRouter> {
+  async forTask(task: TaskRunInfo, meter: UsageMeter | null = null): Promise<ModelRouter> {
     const configs = await this.prisma.withTenant(task.tenantId, (tx) =>
       tx.modelConfig.findMany({
         where: { agentVersionId: task.agentVersionId },
@@ -200,11 +223,14 @@ export class ModelRouterFactory {
     const executorModel = await build(executor);
     const planner = byRole.get('planner');
     const evaluator = byRole.get('evaluator');
-    return new ModelRouter({
-      executor: executorModel,
-      planner: planner ? await build(planner) : executorModel,
-      evaluator: evaluator ? await build(evaluator) : executorModel,
-    });
+    return new ModelRouter(
+      {
+        executor: executorModel,
+        planner: planner ? await build(planner) : executorModel,
+        evaluator: evaluator ? await build(evaluator) : executorModel,
+      },
+      meter,
+    );
   }
 
   private async target(provider: ProviderRecord, model: string): Promise<Target> {
@@ -213,6 +239,7 @@ export class ModelRouterFactory {
         client: await this.clients.create(provider),
         label: `${provider.name}/${model}`,
         model,
+        providerKind: provider.kind,
       };
     } catch (err) {
       if (err instanceof LlmError) throw new RuntimeError('MODEL_NOT_CONFIGURED', err.message);

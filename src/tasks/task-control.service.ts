@@ -6,6 +6,7 @@ import { type TaskEventEnvelope, TaskEventsService } from '../events/task-events
 import type { TaskStatus } from '../generated/prisma/client.js';
 import { PrismaService, type TenantTx } from '../infrastructure/database/prisma.service.js';
 import { TaskQueueService } from '../infrastructure/queue/task-queue.service.js';
+import { BillingService } from '../billing/billing.service.js';
 import { taskSummarySelect, toTaskSummary, type TaskSummaryView } from './task-views.js';
 
 /** 위젯(사용자 본인) 또는 콘솔(테넌트 전체)의 작업 제어 범위 */
@@ -26,6 +27,7 @@ export class TaskControlService {
     private readonly prisma: PrismaService,
     private readonly events: TaskEventsService,
     private readonly queue: TaskQueueService,
+    private readonly billing: BillingService,
   ) {}
 
   async cancel(
@@ -154,6 +156,7 @@ export class TaskControlService {
         const task = await this.lock(tx, taskId, scope);
         if (task.status !== 'failed' && task.status !== 'paused')
           throw new AppError(409, 'TASK_NOT_RESUMABLE');
+        await this.billing.assertWithinBudget(tx, tenantId);
         let fromStepId: string | undefined;
         if (opts.mode === 'checkpoint') {
           fromStepId = opts.fromStepId ?? task.last_checkpoint_step_id ?? undefined;

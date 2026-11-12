@@ -3,6 +3,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
 import type { Queue } from 'bullmq';
 import { AppError } from '../common/errors/app-error.js';
+import { BillingService } from '../billing/billing.service.js';
 import { isUniqueViolation } from '../common/errors/prisma-errors.js';
 import { type Page, type PageQuery, toPage } from '../common/http/pagination.js';
 import { TaskEventsService } from '../events/task-events.service.js';
@@ -47,6 +48,7 @@ export class ConversationsService {
     private readonly events: TaskEventsService,
     private readonly registry: ToolRegistryService,
     @InjectQueue(AGENT_TASKS_QUEUE) private readonly queue: Queue<AgentTaskJobData>,
+    private readonly billing: BillingService,
   ) {}
 
   async create(session: WidgetSession, input: CreateConversationInput): Promise<ConversationView> {
@@ -157,6 +159,8 @@ export class ConversationsService {
           );
         }
 
+        // 월 비용 한도 — 넘었으면 새 작업을 받지 않는다
+        await this.billing.assertWithinBudget(tx, tenantId);
         const agent = await tx.agent.findUnique({
           where: { id: session.agentId },
           select: { publishedVersionId: true, archivedAt: true },

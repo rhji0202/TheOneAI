@@ -3,6 +3,8 @@ import { AgentRuntimeModule } from '../agent-runtime/agent-runtime.module.js';
 import { ApprovalsCoreModule } from '../approvals/approvals-core.module.js';
 import { ApprovalExpiryProcessor } from './approval-expiry.processor.js';
 import { ApprovalExpiryService } from './approval-expiry.service.js';
+import { MetricsRollupProcessor } from './metrics-rollup.processor.js';
+import { MetricsRollupService } from './metrics-rollup.service.js';
 import { AgentTaskProcessor } from './agent-task.processor.js';
 import { MemoryIngestService } from '../memory/memory-ingest.service.js';
 import { McpSyncProcessor } from './mcp-sync.processor.js';
@@ -23,7 +25,15 @@ import { TaskRecoveryService } from './task-recovery.service.js';
     MemoryIngestProcessor,
     ApprovalExpiryService,
     ApprovalExpiryProcessor,
+    MetricsRollupService,
+    MetricsRollupProcessor,
   ],
-  exports: [TaskExecutionService, TaskRecoveryService, MemoryIngestService, ApprovalExpiryService],
+  exports: [
+    TaskExecutionService,
+    TaskRecoveryService,
+    MemoryIngestService,
+    ApprovalExpiryService,
+    MetricsRollupService,
+  ],
 })
 export class WorkersModule {}

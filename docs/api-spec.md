@@ -284,6 +284,14 @@ interface ApprovalDecisionRequest {
 - **경쟁**: 결정 · 만료 · 중지와 Worker 의 `waiting_approval` 전환은 모두 작업 행을 먼저 잠근다. Worker 가 멈추기 직전에 결정이 나면 Worker 가 대기 승인이 없음을 보고 바로 다시 큐에 넣는다.
 - **중지**: 대기 중인 승인은 `cancelled` (`approval.resolved`, `decidedBy: 'system'`).
 
+### 2.5.1 `POST /v1/tasks/:id/feedback`
+
+```ts
+interface FeedbackRequest { rating: 'helpful' | 'not_helpful'; comment?: string }  // 200: { taskId, rating, comment, createdAt }
+```
+
+끝난(completed · failed) 내 작업에만. 작업당 사용자 하나 — 다시 보내면 바꾼다. 대시보드 `feedback` 집계에 쓰인다.
+
 ### 2.6 `POST /v1/uploads`
 
 ```ts
@@ -388,6 +396,8 @@ interface MetricsResponse {
 }
 type FailureCause = 'tool_timeout' | 'schema_validation' | 'permission_denied' | 'sandbox_resource' | 'approval_rejected' | 'budget_exceeded' | 'model_error';
 ```
+
+구현 메모: 기간은 UTC 날짜 단위(24h = 오늘, 7d · 30d = 오늘 포함 7 · 30일)이고 같은 길이의 직전 기간과 비교한다(`period: { from, to }` 포함). 목표 — 작업 성공률 0.9, Tool 성공률 0.95, 복구 성공률 0.8, 사람 개입률 0.2 이하, 무단 호출 0. 데이터가 없는 비율은 0 · `ok`. `evalSuccessRate` 는 평가셋 실행(C-03) 전까지 `null`. 응답에 `feedback: { helpful, notHelpful }` 와 `recentFailures[].code`(실패 코드)를 더한다.
 
 ### 4.2 작업 (C-02)
 
@@ -689,6 +699,19 @@ interface WidgetConfigInput {
 // 응답에 contrast: { ratio: number; passes: boolean } 포함 (브랜드 색 vs 흰 글자, 4.5:1 기준)
 ```
 
+### 4.9.1 사용량 · 과금 (Billing)
+
+| Method | Path | 권한 | 설명 |
+|---|---|---|---|
+| GET | `/v1/admin/billing/usage` | Viewer | `?range=7d\|30d\|month&agentId` 합계 · 일별 · 모델별 · 용도별(task · memory) · 단가 없는 호출 수 · 월 한도 |
+| GET | `/v1/admin/billing/model-prices` | Viewer | 모델 단가 목록 |
+| PUT | `/v1/admin/billing/model-prices` | Admin | `{ prices: [{ providerKind, model, inputPerMtok, cachedInputPerMtok?, outputPerMtok, currency }] }` 전체 교체 (1M 토큰당, 통화 하나) |
+| PUT | `/v1/admin/billing/budget` | Owner | `{ monthlyBudget: number \| null, currency }` 월 비용 한도 |
+
+- 실행(성공 · 실패 · 중지 · 일시정지 · 승인 대기 · Worker 넘기기)마다 실제로 응답한 모델(대체 모델 포함) 기준 역할 · 모델별 사용량을 `usage_records` 로 남기고, 결과 이벤트 전에 단가로 계산한 비용을 `tasks.cost_amount` 에 더한다. 기억 추출(memory-ingest)의 사용량도 그 작업에(`purpose: memory`).
+- 단가는 테넌트가 등록한다 (provider 계약 단가가 다르고 자주 바뀌므로 플랫폼이 정하지 않는다). 단가 없는 모델은 비용 0 · `priced: false` — 보고서의 `unpricedCalls` 로 드러난다. 단가를 바꾸면 그 뒤 기록부터 적용.
+- 월 한도: 이번 달(UTC) `usage_records` 비용 합계가 한도 이상이면 새 메시지 · 재개를 `402 BUDGET_EXCEEDED` 로 거절한다 (실행 중인 작업은 끝까지 간다). 감사 로그 `billing.prices.update` · `billing.budget.update`.
+
 ### 4.10 감사 로그
 
 | Method | Path | 설명 |
@@ -757,6 +780,7 @@ interface WidgetConfigInput {
 | `QUEUE_UNAVAILABLE` · `RUNTIME_ERROR` | 작업 큐 등록 실패 · 그 밖의 내부 오류 |
 | `AGENT_NOT_PUBLISHED` | 503 | 배포된 Agent 버전 없음 | 위젯 “준비 중” 표시 |
 | `RATE_LIMITED` | 429 | 요청 제한 | 재시도 안내 |
+| `BUDGET_EXCEEDED` | 402 | 이번 달 사용 한도 도달 | 운영자에게 문의 안내 |
 | `SERVICE_UNAVAILABLE` | 503 | 작업 큐 등 내부 의존성 장애 (작업은 `failed · QUEUE_UNAVAILABLE`) | 잠시 후 재시도 |
 
 ---
@@ -809,7 +833,7 @@ Reflection (구현):
 | `mcp-sync` | 서버별 1시간 | 재탐색 → 변경이 있으면 `mcp_tools.pending_change` 기록 · 헬스 갱신. 구현: `MCP_SYNC_TICK_SEC`(기본 60초)마다 `app_list_mcp_servers_due_for_sync` 로 시기가 된 서버(연결됨 `MCP_SYNC_INTERVAL_SEC`, 오류 상태는 최대 5분)를 확인. 연결 실패 → `error`(Tool 제외), 성공 → `connected`(복구). 헬스 = 최근 24시간 호출 p95 · 오류율(모델의 인자 오류 제외) |
 | `skill-verify` | 업로드 · Git 등록 | 파싱 · 해시 · 서명 · 정적 검사 → `skill_versions.verification` |
 | `eval-runs` | C-03 테스트 실행 | 평가셋 실행 (실제 외부 쓰기 Tool 은 dry-run) |
-| `metrics-rollup` | 5분 주기 | `metrics_daily` 갱신 |
+| `metrics-rollup` | 5분 주기 | `metrics_daily` 갱신. 구현: `METRICS_ROLLUP_TICK_SEC`(300초)마다 `app_rollup_metrics(오늘 − 1일)` 이 최근 이틀(UTC)을 다시 계산한다 — tasks_* 는 그날 만든 작업(성공 = completed), tool_calls 는 실제 실행(거부 제외) · tool_denied 는 무단 호출(unknown_tool · not_allowed · blocked_*), recoveries_* 는 복구된 적 있는 작업 수 · 그중 완료, human_interventions 는 승인 요청 + 재개 요청, 비용 · 토큰 · 소요 시간은 작업 합계 |
 | `retention` | 매일 | `task_events` · 만료 Memory · Artifact 정리 |
 
 - Worker heartbeat: 실행 중 15초마다 `tasks.last_heartbeat_at` 갱신. 60초 이상 끊기면 복구 대상.

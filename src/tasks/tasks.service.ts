@@ -23,6 +23,11 @@ export const resumeInputSchema = z.object({
 export type ResumeInput = z.infer<typeof resumeInputSchema>;
 export const steerInputSchema = z.object({ text: z.string().trim().min(1).max(2_000) });
 export type SteerInput = z.infer<typeof steerInputSchema>;
+export const feedbackInputSchema = z.object({
+  rating: z.enum(['helpful', 'not_helpful']),
+  comment: z.string().trim().max(1_000).optional(),
+});
+export type FeedbackInput = z.infer<typeof feedbackInputSchema>;
 
 export const taskListQuerySchema = z.object({
   group: z.enum(['active', 'completed', 'failed']).default('active'),
@@ -128,6 +133,36 @@ export class TasksService {
       { endUserId: session.endUserId },
       { mode: input.mode },
     );
+  }
+
+  /** W-04 · 결과 피드백 (도움됨 · 개선 필요) — 작업당 사용자 하나, 다시 보내면 바꾼다 */
+  async feedback(session: WidgetSession, taskId: string, input: FeedbackInput) {
+    return this.prisma.withTenant(session.tenantId, async (tx) => {
+      const task = await tx.task.findFirst({
+        where: { id: taskId, endUserId: session.endUserId },
+        select: { status: true },
+      });
+      if (!task) throw AppError.notFound('작업을 찾을 수 없습니다');
+      if (task.status !== 'completed' && task.status !== 'failed')
+        throw new AppError(409, 'TASK_NOT_ACTIVE', '끝난 작업에만 피드백을 남길 수 있습니다');
+      const saved = await tx.feedback.upsert({
+        where: { taskId_endUserId: { taskId, endUserId: session.endUserId } },
+        create: {
+          tenantId: session.tenantId,
+          taskId,
+          endUserId: session.endUserId,
+          rating: input.rating,
+          comment: input.comment ?? null,
+        },
+        update: { rating: input.rating, comment: input.comment ?? null },
+      });
+      return {
+        taskId,
+        rating: saved.rating,
+        comment: saved.comment,
+        createdAt: saved.createdAt.toISOString(),
+      };
+    });
   }
 
   steer(session: WidgetSession, taskId: string, input: SteerInput): Promise<{ messageId: string }> {

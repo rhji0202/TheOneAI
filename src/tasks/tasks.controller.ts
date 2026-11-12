@@ -26,6 +26,8 @@ import {
   resumeInputSchema,
   type SteerInput,
   steerInputSchema,
+  type FeedbackInput,
+  feedbackInputSchema,
 } from './tasks.service.js';
 
 const taskId = { schema: z.uuid() };
@@ -64,6 +66,17 @@ export class TasksController {
     @Param('id', taskId) id: string,
   ): Promise<TaskSummaryView> {
     return this.tasks.cancel(session, id);
+  }
+
+  /** W-04 · 결과 피드백 */
+  @Post(':id/feedback')
+  @HttpCode(200)
+  feedback(
+    @CurrentSession() session: WidgetSession,
+    @Param('id', taskId) id: string,
+    @Body({ schema: feedbackInputSchema }) body: FeedbackInput,
+  ) {
+    return this.tasks.feedback(session, id, body);
   }
 
   /** W-02 · 실행 중 추가 지시 — 다음 단계 Context 에 반영 (Agent 는 하나로 유지) */

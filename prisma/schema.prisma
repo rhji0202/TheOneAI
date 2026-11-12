@@ -372,14 +372,19 @@ enum EvalRunStatus {
 
 /// 고객사(조직). RLS 의 기준.
 model Tenant {
-  id        String   @id @default(uuid(7)) @db.Uuid
-  name      String
-  slug      String   @unique
-  plan      String   @default("standard")
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id             String   @id @default(uuid(7)) @db.Uuid
+  name           String
+  slug           String   @unique
+  plan           String   @default("standard")
+  /// 월 비용 한도 (null = 제한 없음). 넘으면 새 작업을 받지 않는다 (BUDGET_EXCEEDED)
+  monthlyBudget  Decimal? @map("monthly_budget") @db.Decimal(14, 4)
+  budgetCurrency String   @default("USD") @map("budget_currency") @db.Char(3)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   users                  User[]
+  modelPrices            ModelPrice[]
+  usageRecords           UsageRecord[]
   endUsers               EndUser[]
   agents                 Agent[]
   agentVersions          AgentVersion[]
@@ -486,6 +491,7 @@ model Agent {
   memories         Memory[]
   widgetConfigs    WidgetConfig[]
   metricsDaily     MetricDaily[]
+  usageRecords     UsageRecord[]
   evalCases        EvalCase[]
 
   @@unique([tenantId, name])
@@ -715,6 +721,7 @@ model Task {
   approvals       Approval[]
   artifacts       Artifact[]
   feedbacks       Feedback[]
+  usageRecords    UsageRecord[]
 
   @@index([tenantId, status])
   @@index([tenantId, endUserId, createdAt(sort: Desc)])
@@ -1241,6 +1248,7 @@ model MetricDaily {
   outputTokens        BigInt   @default(0) @map("output_tokens")
   costAmount          Decimal  @default(0) @map("cost_amount") @db.Decimal(16, 6)
   totalDurationMs     BigInt   @default(0) @map("total_duration_ms")
+  aggregatedAt        DateTime @default(now()) @map("aggregated_at") @db.Timestamptz(3)
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   agent  Agent  @relation(fields: [agentId], references: [id], onDelete: Cascade)
@@ -1288,4 +1296,58 @@ model EvalRun {
 
   @@index([tenantId, agentVersionId])
   @@map("eval_runs")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Billing
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// 모델 단가 (테넌트가 계약한 provider 단가, 1M 토큰당)
+model ModelPrice {
+  id                 String       @id @default(uuid(7)) @db.Uuid
+  tenantId           String       @map("tenant_id") @db.Uuid
+  providerKind       ProviderKind @map("provider_kind")
+  model              String
+  inputPerMtok       Decimal      @map("input_per_mtok") @db.Decimal(12, 6)
+  /// 캐시된 입력 단가 (없으면 입력 단가)
+  cachedInputPerMtok Decimal?     @map("cached_input_per_mtok") @db.Decimal(12, 6)
+  outputPerMtok      Decimal      @map("output_per_mtok") @db.Decimal(12, 6)
+  currency           String       @default("USD") @db.Char(3)
+  updatedById        String?      @map("updated_by_id") @db.Uuid
+  updatedAt          DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, providerKind, model])
+  @@map("model_prices")
+}
+
+/// 모델 사용량 — 작업 실행(또는 기억 추출) 한 번의 역할 · 모델별 합계
+model UsageRecord {
+  id                String       @id @default(uuid(7)) @db.Uuid
+  tenantId          String       @map("tenant_id") @db.Uuid
+  agentId           String       @map("agent_id") @db.Uuid
+  taskId            String?      @map("task_id") @db.Uuid
+  /// task | memory
+  purpose           String
+  role              ModelRole
+  providerKind      ProviderKind @map("provider_kind")
+  model             String
+  calls             Int
+  inputTokens       Int          @map("input_tokens")
+  cachedInputTokens Int          @default(0) @map("cached_input_tokens")
+  outputTokens      Int          @map("output_tokens")
+  costAmount        Decimal      @default(0) @map("cost_amount") @db.Decimal(16, 8)
+  currency          String       @default("USD") @db.Char(3)
+  /// 단가가 등록된 모델인가 (false 면 비용 0 으로 기록)
+  priced            Boolean
+  createdAt         DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agent  Agent  @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  task   Task?  @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@index([taskId])
+  @@map("usage_records")
 }

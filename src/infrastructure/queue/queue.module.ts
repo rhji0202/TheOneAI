@@ -4,6 +4,7 @@ import { APP_CONFIG, type AppConfig } from '../../config/app-config.js';
 import {
   AGENT_RECOVERY_QUEUE,
   APPROVAL_EXPIRY_QUEUE,
+  METRICS_ROLLUP_QUEUE,
   AGENT_TASKS_QUEUE,
   MCP_SYNC_QUEUE,
   MEMORY_INGEST_QUEUE,
@@ -31,6 +32,7 @@ import { TaskQueueService } from './task-queue.service.js';
       { name: AGENT_RECOVERY_QUEUE },
       { name: MEMORY_INGEST_QUEUE },
       { name: APPROVAL_EXPIRY_QUEUE },
+      { name: METRICS_ROLLUP_QUEUE },
     ),
   ],
   providers: [TaskQueueService],

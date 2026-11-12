@@ -15,6 +15,7 @@ export type ErrorCode =
   | 'TASK_NOT_ACTIVE'
   | 'TASK_NOT_RESUMABLE'
   | 'CHECKPOINT_NOT_FOUND'
+  | 'BUDGET_EXCEEDED'
   | 'APPROVAL_EXPIRED'
   | 'APPROVAL_ALREADY_RESOLVED'
   | 'APPROVAL_SCOPE_NOT_ALLOWED'
@@ -59,6 +60,7 @@ const TITLES: Record<ErrorCode, string> = {
   TASK_NOT_ACTIVE: '진행 중인 작업이 아닙니다',
   TASK_NOT_RESUMABLE: '실패했거나 일시정지된 작업만 재개할 수 있습니다',
   CHECKPOINT_NOT_FOUND: '재개할 checkpoint 가 없습니다',
+  BUDGET_EXCEEDED: '이번 달 사용 한도에 도달했습니다',
   APPROVAL_EXPIRED: '승인 요청이 만료되었습니다',
   APPROVAL_ALREADY_RESOLVED: '이미 처리된 승인 요청입니다',
   APPROVAL_SCOPE_NOT_ALLOWED: '이 작업 동안 승인할 수 없는 권한 등급입니다',
