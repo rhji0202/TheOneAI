@@ -29,11 +29,14 @@
     "dev:pack-skill": "tsx scripts/pack-skill.ts",
     "dev:mcp-server": "tsx scripts/dev-mcp-server.ts",
     "dev:identity-token": "tsx scripts/mint-identity-token.ts",
+    "dev:admin-password": "tsx scripts/set-admin-password.ts",
     "postinstall": "prisma generate",
     "build:widget": "vite build --config apps/widget/vite.config.ts",
-    "build:ui": "npm run build:widget",
-    "typecheck:ui": "tsc --noEmit -p apps/widget/tsconfig.json",
-    "dev:widget": "vite build --watch --config apps/widget/vite.config.ts"
+    "build:console": "vite build --config apps/console/vite.config.ts",
+    "build:ui": "npm run build:widget && npm run build:console",
+    "typecheck:ui": "tsc --noEmit -p apps/widget/tsconfig.json && tsc --noEmit -p apps/console/tsconfig.json",
+    "dev:widget": "vite build --watch --config apps/widget/vite.config.ts",
+    "dev:console": "vite --config apps/console/vite.config.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.4.0",
