@@ -215,7 +215,12 @@ export interface SseEvent {
 export async function readSse(
   url: string,
   token: string,
-  options: { lastEventId?: string; timeoutMs?: number } = {},
+  options: {
+    lastEventId?: string;
+    timeoutMs?: number;
+    /** 이 이벤트를 받으면 연결을 끊고 돌려준다 (끝나지 않는 상태 — 승인 대기 등) */
+    until?: (event: SseEvent) => boolean;
+  } = {},
 ): Promise<SseEvent[]> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 15_000);
@@ -234,7 +239,7 @@ export async function readSse(
     const events: SseEvent[] = [];
     const decoder = new TextDecoder();
     let buffer = '';
-    for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+    stream: for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
       buffer += decoder.decode(chunk, { stream: true });
       let index: number;
       while ((index = buffer.indexOf('\n\n')) >= 0) {
@@ -242,6 +247,7 @@ export async function readSse(
         buffer = buffer.slice(index + 2);
         const event = parseBlock(block);
         if (event) events.push(event);
+        if (event && options.until?.(event)) break stream; // 스트림을 닫고(연결 해제) 돌려준다
       }
     }
     return events;

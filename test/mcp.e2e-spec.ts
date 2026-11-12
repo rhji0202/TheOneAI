@@ -452,7 +452,7 @@ describe('Agent 허용 목록 · 실행', () => {
       expect.arrayContaining(['shop__lookup_order', 'shop__search_faq', 'shop__create_ticket']),
     );
     const ticket = work.body.tools!.find((t) => t.function.name === 'shop__create_ticket')!;
-    expect(ticket.function.description).toContain('Not available in this version');
+    expect(ticket.function.description).toContain('Requires approval');
     expect(
       requestsFor('#mcp-ok').find((r) => r.role === 'Planner')!.body.messages[0]!.content,
     ).toContain('shop__lookup_order');

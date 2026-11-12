@@ -12,7 +12,10 @@ import type { AddressInfo } from 'node:net';
  *   [도구]       calculate 1회 → 결과로 메모
  *   [병렬]       읽기 Tool 2개를 한 응답에서 동시에
  *   [무단]       Registry 에 없는 Tool 호출
- *   [승인필요]   planner 가 승인 필요 Tool 을 계획 → 형식 오류로 고침, 작업 단계에서 호출 → 승인 필요로 거부
+ *   [승인필요]   send_note(쓰기) 1회 — 승인 대기 → 결정 후 같은 호출부터. Tool 이 차단돼 계획에 없으면 reason 으로 고친다
+ *   [승인두번]   send_note 를 두 번(다른 인자) — task 범위 승인이면 두 번째는 묻지 않는다
+ *   [승인혼합]   한 응답에 calculate(읽기) + send_note(쓰기) — 계산은 한 번만 실행
+ *   [운영자승인] 외부 도메인으로 send_note — 조건 규칙(require_operator)
  *   [규칙차단]   정책 규칙(식에 666 포함 차단)에 걸리는 calculate
  *   [잘못된인자] 인자 오류 → 고쳐서 다시 호출
  *   [도구한도]   Tool 을 끝없이 호출 → 왕복 한도 후 tool_choice=none 으로 정리
@@ -84,7 +87,19 @@ function scripted(text: string, round: number, toolsOffered: boolean): Call[] | 
     if (round === 1) return [['shop__lookup_order', { orderId: 'A-1002' }]];
     return null;
   }
+  if (text.includes('[승인두번]')) {
+    if (round === 0) return [['test__send_note', { to: 'a@example.com', text: '첫 메모' }]];
+    if (round === 1) return [['test__send_note', { to: 'b@example.com', text: '두 번째 메모' }]];
+    return null;
+  }
   if (round > 0 && !text.includes('[잘못된인자]')) return null;
+  if (text.includes('[승인혼합]'))
+    return [
+      ['builtin__calculate', { expression: '2+3' }],
+      ['test__send_note', { to: 'ops@example.com', text: '합계 5' }],
+    ];
+  if (text.includes('[운영자승인]'))
+    return [['test__send_note', { to: 'ceo@partner.external.com', text: '계약 안내' }]];
   if (text.includes('[MCP조회]')) return [['shop__lookup_order', { orderId: 'A-1001' }]];
   if (text.includes('[MCP오류]')) return [['shop__search_faq', { query: 'fail' }]];
   if (text.includes('[도구]')) return [['builtin__calculate', { expression: '1234*5678' }]];
@@ -117,8 +132,12 @@ function toolPlan(text: string, lastUser: string): Record<string, unknown> | nul
     instructions: title,
   });
   const respond = { title: '답변 작성', kind: 'respond', instructions: '' };
+  for (const tag of ['[승인두번]', '[승인혼합]', '[운영자승인]']) {
+    if (text.includes(tag))
+      return { goal: '메모 보내기', steps: [tool('메모 전송', 'test__send_note'), respond] };
+  }
   if (text.includes('[승인필요]')) {
-    // 첫 시도는 승인이 필요한 Tool 을 계획 → 서버가 거절하면 reason 으로 고친다
+    // 승인 필요 Tool 을 tool 단계로 계획 — 차단돼 목록에 없으면 계획 검증에 걸려 reason 으로 고친다
     const corrected = lastUser.includes('is invalid');
     return {
       goal: '메모 보내기',

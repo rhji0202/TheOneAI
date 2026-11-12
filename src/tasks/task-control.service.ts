@@ -37,7 +37,7 @@ export class TaskControlService {
     const outcome = await this.prisma.withTenant(tenantId, async (tx) => {
       const task = await this.lock(tx, taskId, scope);
       const now = new Date();
-      let event: TaskEventEnvelope | null = null;
+      const events: TaskEventEnvelope[] = [];
       switch (task.status) {
         case 'queued':
         case 'waiting_approval':
@@ -46,14 +46,34 @@ export class TaskControlService {
             where: { id: taskId },
             data: { status: 'cancelled', cancelRequestedAt: now, finishedAt: now },
           });
+          // 대기 중인 승인은 취소 — 위젯 승인 카드를 닫는다
+          const pending = await tx.approval.findMany({
+            where: { taskId, status: 'pending' },
+            select: { id: true },
+          });
           await tx.approval.updateMany({
             where: { taskId, status: 'pending' },
             data: { status: 'cancelled', resolvedAt: now },
           });
-          event = await this.events.append(tx, tenantId, taskId, 'task.status', {
-            status: 'cancelled',
-            reason,
+          await tx.taskStep.updateMany({
+            where: { taskId, status: 'waiting_approval' },
+            data: { status: 'cancelled', finishedAt: now },
           });
+          for (const approval of pending) {
+            events.push(
+              await this.events.append(tx, tenantId, taskId, 'approval.resolved', {
+                approvalId: approval.id,
+                status: 'cancelled',
+                decidedBy: 'system',
+              }),
+            );
+          }
+          events.push(
+            await this.events.append(tx, tenantId, taskId, 'task.status', {
+              status: 'cancelled',
+              reason,
+            }),
+          );
           break;
         }
         case 'running':
@@ -66,11 +86,11 @@ export class TaskControlService {
       }
       return {
         summary: await this.summary(tx, taskId),
-        event,
+        events,
         removeJob: task.status === 'queued',
       };
     });
-    if (outcome.event) await this.events.publish(taskId, outcome.event);
+    await this.events.publish(taskId, ...outcome.events);
     // 대기 중인 시작 Job 은 지운다 (재개 Job 은 claim 에서 상태를 보고 건너뛴다)
     if (outcome.removeJob) await this.queue.remove(taskId);
     return toTaskSummary(outcome.summary);

@@ -900,12 +900,15 @@ model ToolExecution {
   startedAt         DateTime            @default(now()) @map("started_at") @db.Timestamptz(3)
   finishedAt        DateTime?           @map("finished_at") @db.Timestamptz(3)
   durationMs        Int?                @map("duration_ms")
+  /// 이 실행을 허락한 승인 (승인 필요 Tool)
+  approvalId        String?             @map("approval_id") @db.Uuid
 
   tenant          Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   task            Task                @relation(fields: [taskId], references: [id], onDelete: Cascade)
   step            TaskStep            @relation(fields: [stepId], references: [id], onDelete: Cascade)
   registryVersion ToolRegistryVersion @relation(fields: [registryVersionId], references: [id])
   mcpTool         McpTool?            @relation(fields: [mcpToolId], references: [id], onDelete: SetNull)
+  approval        Approval?           @relation(fields: [approvalId], references: [id], onDelete: SetNull)
 
   @@index([taskId])
   @@index([tenantId, startedAt])
@@ -974,6 +977,8 @@ model Approval {
   argsHash          String          @map("args_hash")
   /// 요청 사유 (사용자 요청 근거 · 정책 매칭 결과).
   reason            String
+  /// 승인 카드 한 줄 설명 (무엇을 하려는지)
+  summary           String          @default("")
   matchedRuleIds    String[]        @default([]) @map("matched_rule_ids") @db.Uuid
   requiredApprover  Approver        @map("required_approver")
   status            ApprovalStatus  @default(pending)
@@ -987,15 +992,19 @@ model Approval {
   operatorDecidedAt DateTime?       @map("operator_decided_at") @db.Timestamptz(3)
   expiresAt         DateTime        @map("expires_at") @db.Timestamptz(3)
   resolvedAt        DateTime?       @map("resolved_at") @db.Timestamptz(3)
+  /// once 범위 승인을 실행에 쓴 시각 (같은 호출을 다시 하면 다시 묻는다)
+  consumedAt        DateTime?       @map("consumed_at") @db.Timestamptz(3)
   createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  task    Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  step    TaskStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
-  mcpTool McpTool? @relation(fields: [mcpToolId], references: [id], onDelete: SetNull)
+  tenant     Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  task       Task            @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  step       TaskStep        @relation(fields: [stepId], references: [id], onDelete: Cascade)
+  mcpTool    McpTool?        @relation(fields: [mcpToolId], references: [id], onDelete: SetNull)
+  executions ToolExecution[]
 
   @@index([tenantId, status, expiresAt])
   @@index([taskId])
+  @@index([taskId, toolName])
   @@map("approvals")
 }
 

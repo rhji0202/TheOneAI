@@ -129,7 +129,9 @@ Skill 은 [test/skills.e2e-spec.ts](test/skills.e2e-spec.ts) 가 확인한다: z
 
 MCP 는 [test/mcp.e2e-spec.ts](test/mcp.e2e-spec.ts) 가 공식 SDK v2 로 만든 MCP 서버([test/fake-mcp-server.ts](test/fake-mcp-server.ts))로 확인한다: 프로토콜 협상(최신 서버는 `server/discover` 로 2026-07-28, 2025 계열 전용 서버는 `initialize` 로 내려감, 2025 계열로 기록된 서버는 재사용 연결에서 탐색 생략, 401 은 인증 실패로), 콘솔 로그인 · 역할(Viewer 는 조회만, 사설망 허용은 Owner 만, 위젯 토큰 거부), SSRF(사설 IP 로 해석되는 호스트를 연결 시점 DNS 검사로 차단, 메타데이터 IP 차단), 등록 마법사(연결 테스트 · API Key 전달 · 탐색 검증 · 보안 실패 Tool 제외 · 등록 → Registry 버전 · 감사 로그), 테넌트 격리, Agent 허용 목록(초안 → 배포, 허용 전 호출은 `not_allowed`), MCP Tool 실행(structuredContent · JSON Schema 인자 검증 · isError 는 재시도 안 함), 재탐색 변경 감지(검토 전에는 고정된 이전 정의 사용 → 승인 시 새 버전, 새 Tool 은 꺼진 채 추가), 서버 장애 → `error` · `tool_unavailable` → 복구 · 헬스, 연결 정보 변경 시 재검토, 비활성화 · 삭제(Secret 삭제 · 이름 재사용).
 
-Tool 은 [test/tools.e2e-spec.ts](test/tools.e2e-spec.ts) 가 확인한다: tool 단계 → 모델의 tool call → 서버 실행 → 결과가 다음 요청 · 답변에 반영, 읽기 Tool 병렬 실행(같은 `parallelGroup`, 결과는 호출 순서), 인자 오류를 모델에게 돌려줘 고치게 함, Tool 왕복 한도(`tool_choice: none` 으로 정리), Registry 에 없는 Tool · 조건 규칙 · 등급 정책 차단(`tool.denied`), 승인 필요 Tool 은 실행하지 않음, 내장 Tool 구성이 바뀌면 새 Registry 버전(이전 버전 불변), 멱등 Tool 재시도, 시간 제한.
+Tool 은 [test/tools.e2e-spec.ts](test/tools.e2e-spec.ts) 가 확인한다: tool 단계 → 모델의 tool call → 서버 실행 → 결과가 다음 요청 · 답변에 반영, 읽기 Tool 병렬 실행(같은 `parallelGroup`, 결과는 호출 순서), 인자 오류를 모델에게 돌려줘 고치게 함, Tool 왕복 한도(`tool_choice: none` 으로 정리), Registry 에 없는 Tool · 조건 규칙 · 등급 정책 차단(`tool.denied`), 승인 필요 Tool 은 “승인 필요” 표시와 함께 계획 · 작업 단계에 보임, 내장 Tool 구성이 바뀌면 새 Registry 버전(이전 버전 불변), 멱등 Tool 재시도, 시간 제한.
+
+승인은 [test/approvals.e2e-spec.ts](test/approvals.e2e-spec.ts) 가 확인한다: 승인 필요 Tool 호출 → 승인 요청(카드 데이터 · 계획 카드 · 단계 상태 · checkpoint) → `waiting_approval`(Worker 해제), 승인 → 모델을 다시 부르지 않고 같은 호출 · 같은 인자로 실행 → 완료(once 승인 사용 처리), 다른 사용자 결정 불가, 거절 → 실행 안 함 · 사유를 모델에게 데이터로, task 범위 승인 → 같은 Tool 의 다음 호출은 묻지 않음, 한 응답의 읽기 + 쓰기 → 읽기는 한 번만 실행, 중지 → 승인 취소, 만료 → `paused` → 재개 시 새 승인 · 만료 직후 결정은 410, 조건 규칙(require_operator) → 사용자 승인 후에도 운영자 대기 · 규칙 승인은 task 범위 불가 · 콘솔 목록 · Viewer 거부 · 사유 필수 · 운영자 승인 → 실행 · 이력 · 감사 로그, 운영자 전용 승인(FORBIDDEN_APPROVER) · 운영자 거절, 정책 강화는 대기 중인 작업에도 즉시 · 완화는 새 작업부터, 등급 정책 교체(기본값 · task 범위 불가 등급) · 규칙 검증 · 수정 · 삭제. [test/worker-boot.e2e-spec.ts](test/worker-boot.e2e-spec.ts) 는 Worker 프로세스(WorkerModule 만)의 의존성을 확인한다.
 
 ## 구현 현황
 
@@ -144,12 +146,13 @@ Tool 은 [test/tools.e2e-spec.ts](test/tools.e2e-spec.ts) 가 확인한다: tool
 | MCP (C-04 · C-05): Streamable HTTP 연결(공식 SDK v2 — 2026-07-28 우선, 2025 계열 서버 자동 호환), SSRF 방어(스킴 · 호스트 · DNS 해석 · 연결 시점 IP 검사, 메타데이터 IP 항상 차단), API Key(Secret 저장소), 연결 테스트 · Tool 탐색 · 검증(JSON Schema · 숨은 지시문 · 보이지 않는 문자 · 민감정보 · 제안 등급), 포함 Tool · 등록 → 새 Registry 버전, Tool 정책, 재탐색 변경 감지 → 운영자 승인, `mcp-sync` 주기 잡(장애 → error · 복구, 헬스 p95 · 오류율), 비활성화 · 삭제, Registry 버전 · diff API | 완료 — stdio(Docker Sandbox) 실행형 · OAuth 인증 · 이미지 서명 검증은 Sandbox 단계 |
 | Skill (C-06): zip 업로드(zip-slip · 심볼릭 링크 · 크기 · 파일 수 검사), SKILL.md 파싱(줄 번호 오류), 신뢰 검증 6항목, 버전(내용 해시 · 중복 · 충돌) · 파일 미리보기 · 비교 · 활성화 → 새 Registry 버전 · 비활성화, Agent 허용 목록, 위젯 추천 카드. 실행: 계획에는 metadata 만, `skill` 단계에서 본문 · 파일 목록 로딩, `skill.read_file`, allowed-tools 로 Tool 범위 제한(서버 강제), 저장 파일 해시 재확인 | 완료 — Git 출처 · 서명 · test-runs · 스크립트 실행(Sandbox) · MCP 서버 Skill 은 이후 |
 | Agent MCP 허용 목록: 초안(배포 버전 복사) → 배포, 실행 시 허용 목록 · 서버 상태 · Tool 사용 여부 확인(`not_allowed` · `tool_unavailable`) | 완료 — 초안 편집은 MCP 허용 목록만 (지침 · 모델 · 정책 편집은 C-03 단계) |
-| Tool Registry · Dispatcher: 작업별 Registry 버전 고정, 인자 검증(zod), 권한 판단(등급 정책 → Tool 재정의 → 조건 규칙), 읽기 Tool 병렬 실행, 시간 제한 · 취소 전파, 멱등 Tool 재시도, `tool_executions` 기록(거부 포함) · 민감정보 마스킹, `tool.called` · `tool.result` · `tool.denied` | 완료 — 내장 Tool 2개(`builtin.calculate`, `builtin.current_time`). 승인 필요 Tool 은 승인 흐름(10단계) 전까지 `approval_required` 로 거부 |
+| Tool Registry · Dispatcher: 작업별 Registry 버전 고정, 인자 검증(zod), 권한 판단(등급 정책 → Tool 재정의 → 조건 규칙), 읽기 Tool 병렬 실행, 시간 제한 · 취소 전파, 멱등 Tool 재시도, `tool_executions` 기록(거부 포함) · 민감정보 마스킹, `tool.called` · `tool.result` · `tool.denied` | 완료 — 내장 Tool 2개(`builtin.calculate`, `builtin.current_time`). 승인 필요 Tool 은 승인 흐름으로 실행 |
 | 비용 계산 (`tasks.cost_amount`) | 다음 단계 — 모델별 단가표 필요. 토큰 수는 기록 중 |
 | 재개 · 복구: checkpoint 재개(계획 · 노트 · 다음 단계 · 보낸 답변) · 처음부터 다시 · 일시정지 · 실행 중 추가 지시(steer) · agent-recovery(heartbeat 끊김 → 마지막 checkpoint 부터, 한도 3회) · Worker 종료 시 넘기기 · 소유권 확인 · 콘솔 작업 목록 · 트레이스 · 단계 상세 · 일시정지 · 중지 · 재개 | 완료 |
-| 승인 결정 · 업로드 · 산출물 다운로드 | 다음 단계 (명세 §2.5 · §2.6) |
+| 승인 (W-03 · C-07): 승인 필요 Tool → 승인 요청 · `waiting_approval`(Worker 해제) → 결정 후 같은 호출부터 재개(진행 중 대화 checkpoint), once · task 범위, user · operator · user_and_operator, 인자 해시 · 사용 처리, 거절 사유 → 모델, 만료(`approval-expiry`) → paused, 중지 시 취소, 위젯 결정 API · 콘솔 목록 · 이력 · 대리 결정, 등급 정책 · 조건 규칙 관리(감사 로그), 정책 강화는 즉시 · 완화는 새 작업부터 | 완료 |
+| 업로드 · 산출물 다운로드 | 다음 단계 (명세 §2.6) |
 | Memory (C-08): 작업 완료 → `memory-ingest`(Memory 역할이 사용자 사실 · 선호 / 요약 / 처리 요령 추출, 마스킹 · 지시문 격리 · 중복 병합 · 보존 기간), 임베딩(`local` 해시 · OpenAI · Gemini), Context 구성(사용자 프로필 + pgvector 유사도, 사용자 격리), 콘솔 검색(의미 · 키워드) · 격리 해제 · 수정(재임베딩) · 고정 · 삭제 · 사용자 데이터 삭제 | 완료 — 운영 임베딩은 키가 없어 `local` 로만 확인 |
-| `approval-expiry` · `metrics-rollup` · `retention` 주기 잡 | 다음 단계 (명세 §6) — `agent-recovery` · `mcp-sync` · `memory-ingest` 는 완료 |
+| `metrics-rollup` · `retention` 주기 잡 | 다음 단계 (명세 §6) — `agent-recovery` · `mcp-sync` · `memory-ingest` · `approval-expiry` 는 완료 |
 | Admin API · 콘솔 | 다음 단계 |
 | 요청 제한 · OpenTelemetry · Vault 연동 (`SECRETS_BACKEND=local` 은 개발 전용, production 에서 시작 거부) | 다음 단계 |
 
@@ -173,7 +176,8 @@ src/
 ├── tools/                         Tool Registry(버전 스냅샷) · 권한 정책 · 가용성 · Dispatcher · 내장 Tool · JSON Schema 검증 · 마스킹
 ├── mcp/                           MCP 연결(SDK · SSRF 가드) · 탐색 · 검사 · 변경 감지 · 재탐색(mcp-sync) · 결과 변환 · 관리 API
 ├── skills/                        Skill 번들(zip) · SKILL.md 파서 · 신뢰 검증 · 저장(내용 주소) · 실행 로딩 · skill.read_file · 관리 API
-├── admin/                         콘솔 인증(로그인 · 토큰 · 역할 가드) · 감사 로그
+├── admin/                         콘솔 인증(로그인 · 토큰 · 역할 가드) · 감사 로그(AuditModule — API · Worker 공용)
+├── approvals/                     승인 결정(위젯 · 콘솔 대리) · 만료 · 콘솔 승인 목록 · 이력 · 권한 정책 · 조건 규칙 관리
 ├── memory/                        임베딩 · MemoryRetriever(프로필 · 의미 · 키워드) · memory-ingest(추출 · 격리 · 병합) · 관리 API
 ├── workers/                       agent-tasks · agent-recovery · memory-ingest 프로세서 · 작업 실행 수명주기
 └── agents/                        실행 · Memory 정책 스키마, Agent 초안 · 배포 API(MCP 허용 목록)
@@ -219,6 +223,15 @@ Memory 연결 후 (2026-11-12, 임베딩 `local`, Memory 역할 = evaluator `dee
 | 사용자 A, 새 대화: “요금제 두 개 비교해 줘. 월 5만5천원 12개월이랑 월 2만9천원 24개월” | 처음에는 선호 기억이 유사도 기준(0.15)에 못 미쳐 빠지고(해시 임베딩은 단어가 겹쳐야 함) 요약만 들어가 답이 길었음 → 사용자 프로필(user 범위 semantic)을 유사도와 상관없이 넣도록 바꾼 뒤 프로필 + 요약(0.359)이 들어가 표 + 한 줄로 답함(12.4s) |
 | 사용자 B, 같은 질문 | 기억 0개 (A 의 기억이 보이지 않음), 제목 · 여러 절이 있는 긴 답변 |
 
+승인 흐름 연결 후 (2026-11-12, 데모 MCP 서버의 `create_ticket`(write, 승인 필요)):
+
+| 요청 · 결정 | 결과 |
+|---|---|
+| “주문 A-9999 상태 확인해 주시고, 조회가 안 되면 상담원 티켓을 남겨 주세요. 연락은 메일로” → **승인** | 계획: 주문 조회(tool) → 판단(reason) → 티켓 생성(tool, “승인” 표시) → 답변. 조회 실패(주문 없음) 뒤 티켓 단계에서 승인 카드(요약 “상담원에게 전달할 문의 티켓을 만듭니다.”, 제목 · 본문 인자, 위험도 medium, task 범위 가능) → `waiting_approval`(9.5s). 승인하면 모델을 다시 부르지 않고 카드의 인자 그대로 티켓 T-99 생성 → 티켓 번호 · 이메일 연락 요청을 안내하고 “메일 발송은 하지 않았다”고 구분(결정 후 7.9s) |
+| 같은 요청 → **거절** (“티켓은 남기지 마세요. 제가 직접 고객센터에 전화할게요.”) | 티켓을 만들지 않고(`approval_rejected`) “요청하신 티켓은 남기지 않았다 — 직접 전화하신다고 하셔서”라고 사유를 반영해 답하고, 전화할 때 전달할 내용을 안내(결정 후 7.4s) |
+
+처음 실행에서 Worker 가 뜨지 않았다(`ApprovalsService` 가 콘솔 모듈의 `AuditService` 에 의존 — e2e 는 API + Worker 모듈을 함께 띄워 드러나지 않음) → 감사 로그를 `AuditModule` 로 분리하고 WorkerModule 만 띄우는 e2e 를 추가했다.
+
 ## 개발 순서 (기획안 12장)
 
 1. NestJS 프로젝트 · DB 기반 ✅
@@ -230,6 +243,6 @@ Memory 연결 후 (2026-11-12, 임베딩 `local`, Memory 역할 = evaluator `dee
 7. BullMQ 비동기 작업 ✅ (agent-tasks · agent-recovery · mcp-sync 주기 잡, Worker 종료 시 넘기기)
 8. Checkpoint · Recovery ✅ (checkpoint 재개 · 처음부터 · 일시정지 · 추가 지시 · Worker 유실 복구 · 복구 한도)
 9. Memory ✅ (memory-ingest 추출 · 마스킹 · 격리 · 병합, 임베딩, 사용자 프로필 + 유사도 검색, 콘솔 관리 · 사용자 데이터 삭제)
-10. Permission · Approval ← 다음
-11. Reflection · Context Compression
+10. Permission · Approval ✅ (승인 대기 → 결정 → 같은 호출부터 재개, once · task 범위, 운영자 승인 · 규칙, 만료, 정책 관리 · 적용 시점)
+11. Reflection · Context Compression ← 다음
 12. Marketplace · Billing (P2)

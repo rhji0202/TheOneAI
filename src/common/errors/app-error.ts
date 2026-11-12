@@ -15,6 +15,10 @@ export type ErrorCode =
   | 'TASK_NOT_ACTIVE'
   | 'TASK_NOT_RESUMABLE'
   | 'CHECKPOINT_NOT_FOUND'
+  | 'APPROVAL_EXPIRED'
+  | 'APPROVAL_ALREADY_RESOLVED'
+  | 'APPROVAL_SCOPE_NOT_ALLOWED'
+  | 'FORBIDDEN_APPROVER'
   | 'IDEMPOTENCY_KEY_REUSED'
   | 'ATTACHMENT_NOT_ALLOWED'
   | 'AGENT_NOT_PUBLISHED'
@@ -55,6 +59,10 @@ const TITLES: Record<ErrorCode, string> = {
   TASK_NOT_ACTIVE: '진행 중인 작업이 아닙니다',
   TASK_NOT_RESUMABLE: '실패했거나 일시정지된 작업만 재개할 수 있습니다',
   CHECKPOINT_NOT_FOUND: '재개할 checkpoint 가 없습니다',
+  APPROVAL_EXPIRED: '승인 요청이 만료되었습니다',
+  APPROVAL_ALREADY_RESOLVED: '이미 처리된 승인 요청입니다',
+  APPROVAL_SCOPE_NOT_ALLOWED: '이 작업 동안 승인할 수 없는 권한 등급입니다',
+  FORBIDDEN_APPROVER: '이 승인 요청을 처리할 권한이 없습니다',
   IDEMPOTENCY_KEY_REUSED: '같은 Idempotency-Key 로 다른 요청을 보냈습니다',
   ATTACHMENT_NOT_ALLOWED: '첨부할 수 없는 파일입니다',
   AGENT_NOT_PUBLISHED: '배포된 Agent 가 없습니다',

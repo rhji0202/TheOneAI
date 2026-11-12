@@ -5,7 +5,7 @@ import { AppError } from '../../common/errors/app-error.js';
 import { type Page, toPage } from '../../common/http/pagination.js';
 import type { Prisma } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../infrastructure/database/prisma.service.js';
-import { type ApprovalView, toApprovalView } from '../approval-views.js';
+import { type ApprovalView, taskScopeAllowed, toApprovalView } from '../approval-views.js';
 import type { PlanStep } from '../plan.js';
 import { taskSummarySelect, toTaskSummary, type TaskSummaryView } from '../task-views.js';
 
@@ -122,7 +122,7 @@ export class TasksAdminService {
         _sum: { attempt: true },
       });
       const policies = await tx.toolPolicy.findMany({
-        select: { level: true, allowTaskScope: true },
+        select: { level: true, allowTaskScope: true, mode: true },
       });
       const byRole = { planner: zero(), executor: zero(), evaluator: zero() };
       for (const step of steps) {
@@ -172,7 +172,10 @@ export class TasksAdminService {
             : null,
         })),
         approvals: approvals.map((a): ApprovalView =>
-          toApprovalView(a, policies.find((p) => p.level === a.permissionLevel) ?? null),
+          toApprovalView(
+            a,
+            taskScopeAllowed(a, policies.find((p) => p.level === a.permissionLevel) ?? null),
+          ),
         ),
       };
     });

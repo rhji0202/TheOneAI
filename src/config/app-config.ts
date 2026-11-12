@@ -41,6 +41,8 @@ const envSchema = z.object({
   RECOVERY_TICK_SEC: z.coerce.number().int().min(0).max(3_600).default(30),
   RECOVERY_STALE_SEC: z.coerce.number().int().min(20).max(3_600).default(60),
   RECOVERY_MAX_ATTEMPTS: z.coerce.number().int().min(0).max(10).default(3),
+  /** 만료된 승인 확인 주기. 0 이면 주기 잡을 등록하지 않는다 */
+  APPROVAL_EXPIRY_TICK_SEC: z.coerce.number().int().min(0).max(3_600).default(60),
   /** 재탐색 대상 확인 주기. 0 이면 주기 잡을 등록하지 않는다 */
   MCP_SYNC_TICK_SEC: z.coerce.number().int().min(0).max(3_600).default(60),
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(100).default(5),
@@ -69,6 +71,7 @@ export interface AppConfig {
   };
   worker: { concurrency: number };
   recovery: { tickSec: number; staleSec: number; maxAttempts: number };
+  approvals: { expiryTickSec: number };
   embedding: {
     provider: 'local' | 'openai' | 'gemini';
     model: string;
@@ -171,6 +174,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
       staleSec: env.RECOVERY_STALE_SEC,
       maxAttempts: env.RECOVERY_MAX_ATTEMPTS,
     },
+    approvals: { expiryTickSec: env.APPROVAL_EXPIRY_TICK_SEC },
     agentRuntime: env.AGENT_RUNTIME,
     llm: {
       requestTimeoutMs: env.LLM_REQUEST_TIMEOUT_MS,

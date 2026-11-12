@@ -21,6 +21,9 @@ export interface MemoryIngestJobData {
   taskId: string;
 }
 
+/** 만료된 승인 요청 → expired, 작업 paused (주기 잡) */
+export const APPROVAL_EXPIRY_QUEUE = 'approval-expiry';
+
 /** heartbeat 가 끊긴 작업을 찾아 재투입 (주기 잡) */
 export const AGENT_RECOVERY_QUEUE = 'agent-recovery';
 

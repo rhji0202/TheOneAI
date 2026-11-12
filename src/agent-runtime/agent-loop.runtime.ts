@@ -13,7 +13,11 @@ import { matchesToolPattern } from '../tools/tool-names.js';
 import type { SnapshotSkill } from '../tools/tool.types.js';
 import type { PlanStep } from '../tasks/plan.js';
 import { ToolAvailabilityService } from '../tools/tool-availability.service.js';
-import { type PolicySet, ToolPermissionService } from '../tools/tool-permission.service.js';
+import {
+  type PolicySet,
+  type PolicySnapshot,
+  ToolPermissionService,
+} from '../tools/tool-permission.service.js';
 import {
   type ResolvedTool,
   ToolRegistryService,
@@ -21,7 +25,7 @@ import {
 } from '../tools/tool-registry.service.js';
 import { type AgentRuntime, RuntimeError, type RunResult } from './agent-runtime.js';
 import { type AgentContext, ContextBuilder } from './context-builder.js';
-import { ExecutorService } from './executor.service.js';
+import { ExecutorService, type PendingWork } from './executor.service.js';
 import { ModelRouterFactory } from './model-router.js';
 import type { PlanView, PromptSkill, PromptTool, WorkNote } from './prompts.js';
 import type { RunContext } from './run-context.js';
@@ -59,7 +63,12 @@ export class AgentLoopRuntime implements AgentRuntime {
           ctx.task.tenantId,
           ctx.task.registryVersionId,
         );
-        const policy = await this.permissions.load(ctx.task.tenantId);
+        // 작업이 처음 읽은 정책과 지금 정책 중 엄격한 쪽 (완화는 새 작업부터)
+        const { policies: policy, snapshot } = await this.permissions.forTask(
+          ctx.task.tenantId,
+          ctx.workingMemory.policySnapshot as PolicySnapshot | undefined,
+        );
+        ctx.workingMemory.policySnapshot = snapshot;
         // MCP Tool 은 이 Agent 버전의 허용 목록에 있고 서버 · Tool 이 지금 사용 가능한 것만 보여 준다
         const live = await this.availability.load(ctx.task.tenantId, ctx.task.agentVersionId);
         // Skill 전용 Tool(skill.*)은 Skill 단계에서만 준다
@@ -175,11 +184,18 @@ export class AgentLoopRuntime implements AgentRuntime {
         await applySteers();
         const pinned =
           step.kind === 'skill' ? skills.find((k) => k.name === step.skill) : undefined;
+        // 승인 대기 뒤 재개: 이 단계에서 멈췄던 대화부터 이어 간다
+        const pendingWork = ctx.workingMemory.pendingWork as PendingWork | undefined;
+        const pending =
+          revision === 0 && planIndex === startIndex && pendingWork?.planIndex === planIndex
+            ? pendingWork
+            : undefined;
         await ctx.step(
           {
             type: step.kind === 'skill' ? 'skill' : 'reason',
             name: step.kind === 'skill' ? `skill.${step.skill}` : `executor.${step.kind}`,
             planIndex,
+            checkpointOnApproval: true,
             input: {
               title: step.title,
               tool: step.tool ?? null,
@@ -187,6 +203,7 @@ export class AgentLoopRuntime implements AgentRuntime {
                 ? { skill: step.skill, version: pinned?.version ?? null }
                 : {}),
               model: router.describe('executor'),
+              ...(pending ? { continuedAfterApproval: true } : {}),
             },
           },
           async () => {
@@ -217,6 +234,7 @@ export class AgentLoopRuntime implements AgentRuntime {
               toolset,
               tools: prepared.tools,
               skill: prepared.skill,
+              pending,
               requiresApproval: (tool) => policies.planningMode(tool) === 'approval',
             });
             if (!res.content) {

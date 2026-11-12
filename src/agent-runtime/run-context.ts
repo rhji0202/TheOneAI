@@ -5,7 +5,12 @@ import type { TaskEventEnvelope, TaskEventsService } from '../events/task-events
 import type { Prisma, StepType } from '../generated/prisma/client.js';
 import type { PrismaService, TenantTx } from '../infrastructure/database/prisma.service.js';
 import type { PlanStep, StoredPlan } from '../tasks/plan.js';
-import { RuntimeError, TaskCancelledError, TaskPausedError } from './agent-runtime.js';
+import {
+  RuntimeError,
+  TaskCancelledError,
+  TaskPausedError,
+  TaskWaitingApprovalError,
+} from './agent-runtime.js';
 
 export interface TaskRunInfo {
   id: string;
@@ -32,6 +37,11 @@ export interface StepDefinition {
   parallelGroup?: string;
   /** false 면 planIndex 를 기록만 하고 계획 카드 상태 · 진행률은 바꾸지 않는다 (작업 단계 안의 Tool 호출) */
   trackPlan?: boolean;
+  /**
+   * 승인 대기로 멈추면 이 단계부터 다시 하도록 checkpoint 를 남긴다 (작업 단계).
+   * Executor 가 workingMemory.pendingWork 에 진행 중이던 대화를 넣어 두어, 재개하면 같은 Tool 호출부터 이어 간다.
+   */
+  checkpointOnApproval?: boolean;
 }
 
 export interface StepOutcome<T> {
@@ -208,8 +218,24 @@ export class RunContext {
     try {
       outcome = await fn({ id: stepId, seq });
     } catch (err) {
-      const status = err instanceof TaskCancelledError ? 'cancelled' : 'failed';
+      const waiting = err instanceof TaskWaitingApprovalError;
+      const status = waiting
+        ? 'waiting_approval'
+        : err instanceof TaskCancelledError
+          ? 'cancelled'
+          : 'failed';
       const finishedAt = new Date();
+      // 승인 대기: 작업 단계가 쓴 토큰을 여기서 기록하고(재개하면 0 부터 센다), 이 단계부터 다시 하는 checkpoint 를 남긴다
+      const usage = waiting ? err.usage : null;
+      if (waiting) err.usage = null;
+      if (usage) {
+        this.usage.inputTokens += usage.inputTokens;
+        this.usage.outputTokens += usage.outputTokens;
+      }
+      const checkpoint =
+        waiting && def.checkpointOnApproval && def.planIndex
+          ? this.buildCheckpoint(def.planIndex - 1)
+          : null;
       await this.commit(async (tx) => {
         await tx.taskStep.update({
           where: { id: stepId },
@@ -217,18 +243,34 @@ export class RunContext {
             status,
             finishedAt,
             durationMs: finishedAt.getTime() - startedAt.getTime(),
-            output: { error: err instanceof RuntimeError ? err.code : status },
+            output: waiting
+              ? { waitingApproval: err.approvalIds }
+              : { error: err instanceof RuntimeError ? err.code : status },
+            inputTokens: usage?.inputTokens ?? 0,
+            outputTokens: usage?.outputTokens ?? 0,
+            ...(checkpoint
+              ? {
+                  checkpoint: checkpoint as unknown as Prisma.InputJsonValue,
+                  checkpointAt: finishedAt,
+                }
+              : {}),
           },
         });
         await this.setPlanStepStatus(tx, tracked, status);
+        if (checkpoint) {
+          await tx.task.update({
+            where: { id: this.task.id },
+            data: { lastCheckpointStepId: stepId },
+          });
+        }
         return [
           await this.append(tx, 'step.completed', {
             seq,
             planIndex: def.planIndex ?? null,
             status,
             durationMs: finishedAt.getTime() - startedAt.getTime(),
-            summary: null,
-            checkpointSaved: false,
+            summary: waiting ? '승인 대기' : null,
+            checkpointSaved: checkpoint !== null,
           }),
         ];
       });
@@ -321,6 +363,11 @@ export class RunContext {
     });
     await this.events.clearStream(this.task.id, messageId);
     return { id: messageId, text };
+  }
+
+  /** 이벤트 없이 이 테넌트의 데이터를 읽거나 바꾼다 (승인 기록 확인 등) */
+  read<T>(fn: (tx: TenantTx) => Promise<T>): Promise<T> {
+    return this.prisma.withTenant(this.task.tenantId, fn);
   }
 
   /** DB 변경과 이벤트를 한 트랜잭션으로 기록하고, 커밋 후 이벤트를 발행한다 (Tool 실행 기록 등). */

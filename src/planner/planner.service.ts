@@ -92,7 +92,7 @@ export class PlannerService {
     signal: AbortSignal,
   ): Promise<PlannerResult> {
     const schema = plannerOutputSchema(
-      tools.filter((t) => !t.requiresApproval).map((t) => t.llmName),
+      tools.map((t) => t.llmName),
       skills.map((s) => s.name),
     );
     const messages: LlmMessage[] = [

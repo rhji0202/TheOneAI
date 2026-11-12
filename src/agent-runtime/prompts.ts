@@ -81,7 +81,7 @@ export function renderTools(tools: PromptTool[]): string {
   return tools
     .map(
       (t) =>
-        `- ${t.llmName} (${t.level}${t.requiresApproval ? ', not available in this version' : ''}): ${t.description}`,
+        `- ${t.llmName} (${t.level}${t.requiresApproval ? ', requires approval' : ''}): ${t.description}`,
     )
     .join('\n');
 }
@@ -110,7 +110,7 @@ Rules:
 - Use a "tool" step when the request needs information or an action that one of the available tools provides; set "tool" to that tool's name. A tool step may call several tools, so group closely related lookups into one step.
 - Use a "reason" step for analysis, comparison or drafting that needs no tools. A simple question that needs no tool gets a single "respond" step.
 - Never plan something no available tool can do (web search, files, databases, sending messages, external actions). Plan to explain the limitation in the answer instead.
-- Tools marked "not available in this version" cannot run: do not plan them; explain in the answer that the action could not be performed.
+- Tools marked "requires approval" change something outside the conversation. Plan them only when the user asked for that action; the user (or an operator) is asked to approve the exact call before it runs, so do not add a separate confirmation step.
 - "title" is short (at most 40 characters) and written in the user's language. "instructions" tells the executor what to do in that step.${skillRule}
 
 Available tools:
@@ -146,18 +146,18 @@ Use the provided tools when they help; call independent tools together in one tu
 When this step is done, reply with concise notes, analysis or a draft for the final answer, including exact figures and facts from tool results. If a tool call was refused or failed, say so in the notes. Do not greet or address the user, and do not write the final answer yet.`;
 
 export function respondRole(tools: PromptTool[]): string {
-  const names = tools.filter((t) => !t.requiresApproval).map((t) => t.llmName);
+  const names = tools.map((t) => t.llmName);
   return `# Role: Executor (respond step)
 Write the final answer to the user. Use the working notes when they are provided; the user cannot see them. Base facts and figures on the notes. Be accurate, helpful and concise. Use Markdown only when it improves readability.
 You cannot call tools in this step. The agent's tools are: ${names.length ? names.join(', ') : 'none'}. Do not offer or promise actions those tools cannot do (for example looking up orders or accounts, contacting staff or departments, sending messages). When the user needs such an action, tell them how they can do it themselves or whom to contact.
-Some actions are not available in this version: when the notes say an action was not performed, say plainly that it was not done, and do not ask the user to approve, confirm or request it again, or promise to do it later.`;
+Report actions exactly as the notes describe them: say an action was done only when the notes show it succeeded. When the user declined an approval or an action failed or was refused, say plainly that it was not done (and why, if the notes say), without promising to do it later.`;
 }
 
 export const EVALUATOR_ASSESS_ROLE = `# Role: Evaluator
 Mode: assess
 Check whether the working notes are enough to write a good final answer to the user's request. Respond with a JSON object only:
 {"verdict": "proceed" | "replan", "reason": string}
-Choose "replan" only when the notes miss something essential or took a wrong approach that another plan could fix with the available tools. Do not replan because a tool was refused for policy or approval reasons. "reason" explains what to change, in one or two sentences.`;
+Choose "replan" only when the notes miss something essential or took a wrong approach that another plan could fix with the available tools. Do not replan because a tool was refused by policy or the user simply declined an action. When the user declined an approval with a comment asking for a change that the notes show was not made yet, choose "replan" and say what to change. "reason" explains what to change, in one or two sentences.`;
 
 export const EVALUATOR_VERIFY_ROLE = `# Role: Evaluator
 Mode: verify

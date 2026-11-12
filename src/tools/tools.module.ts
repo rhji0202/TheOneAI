@@ -1,4 +1,5 @@
 import { Global, Module } from '@nestjs/common';
+import { ApprovalGateService } from './approval-gate.service.js';
 import { BuiltinToolCatalog } from './builtin-tool.catalog.js';
 import { ToolAvailabilityService } from './tool-availability.service.js';
 import { ToolDispatcherService } from './tool-dispatcher.service.js';
@@ -14,6 +15,7 @@ import { ToolRegistryService } from './tool-registry.service.js';
     ToolPermissionService,
     ToolAvailabilityService,
     ToolDispatcherService,
+    ApprovalGateService,
   ],
   exports: [
     BuiltinToolCatalog,

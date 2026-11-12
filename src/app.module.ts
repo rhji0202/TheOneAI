@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { MemoriesAdminModule } from './memory/admin/memories-admin.module.js';
+import { ApprovalsModule } from './approvals/approvals.module.js';
 import { MemoryModule } from './memory/memory.module.js';
 import { StorageModule } from './infrastructure/storage/storage.module.js';
 import { SkillsAdminModule } from './skills/admin/skills-admin.module.js';
@@ -42,6 +43,7 @@ import { WidgetModule } from './widget/widget.module.js';
     AdminCoreModule,
     AgentsAdminModule,
     MemoriesAdminModule,
+    ApprovalsModule,
   ],
   controllers: [HealthController],
 })

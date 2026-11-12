@@ -8,6 +8,7 @@ import {
   type RunResult,
   TaskCancelledError,
   TaskPausedError,
+  TaskWaitingApprovalError,
   WorkerStopError,
 } from '../agent-runtime/agent-runtime.js';
 import {
@@ -27,7 +28,7 @@ import { parseStoredPlan } from '../tasks/plan.js';
 export const HEARTBEAT_MS = 15_000;
 
 export type ExecutionOutcome =
-  'completed' | 'cancelled' | 'failed' | 'paused' | 'handed_over' | 'skipped';
+  'completed' | 'cancelled' | 'failed' | 'paused' | 'waiting_approval' | 'handed_over' | 'skipped';
 
 /**
  * 작업 1건의 실행 수명주기 (docs/api-spec.md §6)
@@ -109,6 +110,10 @@ export class TaskExecutionService {
         await this.finishPaused(ctx, err.reason);
         return 'paused';
       }
+      if (err instanceof TaskWaitingApprovalError) {
+        await this.finishWaitingApproval(ctx, err.approvalIds);
+        return 'waiting_approval';
+      }
       if (err instanceof WorkerStopError) {
         if (err.reason === 'worker_shutdown') await this.handOver(ctx);
         return 'handed_over';
@@ -177,6 +182,11 @@ export class TaskExecutionService {
       const event = await this.events.append(tx, tenantId, taskId, 'task.status', {
         status: 'running',
         ...(job.mode === 'resume' ? { reason: job.restart ? 'restarted' : 'resumed' } : {}),
+      });
+      // 승인 대기로 멈췄던 단계는 닫는다 (재개하면 같은 단계를 새로 실행해 이어 간다)
+      await tx.taskStep.updateMany({
+        where: { taskId, status: 'waiting_approval' },
+        data: { status: 'skipped', summary: '승인 대기 후 이어서 실행' },
       });
       const resume =
         job.mode === 'resume' && !job.restart
@@ -363,6 +373,40 @@ export class TaskExecutionService {
       });
       return this.events.append(tx, tenantId, taskId, 'task.status', { status: 'paused', reason });
     });
+  }
+
+  /**
+   * 승인 대기 — Worker 를 놓고 waiting_approval 로 멈춘다 (checkpoint 는 승인 요청을 만든 단계).
+   * 그 사이에 결정이 이미 났으면(대기 중인 승인이 없으면) 바로 다시 큐에 넣는다.
+   * 결정 처리도 같은 작업 행을 먼저 잠그므로, 둘 중 늦게 커밋하는 쪽이 재개를 맡는다.
+   */
+  private async finishWaitingApproval(ctx: RunContext, approvalIds: string[]): Promise<void> {
+    const { tenantId, id: taskId } = ctx.task;
+    const requeue = await this.prisma.withTenant(tenantId, async (tx) => {
+      await tx.task.update({
+        where: { id: taskId },
+        data: { status: 'waiting_approval', workerId: null, ...usageIncrement(ctx) },
+      });
+      const pending = await tx.approval.count({ where: { taskId, status: 'pending' } });
+      if (pending === 0) {
+        await tx.task.update({
+          where: { id: taskId },
+          data: { status: 'queued', queuedAt: new Date() },
+        });
+      }
+      const event = await this.events.append(tx, tenantId, taskId, 'task.status', {
+        status: pending === 0 ? 'queued' : 'waiting_approval',
+        reason: pending === 0 ? 'approval_resolved' : 'approval_required',
+      });
+      await this.events.publish(taskId, event);
+      return pending === 0;
+    });
+    if (requeue) {
+      await this.queue.enqueueResume(
+        { tenantId, taskId },
+        { kind: 'resume', n: approvalIds.join('-') },
+      );
+    }
   }
 
   /** Worker 종료 — recovering 으로 바꾸고 곧바로 재개 Job 을 넣는다 (checkpoint 부터) */

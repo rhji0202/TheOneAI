@@ -3,6 +3,7 @@ import { Global, Module } from '@nestjs/common';
 import { APP_CONFIG, type AppConfig } from '../../config/app-config.js';
 import {
   AGENT_RECOVERY_QUEUE,
+  APPROVAL_EXPIRY_QUEUE,
   AGENT_TASKS_QUEUE,
   MCP_SYNC_QUEUE,
   MEMORY_INGEST_QUEUE,
@@ -29,6 +30,7 @@ import { TaskQueueService } from './task-queue.service.js';
       { name: MCP_SYNC_QUEUE },
       { name: AGENT_RECOVERY_QUEUE },
       { name: MEMORY_INGEST_QUEUE },
+      { name: APPROVAL_EXPIRY_QUEUE },
     ),
   ],
   providers: [TaskQueueService],

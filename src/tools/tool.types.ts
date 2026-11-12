@@ -86,7 +86,7 @@ export type PermissionDecision =
  * tool_executions.denied_reason
  *  - unknown_tool · not_allowed · blocked_by_policy · blocked_by_rule : “무단 Tool 호출” 지표에 포함
  *    (not_allowed = 이 Agent 의 허용 목록에 없는 MCP 서버의 Tool)
- *  - approval_required : 승인이 필요해 실행하지 않음 (지표 제외, 승인 흐름은 개발 순서 10단계)
+ *  - approval_rejected : 승인 요청을 사용자 · 운영자가 거절함 (지표 제외)
  *  - tool_unavailable : 작업 중에 서버가 오류 · 비활성 상태가 되었거나 운영자가 Tool 을 껐음 (지표 제외)
  */
 export type DeniedReason =
@@ -94,7 +94,7 @@ export type DeniedReason =
   | 'not_allowed'
   | 'blocked_by_policy'
   | 'blocked_by_rule'
-  | 'approval_required'
+  | 'approval_rejected'
   | 'tool_unavailable';
 
 export const UNAUTHORIZED_REASONS: DeniedReason[] = [

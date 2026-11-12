@@ -6,7 +6,7 @@ import type { ArtifactView } from '../artifacts/artifact-views.js';
 import { toArtifactView } from '../artifacts/artifact-views.js';
 import { PrismaService, type TenantTx } from '../infrastructure/database/prisma.service.js';
 import type { WidgetSession } from '../widget/widget-session.js';
-import { type ApprovalView, toApprovalView } from './approval-views.js';
+import { type ApprovalView, taskScopeAllowed, toApprovalView } from './approval-views.js';
 import { parseStoredPlan, type PlanStep } from './plan.js';
 import { TaskControlService } from './task-control.service.js';
 import {
@@ -158,9 +158,9 @@ export class TasksService {
     if (!approval) return null;
     const policy = await tx.toolPolicy.findFirst({
       where: { level: approval.permissionLevel },
-      select: { allowTaskScope: true },
+      select: { allowTaskScope: true, mode: true },
     });
-    return toApprovalView(approval, policy);
+    return toApprovalView(approval, taskScopeAllowed(approval, policy));
   }
 
   private async result(

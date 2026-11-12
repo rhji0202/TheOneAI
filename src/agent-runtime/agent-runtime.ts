@@ -32,6 +32,22 @@ export class TaskPausedError extends Error {
   }
 }
 
+/**
+ * 승인 대기 — 승인이 필요한 Tool 호출을 만나 승인 요청을 만들었다.
+ * 작업은 waiting_approval 로 멈추고(Worker 를 점유하지 않음), 결정이 나면 같은 호출부터 이어서 실행한다.
+ */
+export class TaskWaitingApprovalError extends Error {
+  /** 이 오류가 지나간 단계들이 지금까지 쓴 토큰 (단계 기록 · 작업 합계에 더한다) */
+  usage: { inputTokens: number; outputTokens: number } | null = null;
+  /** 한 번에 요청된 Tool 호출 중 멈추기 전에 끝난 것 (호출 순서 index, 모델에게 돌려줄 결과) */
+  dispatched: Array<{ index: number; content: string }> = [];
+
+  constructor(readonly approvalIds: string[]) {
+    super('승인을 기다립니다');
+    this.name = 'TaskWaitingApprovalError';
+  }
+}
+
 /** Worker 종료 · 소유권 상실 — 작업은 실패가 아니라 복구 대상이다 */
 export class WorkerStopError extends Error {
   constructor(readonly reason: 'worker_shutdown' | 'ownership_lost') {

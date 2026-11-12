@@ -77,6 +77,7 @@ interface ApprovalView {
   requiredApprover: 'user' | 'operator' | 'user_and_operator';
   allowTaskScope: boolean;     // "이 작업 동안 다시 묻지 않기" 노출 여부
   status: 'pending' | 'approved' | 'rejected' | 'expired' | 'cancelled';
+  waitingFor: 'user' | 'operator' | 'user_and_operator' | null; // 대기 중일 때 남은 승인자 (user_and_operator 의 한쪽이 승인했으면 다른 쪽)
   expiresAt: string;
 }
 
@@ -271,8 +272,16 @@ interface ApprovalDecisionRequest {
 // 200: ApprovalView
 ```
 
-- `requiredApprover = user_and_operator` 이면 사용자 승인 후에도 `pending`(운영자 대기).
+- `requiredApprover = user_and_operator` 이면 사용자 승인 후에도 `pending`(운영자 대기, `approval.updated` 이벤트). 어느 쪽이든 거절하면 바로 `rejected`.
 - 오류: `APPROVAL_EXPIRED`(410), `APPROVAL_ALREADY_RESOLVED`(409), `APPROVAL_SCOPE_NOT_ALLOWED`(422), `FORBIDDEN_APPROVER`(403).
+
+구현 메모:
+
+- **승인 요청**: 작업 단계에서 모델이 승인 필요 Tool 을 부르면, Dispatcher 가 인자를 검증하고 권한 판단(차단 → 단계 범위 → 승인 필요) 뒤 `approvals` 를 만들고 `approval.required` 를 보낸다. 작업 단계는 진행 중이던 대화(모델의 Tool 호출 · 이미 끝난 호출 결과)를 checkpoint 의 `workingMemory.pendingWork` 에 남기고 `waiting_approval` 로 멈춘다. 작업은 `waiting_approval`, Worker 를 놓는다. 한 응답에 여러 호출이 있으면 승인이 필요 없는 앞 호출은 먼저 실행하고 결과를 함께 남긴다.
+- **결정 후 재개**: 작업에 대기 중인 승인이 더 없으면 `queued` 로 바꾸고 재개 Job 을 넣는다. 재개하면 모델을 다시 부르지 않고 멈춘 호출부터 이어 간다 — 승인한 인자 그대로 실행된다(인자 해시 확인). `once` 승인은 실행에 한 번만 쓰이고(`consumed_at`), `task` 범위 승인은 같은 Tool 의 이후 호출(같은 승인자 요구, 조건 규칙에 걸리지 않은 호출)을 묻지 않는다.
+- **거절**: 실행하지 않고(`tool.denied` · `approval_rejected`) 모델에게 거절과 사유(데이터로)를 알린다. 모델은 다른 방법을 찾거나 사유에 맞게 고친 호출(새 승인)을 하거나 답변에서 밝힌다. 사유가 수정을 요구하는데 반영되지 않았으면 Evaluator 가 재계획한다.
+- **경쟁**: 결정 · 만료 · 중지와 Worker 의 `waiting_approval` 전환은 모두 작업 행을 먼저 잠근다. Worker 가 멈추기 직전에 결정이 나면 Worker 가 대기 승인이 없음을 보고 바로 다시 큐에 넣는다.
+- **중지**: 대기 중인 승인은 `cancelled` (`approval.resolved`, `decidedBy: 'system'`).
 
 ### 2.6 `POST /v1/uploads`
 
@@ -315,7 +324,8 @@ NestJS: 컨트롤러에서 `@Sse()` 대신 `Response` 를 직접 쓰는 `SseStre
 | `tool.result` | Observe | `{ seq, executionId, toolName, status, attempt, durationMs, resultPreview }` — `status`: `succeeded` · `failed` · `timeout`, `attempt`: 시도 횟수(멱등 Tool 재시도 포함) | Tool 칩 결과 · 재시도 표시 |
 | `tool.denied` | 권한 검증 | `{ seq, executionId, toolName, reason: DeniedReason, message }` | Tool 칩 “거부됨” |
 | `approval.required` | 권한 검증 | `{ approval: ApprovalView }` | 승인 카드 · 런처 뱃지 |
-| `approval.resolved` | 승인 처리 | `{ approvalId, status, decidedBy: 'user' \| 'operator' }` | 카드 닫기 |
+| `approval.updated` | user_and_operator 의 한쪽 승인 | `{ approval: ApprovalView }` (`waitingFor` 갱신) | “운영자 확인 대기” 표시 |
+| `approval.resolved` | 승인 처리 · 만료 · 중지 | `{ approvalId, status, decidedBy: 'user' \| 'operator' \| 'system' }` | 카드 닫기 |
 | `message.delta` | 응답 생성 | `{ messageId, text }` | 스트리밍 텍스트 |
 | `message.snapshot` | 재연결 직후 | `{ messageId, text }` | 누적 본문 복원 |
 | `message.completed` | 응답 완료 | `{ message: MessageView }` | 최종 메시지 |
@@ -341,7 +351,7 @@ NestJS: 컨트롤러에서 `@Sse()` 대신 `Response` 를 직접 쓰는 `SseStre
 | `blocked_by_policy` | 등급 정책 · Tool 재정의가 `block` | 포함 |
 | `blocked_by_rule` | 조건 규칙(`tool_policy_rules`, effect `block`)에 걸림. `tool_executions.output.matchedRuleIds` 에 규칙 기록 | 포함 |
 | `not_allowed` | 이 단계에서 모델에게 주지 않은 Tool — Agent 허용 목록(`agent_version_mcp_servers`)에 없는 MCP 서버의 Tool, Skill 단계의 `allowed-tools` 밖 Tool, 일반 단계의 Skill 전용 Tool | 포함 |
-| `approval_required` | 승인이 필요한 Tool. 승인 흐름(개발 순서 10단계) 전까지는 실행하지 않고 이 사유로 거부한다 (모델에게는 “이 버전에서 사용할 수 없음”으로 알린다) | 제외 |
+| `approval_rejected` | 승인 요청을 사용자 · 운영자가 거절함 (승인 대기 자체는 거부가 아니라 `waiting_approval`) | 제외 |
 | `tool_unavailable` | 작업 중에 MCP 서버가 오류 · 비활성 · 삭제 상태가 되었거나 운영자가 Tool 을 껐음 | 제외 |
 
 거부 · 인자 오류(`INVALID_ARGUMENTS`) · 실행 오류(`TOOL_ERROR`) · 시간 초과(`TOOL_TIMEOUT`)는 모두 `tool_executions` 에 남고, 작업을 실패시키지 않고 모델에게 `{ ok: false, error, message }` 로 돌려준다. 모델이 인자를 고치거나 다른 방법을 찾거나, 답변에서 한계를 밝힌다.
@@ -592,6 +602,14 @@ interface ToolPolicyRuleInput {
 
 정책 적용 시점: 강화(승인 추가 · 차단)는 실행 중 작업에도 즉시, 완화는 새 작업부터.
 
+구현 메모:
+
+- **적용 시점**: 작업은 처음 읽은 정책을 checkpoint(`workingMemory.policySnapshot`)에 남기고, Tool 호출마다 그것과 지금 정책을 비교해 엄격한 쪽을 쓴다 — 등급마다 더 엄격한 방식(auto < require_approval < always_approval < block) · 승인자(같은 방식이면 user + operator → user_and_operator) · 좁은 task 범위 · 짧은 만료, 규칙은 둘의 합집합.
+- **`GET /tool-policies`**: 다섯 등급 모두 (`{ level, mode, approver, allowTaskScope, ttlSeconds, isDefault, updatedAt }`). 정하지 않은 등급은 기본값(read auto · write · external_send 승인 · delete · financial 매번 승인). `PUT` 은 `{ policies: ToolPolicyInput[] }` 전체 교체 — 빠진 등급은 기본값, 같은 등급 중복은 400, `delete` · `financial` · `always_approval` 은 `allowTaskScope` 를 false 로 저장. 감사 로그 `tool_policy.update`(전후 값).
+- **규칙**: `toolPattern` 또는 `level` 중 하나는 필요(400). 조건은 data-model.md §4.4 형식. 감사 로그 `tool_policy_rule.create · update · delete`.
+- **승인 목록**: `GET /approvals` 는 `AdminApprovalRow = ApprovalView & { taskTitle, conversationId, endUserPseudonym, user: { decision, comment, at } | null, operator: { decision, comment, at, memberId, memberName } | null, createdAt, resolvedAt }` — 위험도 높은 순 → 만료 임박 순. `history` 는 처리된 승인(`?toolName`)을 최근 처리 순으로.
+- **대리 결정**: 운영자는 `user` 승인도 대신 결정할 수 있다. `user_and_operator` 는 양쪽이 모두 승인해야 한다. 감사 로그 `approval.approve` · `approval.reject`(사유 포함).
+
 ### 4.8 Memory (C-08)
 
 | Method | Path | 권한 | 설명 |
@@ -760,7 +778,7 @@ agent.worker (queue: agent-tasks)
        권한 검증 (allowlist → 등급 정책 → Tool 재정의 → 조건 규칙)
          ├ block           → tool_executions(denied) · tool.denied → 거부 결과를 모델에게 돌려줌 (같은 단계에서 계속)
          ├ 승인 필요        → approvals INSERT · approval.required · status = waiting_approval · Job 종료 (Worker 점유 안 함)
-         │                   (4단계 구현: approval_required 로 거부. 승인 흐름은 10단계)
+         │                   진행 중 대화는 checkpoint 의 pendingWork 로 — 결정 후 같은 Tool 호출부터 재개
          └ 허용            → 실행 (MCP · Sandbox · Skill) → tool.called / tool.result
                               읽기 등급 호출이 여러 개면 parallelTools.max 만큼 동시에 (같은 parallelGroup)
        Observe → Evaluate(pass / replan / fail) → task_steps checkpoint 저장 → step.completed
@@ -775,7 +793,7 @@ agent.worker (queue: agent-tasks)
 |---|---|---|
 | `agent-tasks` | 메시지 · 승인 결정 · 재개 | Agent Loop 실행. BullMQ `attempts: 1` — 재시도는 Loop 안에서 단계 단위로 처리 |
 | `agent-recovery` | 1분 주기 | `app_find_stalled_tasks('60 seconds')` → `recovering` 으로 바꾸고 `mode: 'resume'` 재투입 (복구 한도 3회). 구현: `RECOVERY_TICK_SEC`(30초)마다 heartbeat 가 `RECOVERY_STALE_SEC`(60초) 넘게 끊긴 작업을 잠그고, 실행 중이던 단계를 `failed(worker_lost)` 로 닫은 뒤 `task.recovering` → 재개 Job(`<taskId>:recover:<n>`, 대기 중이면 다시 넣지 않음). 한도(`RECOVERY_MAX_ATTEMPTS`)를 넘으면 `failed(RECOVERY_LIMIT_EXCEEDED)` — checkpoint 가 있으면 사용자가 재개할 수 있다. Worker 는 heartbeat 때 자신이 아직 주인인지(`worker_id`) 확인하고 아니면 멈춘다. Worker 가 SIGTERM 을 받으면 새 Job 을 멈추고 실행 중 작업을 `recovering` 으로 넘겨 바로 재개 Job 을 넣는다 |
-| `approval-expiry` | 1분 주기 | 만료 승인 → `expired`, 작업 `paused` + checkpoint 유지 |
+| `approval-expiry` | 1분 주기 | 만료 승인 → `expired`, 작업 `paused` + checkpoint 유지. 구현: `APPROVAL_EXPIRY_TICK_SEC`(60초)마다 `app_find_expired_approvals` 로 찾는다. 승인 요청 단계는 `skipped`, `approval.resolved`(`expired`, `system`) → 대기 중인 승인이 더 없으면 작업 `paused`(`approval_expired`). 사용자가 재개하면 같은 호출로 새 승인을 요청한다. 만료 시각이 지난 승인에 결정하면 같은 처리 후 410 |
 | `memory-ingest` | 작업 완료 | Reflection 요약 · 임베딩 · 지시문 패턴 검사 후 저장 또는 격리. 구현: 작업이 `completed` 로 끝나고 `memoryPolicy.enabled` 이면 Job(`memory-<taskId>`, 3회 재시도)을 넣는다. Memory 역할(Evaluator 모델, JSON)이 요청 · 작업 노트 · 최종 답변에서 최대 4개를 뽑는다 — `semantic`+`user`(사용자가 스스로 밝힌 사실 · 선호), `episodic`+`user`(요청과 결과 요약), `procedural`+`agent`(모든 사용자에게 도움이 되는 처리 요령 — 한 사용자의 선호는 넣지 않음). 정책의 `types` 밖이거나, 익명(외부 ID 없음) · 삭제된 사용자의 user 범위 기억은 버린다. 마스킹 → 지시문 검사(격리) → 임베딩 → 같은 범위 · 종류에서 유사도 0.9 이상이면 새로 만들지 않고 내용 · 출처(`source_task_ids`)를 합친다. 확신도 0.8 미만은 `needsVerification`, 만료일은 `retentionDays` |
 | `mcp-sync` | 서버별 1시간 | 재탐색 → 변경이 있으면 `mcp_tools.pending_change` 기록 · 헬스 갱신. 구현: `MCP_SYNC_TICK_SEC`(기본 60초)마다 `app_list_mcp_servers_due_for_sync` 로 시기가 된 서버(연결됨 `MCP_SYNC_INTERVAL_SEC`, 오류 상태는 최대 5분)를 확인. 연결 실패 → `error`(Tool 제외), 성공 → `connected`(복구). 헬스 = 최근 24시간 호출 p95 · 오류율(모델의 인자 오류 제외) |
 | `skill-verify` | 업로드 · Git 등록 | 파싱 · 해시 · 서명 · 정적 검사 → `skill_versions.verification` |

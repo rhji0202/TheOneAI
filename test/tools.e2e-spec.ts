@@ -298,8 +298,8 @@ describe('Registry 버전 · 승인 · 재시도 · 시간 제한', () => {
     });
   });
 
-  it('[승인필요] 내장 Tool 구성이 바뀌면 새 Registry 버전 — 이전 작업의 버전은 그대로, 승인 필요 Tool 은 실행하지 않는다', async () => {
-    const { events, task, executions, detail } = await run('[승인필요] 메모 보내줘 #approval');
+  it('내장 Tool 구성이 바뀌면 새 Registry 버전 — 이전 작업의 버전은 그대로, 승인 필요 Tool 은 표시와 함께 보인다', async () => {
+    const { task, detail } = await run('[도구] 1234 곱하기 5678 #registry');
 
     // 새 버전 고정 · 이전 버전은 불변
     expect(task.registryVersionId).not.toBe(builtinOnlyVersion);
@@ -321,22 +321,14 @@ describe('Registry 버전 · 승인 · 재시도 · 시간 제한', () => {
     ]);
     expect(after.tools.map((t) => t.name)).toContain('test.send_note');
 
-    // 계획: 승인 필요 Tool 은 tool 단계로 둘 수 없다 → planner 가 한 번 고친다
-    expect(requestsFor('#approval').filter((r) => r.role === 'Planner')).toHaveLength(2);
-    const plan = events.find((e) => e.event === 'plan.created')!.data as {
-      steps: Array<{ kind: string }>;
-    };
-    expect(plan.steps.map((s) => s.kind)).toEqual(['reason', 'respond']);
-
-    // 모델에게는 “승인 필요” 표시와 함께 보이지만, 호출하면 실행하지 않고 거부한다 (승인 흐름은 10단계)
-    const offered = workRequests('#approval')[0]!.body.tools!.find(
+    // 승인 필요 Tool 은 계획 · 작업 단계에 “승인 필요” 표시와 함께 보인다 (승인 흐름은 approvals.e2e-spec.ts)
+    expect(
+      requestsFor('#registry').find((r) => r.role === 'Planner')!.body.messages[0]!.content,
+    ).toContain('test__send_note (write, requires approval)');
+    const offered = workRequests('#registry')[0]!.body.tools!.find(
       (t) => t.function.name === 'test__send_note',
     )!;
-    expect(offered.function.description).toContain('Not available in this version');
-    expect(toolEvents(events, 'tool.denied')).toEqual([
-      expect.objectContaining({ toolName: 'test.send_note', reason: 'approval_required' }),
-    ]);
-    expect(executions[0]).toMatchObject({ status: 'denied', deniedReason: 'approval_required' });
+    expect(offered.function.description).toContain('Requires approval');
     expect(sentNotes).toHaveLength(0);
     expect(detail.status).toBe('completed');
   });

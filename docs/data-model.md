@@ -157,7 +157,7 @@ interface Checkpoint {
 
 재개 규칙: `tasks.last_checkpoint_step_id` 의 checkpoint 를 읽고, 같은 `agent_version_id` · `registry_version_id` 로 다음 계획 단계부터 실행한다. 이미 성공한 비멱등 Tool 은 다시 호출하지 않는다.
 
-`workingMemory` 에 Agent Loop 가 남기는 값: `planView`(목표 · 단계 · 지시 — 재개 시 계획), `notes`(작업 노트), `answer`(보낸 답변 `{id, text}` — 있으면 검증만), `steerCursor`(마지막으로 반영한 추가 지시 메시지). checkpoint 는 작업 단계(reason · tool · skill)와 답변 단계가 끝날 때 저장한다. `tasks.recovery_count` 는 Worker 유실 · 종료로 다시 넣은 횟수다.
+`workingMemory` 에 Agent Loop 가 남기는 값: `planView`(목표 · 단계 · 지시 — 재개 시 계획), `notes`(작업 노트), `answer`(보낸 답변 `{id, text}` — 있으면 검증만), `steerCursor`(마지막으로 반영한 추가 지시 메시지), `policySnapshot`(작업이 처음 읽은 권한 정책 — 이후 판단은 이것과 지금 정책 중 엄격한 쪽), `pendingWork`(승인 대기로 멈춘 작업 단계의 대화 `{planIndex, messages, calls, results, round, toolCalls}` — 재개하면 모델을 다시 부르지 않고 결과가 없는 Tool 호출부터 이어 간다). 승인 대기로 멈춘 작업 단계는 `waiting_approval` 로 끝나며 `nextPlanIndex` 가 그 단계 자신인 checkpoint 를 남긴다. checkpoint 는 작업 단계(reason · tool · skill)와 답변 단계가 끝날 때 저장한다. `tasks.recovery_count` 는 Worker 유실 · 종료로 다시 넣은 횟수다.
 
 ### 4.4 `tool_policy_rules.condition`
 
@@ -273,7 +273,9 @@ Secret 은 `vault://mcp/<tenantId>/<serverId>` 참조로만 DB 에 남는다. �
 | checkpoint 를 `task_steps` 에 저장                        | 기획안 6장 그대로. 큰 상태는 `checkpoint_ref`(S3)                                          |
 | `task_events` 아웃박스                                    | SSE 재연결 시 `Last-Event-ID` 이후 이벤트 재전송. 7일 보존 후 정리                         |
 | `tool_executions` 에 거부(`denied`)도 기록                | “무단 Tool 호출 0%” 지표의 근거                                                            |
-| `approvals.args_hash`                                     | 승인 후 인자가 바뀌면 재승인 (W-03)                                                        |
+| `approvals.args_hash`                                     | 승인 후 인자가 바뀌면 재승인 (W-03). 키 순서와 무관한 정규화 JSON 의 SHA-256               |
+| `approvals.consumed_at` · `tool_executions.approval_id`   | once 승인은 한 번만 실행에 쓴다 (같은 호출을 다시 하면 다시 묻는다) · 실행을 허락한 승인 추적 |
+| `approvals.summary`                                       | 승인 카드 한 줄 설명 (Tool 설명의 첫 문장)                                                 |
 | `mcp_tools.pending_change`                                | 재탐색 변경을 자동 반영하지 않고 검토 후 Registry 새 버전 (C-04)                           |
 | `memories.source_type` · `status=quarantined`             | 외부 문서 · Tool 결과에서 온 지시문을 Context 에 넣지 않기 위한 근거 (C-08)                |
 | Secret 은 `*_ref` 로 Vault 참조만                         | DB 유출 시에도 키가 노출되지 않음                                                          |
