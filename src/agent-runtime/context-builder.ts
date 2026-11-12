@@ -4,6 +4,7 @@ import { contentBlockSchema } from '../conversations/message-views.js';
 import { PrismaService } from '../infrastructure/database/prisma.service.js';
 import { addUsage, emptyUsage, type LlmMessage, type LlmUsage } from '../llm/llm.types.js';
 import { type MemoryHit, MemoryRetriever } from '../memory/memory-retriever.service.js';
+import { ArtifactsService } from '../artifacts/artifacts.service.js';
 import { ContextCompressor } from './context-compressor.js';
 import type { ModelRouter } from './model-router.js';
 import { renderMemories } from './prompts.js';
@@ -48,6 +49,7 @@ export class ContextBuilder {
     private readonly prisma: PrismaService,
     private readonly retriever: MemoryRetriever,
     private readonly compressor: ContextCompressor,
+    private readonly artifacts: ArtifactsService,
   ) {}
 
   /** @param compress 주어지면 창 밖으로 밀려난 메시지를 요약에 합친다 (Agent Loop) */
@@ -116,11 +118,15 @@ export class ContextBuilder {
     }
 
     const memoryHits = await this.recall(task);
+    // 첨부 파일 — 텍스트(CSV · JSON · 텍스트)는 내용을, 나머지는 이름 · 형식을 요청 뒤에 데이터로 붙인다
+    const attachments = task.triggerMessageId
+      ? await this.artifacts.attachmentContext(task.tenantId, task.triggerMessageId)
+      : '';
     return {
       context: {
         tenantPrompt: task.systemPrompt,
         history,
-        request: task.triggerText,
+        request: task.triggerText + attachments,
         memories: renderMemories(memoryHits),
         memoryHits,
         conversationSummary: summary,

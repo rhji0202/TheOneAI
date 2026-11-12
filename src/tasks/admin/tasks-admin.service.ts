@@ -5,6 +5,8 @@ import { AppError } from '../../common/errors/app-error.js';
 import { type Page, toPage } from '../../common/http/pagination.js';
 import type { Prisma } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../infrastructure/database/prisma.service.js';
+import { toArtifactView } from '../../artifacts/artifact-views.js';
+import { toMessageView } from '../../conversations/message-views.js';
 import { type ApprovalView, taskScopeAllowed, toApprovalView } from '../approval-views.js';
 import type { PlanStep } from '../plan.js';
 import { taskSummarySelect, toTaskSummary, type TaskSummaryView } from '../task-views.js';
@@ -95,6 +97,7 @@ export class TasksAdminService {
         select: {
           ...rowSelect,
           traceId: true,
+          triggerMessageId: true,
           inputTokens: true,
           outputTokens: true,
           costAmount: true,
@@ -171,12 +174,62 @@ export class TasksAdminService {
             ? { label: `cp-${s.seq}`, at: s.checkpointAt.toISOString() }
             : null,
         })),
+        artifacts: (
+          await tx.artifact.findMany({
+            where: {
+              uploadedAt: { not: null },
+              OR: [
+                { taskId },
+                ...(task.triggerMessageId ? [{ messageId: task.triggerMessageId }] : []),
+              ],
+            },
+            orderBy: { createdAt: 'asc' },
+          })
+        ).map((a) => ({ ...toArtifactView(a), origin: a.origin })),
+        feedback: (
+          await tx.feedback.findMany({ where: { taskId }, orderBy: { createdAt: 'asc' } })
+        ).map((f) => ({
+          rating: f.rating,
+          comment: f.comment,
+          createdAt: f.createdAt.toISOString(),
+        })),
         approvals: approvals.map((a): ApprovalView =>
           toApprovalView(
             a,
             taskScopeAllowed(a, policies.find((p) => p.level === a.permissionLevel) ?? null),
           ),
         ),
+      };
+    });
+  }
+
+  /** 대화 기록 (C-02 “대화 보기”) — 메시지와 그 대화의 작업 */
+  async conversation(admin: AdminSession, conversationId: string) {
+    return this.prisma.withTenant(admin.tenantId, async (tx) => {
+      const conversation = await tx.conversation.findUnique({
+        where: { id: conversationId },
+        include: { endUser: { select: { pseudonym: true } }, agent: { select: { name: true } } },
+      });
+      if (!conversation) throw AppError.notFound();
+      const messages = await tx.message.findMany({
+        where: { conversationId },
+        orderBy: { id: 'asc' },
+        take: 500,
+      });
+      const tasks = await tx.task.findMany({
+        where: { conversationId },
+        orderBy: { id: 'asc' },
+        select: { id: true, title: true, status: true, createdAt: true },
+      });
+      return {
+        id: conversation.id,
+        title: conversation.title,
+        agentName: conversation.agent.name,
+        endUserPseudonym: conversation.endUser.pseudonym,
+        summary: conversation.summary,
+        createdAt: conversation.createdAt.toISOString(),
+        messages: messages.map(toMessageView),
+        tasks: tasks.map((t) => ({ ...t, createdAt: t.createdAt.toISOString() })),
       };
     });
   }

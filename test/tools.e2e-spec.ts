@@ -144,7 +144,11 @@ describe('내장 Tool', () => {
 
     // 모델에게 준 Tool 정의 · tool 메시지 · 다음 단계로 넘어간 결과
     const [first, second] = workRequests('#calc');
-    expect(offeredTools(first!)).toEqual(['builtin__calculate', 'builtin__current_time']);
+    expect(offeredTools(first!)).toEqual([
+      'builtin__calculate',
+      'builtin__create_file',
+      'builtin__current_time',
+    ]);
     expect(second!.body.messages.at(-1)).toMatchObject({ role: 'tool', tool_call_id: 'call_0_0' });
     expect(second!.body.messages.at(-1)!.content).toContain('7006652');
     const planner = requestsFor('#calc').find((r) => r.role === 'Planner')!;
@@ -316,6 +320,7 @@ describe('Registry 버전 · 승인 · 재시도 · 시간 제한', () => {
     const after = await registry.loadToolset(ctx.tenantA.tenantId, task.registryVersionId);
     expect(before.tools.map((t) => t.name)).toEqual([
       'builtin.calculate',
+      'builtin.create_file',
       'builtin.current_time',
       'skill.read_file',
     ]);

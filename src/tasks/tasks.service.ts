@@ -222,7 +222,7 @@ export class TasksService {
     });
     const toolCalls = await tx.toolExecution.count({ where: { taskId: task.id } });
     const artifacts = await tx.artifact.findMany({
-      where: { taskId: task.id, origin: 'task_output' },
+      where: { taskId: task.id, origin: 'task_output', uploadedAt: { not: null } },
       orderBy: { createdAt: 'asc' },
     });
     const durationMs =

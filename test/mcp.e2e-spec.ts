@@ -416,7 +416,7 @@ describe('Agent 허용 목록 · 실행', () => {
       mcpServers: [{ id: blocked.id, enabled: true }],
     });
     expect(invalid).toMatchObject({ status: 422, body: { code: 'AGENT_DRAFT_INVALID' } });
-    expect((await admin('PATCH', `/agents/${agentId}/draft`, { systemPrompt: 'x' })).status).toBe(
+    expect((await admin('PATCH', `/agents/${agentId}/draft`, { unknownField: 'x' })).status).toBe(
       400,
     );
 

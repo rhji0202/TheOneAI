@@ -17,6 +17,7 @@ import {
   RunContext,
   type TaskRunInfo,
 } from '../agent-runtime/run-context.js';
+import { toArtifactView } from '../artifacts/artifact-views.js';
 import { contentBlockSchema } from '../conversations/message-views.js';
 import { type TaskEventEnvelope, TaskEventsService } from '../events/task-events.service.js';
 import type { Prisma } from '../generated/prisma/client.js';
@@ -333,6 +334,10 @@ export class TaskExecutionService {
         select: { startedAt: true, completedSteps: true, retryCount: true, replanCount: true },
       });
       const toolCalls = await tx.toolExecution.count({ where: { taskId } });
+      const artifacts = await tx.artifact.findMany({
+        where: { taskId, origin: 'task_output', uploadedAt: { not: null } },
+        orderBy: { createdAt: 'asc' },
+      });
       return this.events.append(tx, tenantId, taskId, 'task.completed', {
         result: {
           messageId: result.messageId,
@@ -347,7 +352,7 @@ export class TaskExecutionService {
             replans: task.replanCount,
             durationMs: task.startedAt ? now.getTime() - task.startedAt.getTime() : 0,
           },
-          artifacts: [],
+          artifacts: artifacts.map(toArtifactView),
         },
       });
     });

@@ -301,6 +301,8 @@ interface CreateUploadResponse { artifactId: string; uploadUrl: string; headers:
 
 형식 · 크기는 `widget_configs.behavior.attachments` 로 검사(`ATTACHMENT_NOT_ALLOWED` 422). 완료 확인 전에는 메시지에 첨부할 수 없다.
 
+구현 상태 (로컬 저장소): `uploadUrl` 은 `PUT /v1/uploads/:id/content`(위젯 세션, 본문 그대로 — 15분 안에, 알린 크기 · sha256 과 같아야 함). S3 연동 시 presigned URL 로 바꾼다. 첨부한 텍스트 · CSV · JSON 은 작업 Context 에 데이터로(최대 2만 자), 그 밖은 이름 · 형식만. 산출물: Agent 의 `builtin.create_file`(.md · .txt · .csv · .json, 외부 영향이 없어 읽기 등급) → `GET /v1/tasks/:id/artifacts` · `GET /v1/artifacts/:id/download`(본인 것만) · `task.completed.result.artifacts`. 콘솔: `GET /v1/admin/artifacts/:id/download` · 트레이스의 `artifacts` · `feedback` · `GET /v1/admin/conversations/:id`(메시지 · 작업 · 요약).
+
 ---
 
 ## 3. SSE 이벤트
@@ -475,7 +477,7 @@ interface AgentDraftInput {
 
 배포 규칙: 초안 검증(모델 3역할 지정, 허용 목록의 서버 · Skill 이 활성 상태) 통과 시 `agent_versions.status = published`, `agents.published_version_id` 교체. 실행 중 작업은 영향 없음.
 
-구현 상태: `GET /admin/agents` · `GET /admin/agents/:id`(배포 버전 · 초안) · `PATCH …/draft` · `POST …/publish`. 초안이 없으면 배포 버전(모델 설정 · Skill · MCP 허용 목록 포함)을 복사해 만든다. 지금 초안에서 받는 필드는 `mcpServers` 뿐이고 다른 필드는 400 으로 거부한다. 배포 시 executor 모델과 허용 서버가 `connected` 인지 확인하고, 이전 배포 버전은 `archived`.
+구현 상태: `GET /admin/agents` · `GET /admin/agents/:id`(배포 버전 · 초안 — 지침 · 환영 메시지 · 역할별 모델 · 실행 · Memory 정책(기본값 채움) · 허용 목록) · `PATCH …/draft` · `POST …/publish` · `GET …/versions`(배포자 · 실행 중 작업 수) · `POST …/versions/:versionId/restore`(그 버전 내용으로 초안을 다시 만듦 — 배포는 따로) · `DELETE …/draft`(초안 버리기) · `GET /admin/providers`(API Key 없이). 초안이 없으면 배포 버전을 복사해 만든다. 초안 필드: `systemPrompt` · `welcomeMessage` · `models`(executor 필수, 역할 중복 · 남의 Provider 거부, 대체 Provider 와 모델은 함께) · `executionPolicy` · `memoryPolicy`(바꿀 항목만 — 지금 값과 합쳐 스키마 검증, 범위 밖이면 422) · `mcpServers` · `skills` · `changeNote`. 모르는 필드는 400. 배포 시 executor 모델과 허용 서버 · Skill 상태를 확인하고, 이전 배포 버전은 `archived`. 생성 · diff · 평가셋 실행 · Provider 등록은 다음 단계.
 
 ### 4.5 MCP · Tool Registry (C-04 · C-05)
 
@@ -698,6 +700,8 @@ interface WidgetConfigInput {
 }
 // 응답에 contrast: { ratio: number; passes: boolean } 포함 (브랜드 색 vs 흰 글자, 4.5:1 기준)
 ```
+
+구현 상태: `GET` 목록(에이전트 이름 · 공개 키 · 테마 · 동작, Secret 값 없음) · `PATCH`(이름 · Agent · 허용 도메인 · 사용자 연동 · 사용 여부 · 테마 · 동작 — 테마 · 동작은 바꿀 항목만, bootstrap 에 바로 반영) · `POST …/rotate-secret`(Owner, 새 Secret 은 이 응답에서만 · 이전 Secret 24시간 허용). 대비 계산은 콘솔에서 한다. 생성 · 단건 조회는 다음 단계.
 
 ### 4.9.1 사용량 · 과금 (Billing)
 

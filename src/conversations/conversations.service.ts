@@ -136,6 +136,7 @@ export class ConversationsService {
               origin: 'user_upload',
               endUserId: session.endUserId,
               messageId: null,
+              uploadedAt: { not: null },
             },
           });
           if (usable !== attachmentIds.length) {

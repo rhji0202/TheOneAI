@@ -25,7 +25,7 @@ export const bootstrapSchema = z.object({
 });
 export type BootstrapInput = z.infer<typeof bootstrapSchema>;
 
-const themeSchema = z
+export const themeSchema = z
   .object({
     brandColor: z.string().default('#4F46E5'),
     position: z.enum(['bottom-right', 'bottom-left']).default('bottom-right'),
@@ -33,7 +33,7 @@ const themeSchema = z
   })
   .catch({ brandColor: '#4F46E5', position: 'bottom-right', darkMode: 'system' });
 
-const behaviorSchema = z
+export const behaviorSchema = z
   .object({
     autoOpen: z.boolean().default(false),
     language: z.string().default('auto'),

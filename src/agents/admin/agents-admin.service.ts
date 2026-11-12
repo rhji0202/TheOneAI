@@ -5,23 +5,57 @@ import type { AdminRequest, AdminSession } from '../../admin/auth/admin-session.
 import { AppError, type FieldIssue } from '../../common/errors/app-error.js';
 import type { AgentVersion, Prisma } from '../../generated/prisma/client.js';
 import { PrismaService, type TenantTx } from '../../infrastructure/database/prisma.service.js';
+import {
+  type ExecutionPolicy,
+  executionPolicySchema,
+  type MemoryPolicy,
+  memoryPolicySchema,
+} from '../agent-policies.js';
 
 /**
- * 지금 받는 초안 필드는 MCP 허용 목록뿐이다 (C-03 의 나머지 — 지침 · 모델 · 정책 편집은 콘솔 단계).
- * 모르는 필드는 조용히 무시하지 않고 거부한다.
+ * 초안 편집 (C-03) — 지침 · 환영 메시지 · 역할별 모델 · 실행 정책 · Memory 정책 · Tool(MCP) · Skill 허용 목록.
+ * 정책은 바꿀 항목만 보내면 지금 값과 합쳐 검증한다. 모르는 필드는 조용히 무시하지 않고 거부한다.
  */
 const allowEntry = z.object({ id: z.uuid(), enabled: z.boolean() });
+const modelEntry = z.object({
+  role: z.enum(['planner', 'executor', 'evaluator']),
+  providerId: z.uuid(),
+  model: z.string().trim().min(1).max(200),
+  maxOutputTokens: z.number().int().min(64).max(64_000),
+  temperature: z.number().min(0).max(2).default(0),
+  reasoningEffort: z.enum(['off', 'low', 'medium', 'high', 'max']).nullable().optional(),
+  fallbackProviderId: z.uuid().nullable().optional(),
+  fallbackModel: z.string().trim().min(1).max(200).nullable().optional(),
+});
 export const draftInputSchema = z
   .object({
+    systemPrompt: z.string().max(20_000).optional(),
+    welcomeMessage: z.string().trim().max(500).optional(),
+    models: z.array(modelEntry).min(1).max(3).optional(),
+    executionPolicy: z.record(z.string(), z.unknown()).optional(),
+    memoryPolicy: z.record(z.string(), z.unknown()).optional(),
     mcpServers: z.array(allowEntry).max(100).optional(),
     skills: z.array(allowEntry).max(100).optional(),
+    changeNote: z.string().trim().max(500).nullable().optional(),
   })
   .strict()
-  .refine((v) => v.mcpServers !== undefined || v.skills !== undefined, '바꿀 값이 없습니다');
+  .refine((v) => Object.values(v).some((x) => x !== undefined), '바꿀 값이 없습니다');
 export type DraftInput = z.infer<typeof draftInputSchema>;
 
 export const publishInputSchema = z.object({ changeNote: z.string().trim().max(500).optional() });
 export type PublishInput = z.infer<typeof publishInputSchema>;
+
+export interface AgentModelView {
+  role: 'planner' | 'executor' | 'evaluator';
+  providerId: string;
+  providerName: string;
+  model: string;
+  maxOutputTokens: number;
+  temperature: number;
+  reasoningEffort: string | null;
+  fallbackProviderId: string | null;
+  fallbackModel: string | null;
+}
 
 export interface AgentVersionView {
   id: string;
@@ -29,8 +63,14 @@ export interface AgentVersionView {
   status: AgentVersion['status'];
   publishedAt: string | null;
   changeNote: string | null;
+  welcomeMessage: string;
+  systemPrompt: string;
+  executionPolicy: ExecutionPolicy;
+  memoryPolicy: MemoryPolicy;
+  models: AgentModelView[];
   mcpServers: Array<{ id: string; name: string; status: string; enabled: boolean }>;
   skills: Array<{ id: string; name: string; status: string; enabled: boolean }>;
+  updatedAt: string;
 }
 
 export interface AgentAdminView {
@@ -80,6 +120,30 @@ export class AgentsAdminService {
   ): Promise<AgentAdminView> {
     return this.prisma.withTenant(admin.tenantId, async (tx) => {
       const draft = await this.draftFor(tx, admin, agentId);
+      const issues: FieldIssue[] = [];
+      const data: Prisma.AgentVersionUpdateInput = {};
+      if (input.systemPrompt !== undefined) data.systemPrompt = input.systemPrompt;
+      if (input.welcomeMessage !== undefined) data.welcomeMessage = input.welcomeMessage;
+      if (input.changeNote !== undefined) data.changeNote = input.changeNote;
+      if (input.executionPolicy) {
+        const merged = executionPolicySchema.safeParse({
+          ...(draft.executionPolicy as Record<string, unknown>),
+          ...input.executionPolicy,
+        });
+        if (!merged.success) issues.push(...policyIssues('executionPolicy', merged.error));
+        else data.executionPolicy = merged.data as unknown as Prisma.InputJsonValue;
+      }
+      if (input.memoryPolicy) {
+        const merged = memoryPolicySchema.safeParse({
+          ...(draft.memoryPolicy as Record<string, unknown>),
+          ...input.memoryPolicy,
+        });
+        if (!merged.success) issues.push(...policyIssues('memoryPolicy', merged.error));
+        else data.memoryPolicy = merged.data as unknown as Prisma.InputJsonValue;
+      }
+      if (issues.length) throw new AppError(422, 'AGENT_DRAFT_INVALID', undefined, issues);
+      if (Object.keys(data).length) await tx.agentVersion.update({ where: { id: draft.id }, data });
+      if (input.models) await this.replaceModels(tx, admin, draft.id, input.models);
       if (input.mcpServers) await this.replaceServers(tx, admin, draft.id, input.mcpServers);
       if (input.skills) await this.replaceSkills(tx, admin, draft.id, input.skills);
       await this.audit.record(
@@ -89,12 +153,181 @@ export class AgentsAdminService {
           action: 'agent.draft_update',
           targetType: 'agent',
           targetId: agentId,
-          metadata: { mcpServers: input.mcpServers ?? null, skills: input.skills ?? null },
+          metadata: {
+            fields: Object.keys(input).filter((k) => input[k as keyof DraftInput] !== undefined),
+            mcpServers: input.mcpServers ?? null,
+            skills: input.skills ?? null,
+          },
         },
         req,
       );
       return this.view(tx, agentId);
     });
+  }
+
+  /** 역할별 모델 — executor 는 필수, 역할은 한 번씩. Provider 는 이 테넌트의 것만 */
+  private async replaceModels(
+    tx: TenantTx,
+    admin: AdminSession,
+    draftId: string,
+    models: DraftInput['models'] & object,
+  ): Promise<void> {
+    const issues: FieldIssue[] = [];
+    const roles = models.map((m) => m.role);
+    if (new Set(roles).size !== roles.length)
+      issues.push({ path: 'models', message: '같은 역할이 두 번 있습니다' });
+    if (!roles.includes('executor'))
+      issues.push({ path: 'models', message: 'executor 모델이 필요합니다' });
+    const providerIds = [
+      ...new Set(
+        models.flatMap((m) => [
+          m.providerId,
+          ...(m.fallbackProviderId ? [m.fallbackProviderId] : []),
+        ]),
+      ),
+    ];
+    const providers = await tx.provider.findMany({
+      where: { id: { in: providerIds } },
+      select: { id: true },
+    });
+    const known = new Set(providers.map((p) => p.id));
+    models.forEach((m, i) => {
+      if (!known.has(m.providerId))
+        issues.push({ path: `models.${i}.providerId`, message: 'Provider 를 찾을 수 없습니다' });
+      if (m.fallbackProviderId && !known.has(m.fallbackProviderId))
+        issues.push({
+          path: `models.${i}.fallbackProviderId`,
+          message: 'Provider 를 찾을 수 없습니다',
+        });
+      if (!!m.fallbackProviderId !== !!m.fallbackModel)
+        issues.push({
+          path: `models.${i}.fallbackModel`,
+          message: '대체 Provider 와 모델은 함께 지정해야 합니다',
+        });
+    });
+    if (issues.length) throw new AppError(422, 'AGENT_DRAFT_INVALID', undefined, issues);
+    await tx.modelConfig.deleteMany({ where: { agentVersionId: draftId } });
+    await tx.modelConfig.createMany({
+      data: models.map((m) => ({
+        tenantId: admin.tenantId,
+        agentVersionId: draftId,
+        role: m.role,
+        providerId: m.providerId,
+        model: m.model,
+        maxOutputTokens: m.maxOutputTokens,
+        temperature: m.temperature,
+        reasoningEffort: m.reasoningEffort ?? null,
+        fallbackProviderId: m.fallbackProviderId ?? null,
+        fallbackModel: m.fallbackModel ?? null,
+      })),
+    });
+  }
+
+  /** 버전 기록 (최신순) */
+  async versions(admin: AdminSession, agentId: string) {
+    return this.prisma.withTenant(admin.tenantId, async (tx) => {
+      const agent = await tx.agent.findFirst({ where: { id: agentId, archivedAt: null } });
+      if (!agent) throw AppError.notFound();
+      const versions = await tx.agentVersion.findMany({
+        where: { agentId },
+        orderBy: { version: 'desc' },
+        select: {
+          id: true,
+          version: true,
+          status: true,
+          changeNote: true,
+          publishedAt: true,
+          publishedById: true,
+          createdAt: true,
+        },
+      });
+      const memberIds = [
+        ...new Set(versions.flatMap((v) => (v.publishedById ? [v.publishedById] : []))),
+      ];
+      const members = memberIds.length
+        ? await tx.user.findMany({
+            where: { id: { in: memberIds } },
+            select: { id: true, name: true },
+          })
+        : [];
+      const names = new Map(members.map((m) => [m.id, m.name]));
+      const running = await tx.task.groupBy({
+        by: ['agentVersionId'],
+        where: {
+          agentId,
+          status: { in: ['queued', 'running', 'waiting_approval', 'recovering', 'paused'] },
+        },
+        _count: { _all: true },
+      });
+      return versions.map((v) => ({
+        id: v.id,
+        version: v.version,
+        status: v.status,
+        changeNote: v.changeNote,
+        publishedAt: v.publishedAt?.toISOString() ?? null,
+        publishedBy: v.publishedById ? (names.get(v.publishedById) ?? null) : null,
+        createdAt: v.createdAt.toISOString(),
+        activeTasks: running.find((r) => r.agentVersionId === v.id)?._count._all ?? 0,
+      }));
+    });
+  }
+
+  /** 이전 버전으로 되돌리기 — 그 버전의 내용으로 초안을 다시 만든다 (배포는 따로) */
+  async restore(
+    admin: AdminSession,
+    agentId: string,
+    versionId: string,
+    req?: AdminRequest,
+  ): Promise<AgentAdminView> {
+    return this.prisma.withTenant(admin.tenantId, async (tx) => {
+      const source = await tx.agentVersion.findFirst({ where: { id: versionId, agentId } });
+      if (!source) throw AppError.notFound('버전을 찾을 수 없습니다');
+      await tx.agentVersion.deleteMany({ where: { agentId, status: 'draft' } });
+      await this.draftFor(tx, admin, agentId, source.id);
+      await tx.agentVersion.updateMany({
+        where: { agentId, status: 'draft' },
+        data: { changeNote: `v${source.version} 로 되돌림` },
+      });
+      await this.audit.record(
+        tx,
+        admin,
+        {
+          action: 'agent.restore',
+          targetType: 'agent',
+          targetId: agentId,
+          metadata: { fromVersion: source.version },
+        },
+        req,
+      );
+      return this.view(tx, agentId);
+    });
+  }
+
+  /** 초안 버리기 — 배포 버전 그대로 */
+  async discardDraft(admin: AdminSession, agentId: string, req?: AdminRequest) {
+    return this.prisma.withTenant(admin.tenantId, async (tx) => {
+      const removed = await tx.agentVersion.deleteMany({ where: { agentId, status: 'draft' } });
+      if (removed.count) {
+        await this.audit.record(
+          tx,
+          admin,
+          { action: 'agent.draft_discard', targetType: 'agent', targetId: agentId },
+          req,
+        );
+      }
+      return this.view(tx, agentId);
+    });
+  }
+
+  async providers(admin: AdminSession) {
+    return this.prisma.withTenant(admin.tenantId, async (tx) =>
+      (await tx.provider.findMany({ orderBy: { name: 'asc' } })).map((p) => ({
+        id: p.id,
+        name: p.name,
+        kind: p.kind,
+        baseUrl: p.baseUrl,
+      })),
+    );
   }
 
   private async replaceServers(
@@ -249,21 +482,22 @@ export class AgentsAdminService {
     });
   }
 
-  /** 초안이 없으면 배포 버전을 복사해 만든다 (모델 · Skill · MCP 허용 목록 포함) */
+  /** 초안이 없으면 배포 버전(또는 지정한 버전)을 복사해 만든다 (모델 · Skill · MCP 허용 목록 포함) */
   private async draftFor(
     tx: TenantTx,
     admin: AdminSession,
     agentId: string,
+    fromVersionId?: string,
   ): Promise<AgentVersion> {
     const agent = await tx.agent.findFirst({ where: { id: agentId, archivedAt: null } });
     if (!agent) throw AppError.notFound();
     const existing = await tx.agentVersion.findFirst({ where: { agentId, status: 'draft' } });
     if (existing) return existing;
-    if (!agent.publishedVersionId)
-      throw new AppError(422, 'AGENT_DRAFT_INVALID', '복사할 배포 버전이 없습니다');
+    const sourceId = fromVersionId ?? agent.publishedVersionId;
+    if (!sourceId) throw new AppError(422, 'AGENT_DRAFT_INVALID', '복사할 배포 버전이 없습니다');
 
     const source = await tx.agentVersion.findUniqueOrThrow({
-      where: { id: agent.publishedVersionId },
+      where: { id: sourceId },
       include: { modelConfigs: true, skills: true, mcpServers: true },
     });
     const last = await tx.agentVersion.aggregate({ where: { agentId }, _max: { version: true } });
@@ -315,14 +549,34 @@ export class AgentsAdminService {
       include: {
         mcpServers: { include: { mcpServer: true } },
         skills: { include: { skill: true } },
+        modelConfigs: { include: { provider: { select: { name: true } } } },
       },
     });
+    const roleOrder = { planner: 0, executor: 1, evaluator: 2 } as const;
     const toView = (v: (typeof versions)[number]): AgentVersionView => ({
       id: v.id,
       version: v.version,
       status: v.status,
       publishedAt: v.publishedAt?.toISOString() ?? null,
       changeNote: v.changeNote,
+      welcomeMessage: v.welcomeMessage,
+      systemPrompt: v.systemPrompt,
+      executionPolicy: executionPolicySchema.parse(v.executionPolicy ?? {}),
+      memoryPolicy: memoryPolicySchema.parse(v.memoryPolicy ?? {}),
+      models: [...v.modelConfigs]
+        .sort((a, b) => roleOrder[a.role] - roleOrder[b.role])
+        .map((m) => ({
+          role: m.role,
+          providerId: m.providerId,
+          providerName: m.provider.name,
+          model: m.model,
+          maxOutputTokens: m.maxOutputTokens,
+          temperature: m.temperature,
+          reasoningEffort: m.reasoningEffort,
+          fallbackProviderId: m.fallbackProviderId,
+          fallbackModel: m.fallbackModel,
+        })),
+      updatedAt: v.updatedAt.toISOString(),
       mcpServers: v.mcpServers
         .filter((s) => !s.mcpServer.deletedAt)
         .map((s) => ({
@@ -349,4 +603,11 @@ export class AgentsAdminService {
       draft: draft ? toView(draft) : null,
     };
   }
+}
+
+function policyIssues(prefix: string, error: z.ZodError): FieldIssue[] {
+  return error.issues.map((i) => ({
+    path: [prefix, ...i.path.map(String)].join('.'),
+    message: i.message,
+  }));
 }

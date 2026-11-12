@@ -4,6 +4,9 @@ import { ApprovalsModule } from './approvals/approvals.module.js';
 import { BillingModule } from './billing/billing.module.js';
 import { MetricsModule } from './metrics/metrics.module.js';
 import { MarketplaceModule } from './marketplace/marketplace.module.js';
+import { WidgetAdminModule } from './widget/admin/widget-admin.module.js';
+import { ArtifactsModule } from './artifacts/artifacts.module.js';
+import { ArtifactsHttpModule } from './artifacts/artifacts-http.module.js';
 import { MemoryModule } from './memory/memory.module.js';
 import { StorageModule } from './infrastructure/storage/storage.module.js';
 import { SkillsAdminModule } from './skills/admin/skills-admin.module.js';
@@ -50,6 +53,9 @@ import { WidgetModule } from './widget/widget.module.js';
     BillingModule,
     MetricsModule,
     MarketplaceModule,
+    WidgetAdminModule,
+    ArtifactsModule,
+    ArtifactsHttpModule,
   ],
   controllers: [HealthController],
 })

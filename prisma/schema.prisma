@@ -1142,6 +1142,8 @@ model Artifact {
   storageKey  String         @unique @map("storage_key")
   sha256      String?
   previewable Boolean        @default(false)
+  /// 파일을 실제로 받은 시각 (사용자 업로드는 null 이면 아직 올리는 중 — 메시지에 첨부할 수 없다)
+  uploadedAt  DateTime?      @map("uploaded_at") @db.Timestamptz(3)
   createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
   expiresAt   DateTime?      @map("expires_at") @db.Timestamptz(3)
 

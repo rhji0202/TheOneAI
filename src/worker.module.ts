@@ -12,6 +12,7 @@ import { SecretsModule } from './infrastructure/secrets/secrets.module.js';
 import { WorkersModule } from './workers/workers.module.js';
 import { AuditModule } from './admin/audit/audit.module.js';
 import { BillingModule } from './billing/billing.module.js';
+import { ArtifactsModule } from './artifacts/artifacts.module.js';
 import { ToolsModule } from './tools/tools.module.js';
 
 /** Agent Worker 프로세스 (HTTP 없음). API 와 별도로 수평 확장한다. LLM API Key 는 SecretStore 에서 읽는다. */
@@ -30,6 +31,7 @@ import { ToolsModule } from './tools/tools.module.js';
     McpModule,
     AuditModule,
     BillingModule,
+    ArtifactsModule,
     WorkersModule,
   ],
 })

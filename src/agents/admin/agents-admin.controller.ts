@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   Param,
@@ -22,7 +23,7 @@ import {
 
 const uuid = { schema: z.uuid() };
 
-/** docs/api-spec.md §4.4 중 Agent 조회 · 초안(MCP 허용 목록) · 배포 */
+/** docs/api-spec.md §4.4 — Agent 조회 · 초안 편집 · 배포 · 버전 기록 · 되돌리기 (C-03) */
 @Controller({ path: 'admin/agents', version: '1' })
 @UseGuards(AdminAuthGuard)
 export class AgentsAdminController {
@@ -59,5 +60,44 @@ export class AgentsAdminController {
     @Req() req: AdminRequest,
   ) {
     return this.agents.publish(admin, id, body, req);
+  }
+
+  @Get(':id/versions')
+  versions(@CurrentAdmin() admin: AdminSession, @Param('id', uuid) id: string) {
+    return this.agents.versions(admin, id);
+  }
+
+  @Post(':id/versions/:versionId/restore')
+  @HttpCode(200)
+  @Roles('admin')
+  restore(
+    @CurrentAdmin() admin: AdminSession,
+    @Param('id', uuid) id: string,
+    @Param('versionId', uuid) versionId: string,
+    @Req() req: AdminRequest,
+  ) {
+    return this.agents.restore(admin, id, versionId, req);
+  }
+
+  @Delete(':id/draft')
+  @Roles('admin')
+  discardDraft(
+    @CurrentAdmin() admin: AdminSession,
+    @Param('id', uuid) id: string,
+    @Req() req: AdminRequest,
+  ) {
+    return this.agents.discardDraft(admin, id, req);
+  }
+}
+
+/** Provider 목록 (모델 구성에서 고른다 — API Key 는 Secret 참조라 내려주지 않는다) */
+@Controller({ path: 'admin/providers', version: '1' })
+@UseGuards(AdminAuthGuard)
+export class ProvidersAdminController {
+  constructor(private readonly agents: AgentsAdminService) {}
+
+  @Get()
+  list(@CurrentAdmin() admin: AdminSession) {
+    return this.agents.providers(admin);
   }
 }

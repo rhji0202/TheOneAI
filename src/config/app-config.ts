@@ -45,6 +45,9 @@ const envSchema = z.object({
   APPROVAL_EXPIRY_TICK_SEC: z.coerce.number().int().min(0).max(3_600).default(60),
   /** 지표 집계 주기. 0 이면 주기 잡을 등록하지 않는다 */
   METRICS_ROLLUP_TICK_SEC: z.coerce.number().int().min(0).max(86_400).default(300),
+  /** 빌드한 화면 — 위젯 로더(/widget/v1/) · 콘솔(/console/). 폴더가 없으면 서빙하지 않는다 */
+  WIDGET_DIST_DIR: z.string().default('apps/widget/dist'),
+  CONSOLE_DIST_DIR: z.string().default('apps/console/dist'),
   /** 마켓플레이스 서명 키(Ed25519 PKCS#8 PEM)의 Secret 참조 */
   MARKETPLACE_SIGNING_KEY_REF: z
     .string()
@@ -81,6 +84,7 @@ export interface AppConfig {
   approvals: { expiryTickSec: number };
   metrics: { rollupTickSec: number };
   marketplace: { signingKeyRef: string };
+  ui: { widgetDir: string; consoleDir: string };
   embedding: {
     provider: 'local' | 'openai' | 'gemini';
     model: string;
@@ -186,6 +190,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     approvals: { expiryTickSec: env.APPROVAL_EXPIRY_TICK_SEC },
     metrics: { rollupTickSec: env.METRICS_ROLLUP_TICK_SEC },
     marketplace: { signingKeyRef: env.MARKETPLACE_SIGNING_KEY_REF },
+    ui: { widgetDir: env.WIDGET_DIST_DIR, consoleDir: env.CONSOLE_DIST_DIR },
     agentRuntime: env.AGENT_RUNTIME,
     llm: {
       requestTimeoutMs: env.LLM_REQUEST_TIMEOUT_MS,

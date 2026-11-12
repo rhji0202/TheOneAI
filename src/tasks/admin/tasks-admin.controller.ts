@@ -106,3 +106,15 @@ export class TasksAdminController {
     );
   }
 }
+
+/** 대화 기록 (C-02 “대화 보기”, Viewer 이상) */
+@Controller({ path: 'admin/conversations', version: '1' })
+@UseGuards(AdminAuthGuard)
+export class ConversationsAdminController {
+  constructor(private readonly tasks: TasksAdminService) {}
+
+  @Get(':id')
+  get(@CurrentAdmin() admin: AdminSession, @Param('id', uuid) id: string) {
+    return this.tasks.conversation(admin, id);
+  }
+}

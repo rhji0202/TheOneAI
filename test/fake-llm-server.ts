@@ -16,6 +16,7 @@ import type { AddressInfo } from 'node:net';
  *   [승인두번]   send_note 를 두 번(다른 인자) — task 범위 승인이면 두 번째는 묻지 않는다
  *   [승인혼합]   한 응답에 calculate(읽기) + send_note(쓰기) — 계산은 한 번만 실행
  *   [운영자승인] 외부 도메인으로 send_note — 조건 규칙(require_operator)
+ *   [파일]       builtin__create_file 로 리포트 파일(report.md)을 만든다 (산출물)
  *   [규칙차단]   정책 규칙(식에 666 포함 차단)에 걸리는 calculate
  *   [잘못된인자] 인자 오류 → 고쳐서 다시 호출
  *   [도구한도]   Tool 을 끝없이 호출 → 왕복 한도 후 tool_choice=none 으로 정리
@@ -103,6 +104,16 @@ function scripted(text: string, round: number, toolsOffered: boolean): Call[] | 
       ['builtin__calculate', { expression: '2+3' }],
       ['test__send_note', { to: 'ops@example.com', text: '합계 5' }],
     ];
+  if (text.includes('[파일]'))
+    return [
+      [
+        'builtin__create_file',
+        {
+          fileName: 'report.md',
+          content: '# 3월 리포트\n\n| 지역 | 매출 |\n|---|---|\n| 서울 | 120 |\n',
+        },
+      ],
+    ];
   if (text.includes('[운영자승인]'))
     return [['test__send_note', { to: 'ceo@partner.external.com', text: '계약 안내' }]];
   if (text.includes('[MCP조회]')) return [['shop__lookup_order', { orderId: 'A-1001' }]];
@@ -138,6 +149,11 @@ function toolPlan(text: string, lastUser: string): Record<string, unknown> | nul
     instructions: title,
   });
   const respond = { title: '답변 작성', kind: 'respond', instructions: '' };
+  if (text.includes('[파일]'))
+    return {
+      goal: '리포트 파일',
+      steps: [tool('리포트 파일 만들기', 'builtin__create_file'), respond],
+    };
   for (const tag of ['[승인두번]', '[승인혼합]', '[운영자승인]']) {
     if (text.includes(tag))
       return { goal: '메모 보내기', steps: [tool('메모 전송', 'test__send_note'), respond] };
