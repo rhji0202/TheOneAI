@@ -1,7 +1,8 @@
 import { BullModule } from '@nestjs/bullmq';
 import { Global, Module } from '@nestjs/common';
 import { APP_CONFIG, type AppConfig } from '../../config/app-config.js';
-import { AGENT_TASKS_QUEUE, MCP_SYNC_QUEUE } from './queues.js';
+import { AGENT_RECOVERY_QUEUE, AGENT_TASKS_QUEUE, MCP_SYNC_QUEUE } from './queues.js';
+import { TaskQueueService } from './task-queue.service.js';
 
 @Global()
 @Module({
@@ -18,8 +19,13 @@ import { AGENT_TASKS_QUEUE, MCP_SYNC_QUEUE } from './queues.js';
         },
       }),
     }),
-    BullModule.registerQueue({ name: AGENT_TASKS_QUEUE }, { name: MCP_SYNC_QUEUE }),
+    BullModule.registerQueue(
+      { name: AGENT_TASKS_QUEUE },
+      { name: MCP_SYNC_QUEUE },
+      { name: AGENT_RECOVERY_QUEUE },
+    ),
   ],
-  exports: [BullModule],
+  providers: [TaskQueueService],
+  exports: [BullModule, TaskQueueService],
 })
 export class QueueModule {}

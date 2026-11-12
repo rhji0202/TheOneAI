@@ -671,6 +671,8 @@ model Task {
   totalSteps           Int?       @map("total_steps")
   completedSteps       Int        @default(0) @map("completed_steps")
   retryCount           Int        @default(0) @map("retry_count")
+  /// 작업 복구(Worker 유실 · 종료 후 재투입) 횟수. 한도(3)를 넘으면 failed.
+  recoveryCount        Int        @default(0) @map("recovery_count")
   replanCount          Int        @default(0) @map("replan_count")
   inputTokens          Int        @default(0) @map("input_tokens")
   outputTokens         Int        @default(0) @map("output_tokens")

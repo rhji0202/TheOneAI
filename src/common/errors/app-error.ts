@@ -13,6 +13,8 @@ export type ErrorCode =
   | 'NOT_FOUND'
   | 'TASK_ALREADY_ACTIVE'
   | 'TASK_NOT_ACTIVE'
+  | 'TASK_NOT_RESUMABLE'
+  | 'CHECKPOINT_NOT_FOUND'
   | 'IDEMPOTENCY_KEY_REUSED'
   | 'ATTACHMENT_NOT_ALLOWED'
   | 'AGENT_NOT_PUBLISHED'
@@ -51,6 +53,8 @@ const TITLES: Record<ErrorCode, string> = {
   NOT_FOUND: '찾을 수 없습니다',
   TASK_ALREADY_ACTIVE: '이 대화에서 진행 중인 작업이 있습니다',
   TASK_NOT_ACTIVE: '진행 중인 작업이 아닙니다',
+  TASK_NOT_RESUMABLE: '실패했거나 일시정지된 작업만 재개할 수 있습니다',
+  CHECKPOINT_NOT_FOUND: '재개할 checkpoint 가 없습니다',
   IDEMPOTENCY_KEY_REUSED: '같은 Idempotency-Key 로 다른 요청을 보냈습니다',
   ATTACHMENT_NOT_ALLOWED: '첨부할 수 없는 파일입니다',
   AGENT_NOT_PUBLISHED: '배포된 Agent 가 없습니다',

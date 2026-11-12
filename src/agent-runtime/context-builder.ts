@@ -52,6 +52,23 @@ export class ContextBuilder {
 
     return { tenantPrompt: task.systemPrompt, history, request: task.triggerText };
   }
+
+  /** 이 작업에 실행 중 보낸 추가 지시 (POST /tasks/:id/steer), 오래된 것부터 */
+  async steers(task: TaskRunInfo): Promise<Array<{ id: string; text: string }>> {
+    const rows = await this.prisma.withTenant(task.tenantId, (tx) =>
+      tx.message.findMany({
+        where: {
+          taskId: task.id,
+          role: 'user',
+          ...(task.triggerMessageId ? { id: { not: task.triggerMessageId } } : {}),
+        },
+        orderBy: { id: 'asc' },
+        take: 20,
+        select: { id: true, content: true },
+      }),
+    );
+    return rows.map((r) => ({ id: r.id, text: textOf(r.content) })).filter((r) => r.text);
+  }
 }
 
 function textOf(content: unknown): string {

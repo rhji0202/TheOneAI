@@ -121,6 +121,8 @@ e2e 가 확인하는 것: bootstrap(허용 도메인 · identity token 서명 ·
 
 Agent Loop 는 가짜 OpenAI 호환 서버([test/fake-llm-server.ts](test/fake-llm-server.ts))로 검증한다: 계획 → reason → 중간 평가 → 답변 → 검증 순서, 재계획(`plan.revised`), 계획 JSON 오류 시 기본 계획, 모델 오류 · API Key 없음 → `task.failed`, 역할별 모델 · 추론 파라미터 · 인증 헤더, 플랫폼 · 테넌트 지침, 대화 기록 포함, 토큰 사용량 기록. 실제 DeepSeek 로는 수동으로 확인했다(아래).
 
+재개 · 복구는 [test/recovery.e2e-spec.ts](test/recovery.e2e-spec.ts) 가 확인한다: 실행 중 일시정지 → 현재 단계 마치고 paused → checkpoint 재개(끝난 단계 건너뜀), 답변 실패 → 재개 시 분석 반복 없이 완료 · 실패 실행 토큰 합산, 재개 조건(완료 · checkpoint 없음 · 처음부터), 답변 중 Worker 유실 → 복구 잡이 checkpoint 부터(답변 메시지 하나만), 복구 한도 초과, 살아 있는 작업은 복구 안 함, Worker 종료 시 넘기기, 실행 중 추가 지시 반영 · 끝난 작업 거부, 콘솔 목록 · 트레이스 · 단계 상세.
+
 Skill 은 [test/skills.e2e-spec.ts](test/skills.e2e-spec.ts) 가 확인한다: zip · SKILL.md 오류(줄 번호), Viewer 업로드 거부, 신뢰 검증(스크립트 경고 · 숨은 지시문 실패 → 활성화 불가), 중복 · 버전 충돌, 파일 미리보기 · 비교, 활성화 → Registry, 허용 목록 전에는 계획에 안 보임, 초안 → 배포, 위젯 추천 카드, 실행(계획에는 metadata 만 · Skill 단계에서 본문 · 파일 로딩 · allowed-tools + skill.read_file 만 제공), allowed-tools 밖 호출 거부, 일반 단계엔 skill.read_file 없음, 새 버전 활성화 후 새 버전 사용, 저장소 파일 변조 시 사용 안 함, 비활성화 · 감사 로그.
 
 MCP 는 [test/mcp.e2e-spec.ts](test/mcp.e2e-spec.ts) 가 공식 SDK v2 로 만든 MCP 서버([test/fake-mcp-server.ts](test/fake-mcp-server.ts))로 확인한다: 프로토콜 협상(최신 서버는 `server/discover` 로 2026-07-28, 2025 계열 전용 서버는 `initialize` 로 내려감, 2025 계열로 기록된 서버는 재사용 연결에서 탐색 생략, 401 은 인증 실패로), 콘솔 로그인 · 역할(Viewer 는 조회만, 사설망 허용은 Owner 만, 위젯 토큰 거부), SSRF(사설 IP 로 해석되는 호스트를 연결 시점 DNS 검사로 차단, 메타데이터 IP 차단), 등록 마법사(연결 테스트 · API Key 전달 · 탐색 검증 · 보안 실패 Tool 제외 · 등록 → Registry 버전 · 감사 로그), 테넌트 격리, Agent 허용 목록(초안 → 배포, 허용 전 호출은 `not_allowed`), MCP Tool 실행(structuredContent · JSON Schema 인자 검증 · isError 는 재시도 안 함), 재탐색 변경 감지(검토 전에는 고정된 이전 정의 사용 → 승인 시 새 버전, 새 Tool 은 꺼진 채 추가), 서버 장애 → `error` · `tool_unavailable` → 복구 · 헬스, 연결 정보 변경 시 재검토, 비활성화 · 삭제(Secret 삭제 · 이름 재사용).
@@ -142,8 +144,9 @@ Tool 은 [test/tools.e2e-spec.ts](test/tools.e2e-spec.ts) 가 확인한다: tool
 | Agent MCP 허용 목록: 초안(배포 버전 복사) → 배포, 실행 시 허용 목록 · 서버 상태 · Tool 사용 여부 확인(`not_allowed` · `tool_unavailable`) | 완료 — 초안 편집은 MCP 허용 목록만 (지침 · 모델 · 정책 편집은 C-03 단계) |
 | Tool Registry · Dispatcher: 작업별 Registry 버전 고정, 인자 검증(zod), 권한 판단(등급 정책 → Tool 재정의 → 조건 규칙), 읽기 Tool 병렬 실행, 시간 제한 · 취소 전파, 멱등 Tool 재시도, `tool_executions` 기록(거부 포함) · 민감정보 마스킹, `tool.called` · `tool.result` · `tool.denied` | 완료 — 내장 Tool 2개(`builtin.calculate`, `builtin.current_time`). 승인 필요 Tool 은 승인 흐름(10단계) 전까지 `approval_required` 로 거부 |
 | 비용 계산 (`tasks.cost_amount`) | 다음 단계 — 모델별 단가표 필요. 토큰 수는 기록 중 |
-| 승인 결정 · 재개(`resume`) · steer · 업로드 · 산출물 다운로드 | 다음 단계 (명세 §2.4 · §2.5 · §2.6) |
-| `agent-recovery` · `approval-expiry` · `memory-ingest` 등 주기 잡 | 다음 단계 (명세 §6) |
+| 재개 · 복구: checkpoint 재개(계획 · 노트 · 다음 단계 · 보낸 답변) · 처음부터 다시 · 일시정지 · 실행 중 추가 지시(steer) · agent-recovery(heartbeat 끊김 → 마지막 checkpoint 부터, 한도 3회) · Worker 종료 시 넘기기 · 소유권 확인 · 콘솔 작업 목록 · 트레이스 · 단계 상세 · 일시정지 · 중지 · 재개 | 완료 |
+| 승인 결정 · 업로드 · 산출물 다운로드 | 다음 단계 (명세 §2.5 · §2.6) |
+| `approval-expiry` · `memory-ingest` · `metrics-rollup` · `retention` 주기 잡 | 다음 단계 (명세 §6) — `agent-recovery` · `mcp-sync` 는 완료 |
 | Admin API · 콘솔 | 다음 단계 |
 | 요청 제한 · OpenTelemetry · Vault 연동 (`SECRETS_BACKEND=local` 은 개발 전용, production 에서 시작 거부) | 다음 단계 |
 
@@ -212,9 +215,9 @@ Skill 연결 후 (2026-11-12, `refund-helper` 를 올려 검증 6항목 통과 �
 4. Tool Registry · Tool Dispatcher ✅ (내장 Tool, 권한 정책 · 규칙, 병렬 · 재시도 · 시간 제한)
 5. MCP 동적 연결 ✅ (Streamable HTTP, SSRF, 탐색 · 검증 · 등록 · 변경 승인, 주기 재탐색, Agent 허용 목록, 콘솔 인증)
 6. SKILL.md Loader ✅ (zip 업로드 · 파싱 · 신뢰 검증 · 버전 · 활성화, metadata 기반 선택 → Skill 단계에서만 로딩, allowed-tools 범위)
-7. BullMQ 비동기 작업 (기본 파이프라인 ✅, 복구 · 주기 잡은 8단계와 함께)
-8. Checkpoint · Recovery ← 다음
-9. Memory
+7. BullMQ 비동기 작업 ✅ (agent-tasks · agent-recovery · mcp-sync 주기 잡, Worker 종료 시 넘기기)
+8. Checkpoint · Recovery ✅ (checkpoint 재개 · 처음부터 · 일시정지 · 추가 지시 · Worker 유실 복구 · 복구 한도)
+9. Memory ← 다음
 10. Permission · Approval
 11. Reflection · Context Compression
 12. Marketplace · Billing (P2)

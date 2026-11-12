@@ -62,6 +62,7 @@ export const testEnv: Record<string, string> = {
   MCP_CONNECT_TIMEOUT_MS: '3000',
   MCP_TOOL_TIMEOUT_MS: '5000',
   MCP_SYNC_TICK_SEC: '0',
+  RECOVERY_TICK_SEC: '0',
   AGENT_RUNTIME: 'loop',
   LLM_MAX_RETRIES: '1',
   LLM_REQUEST_TIMEOUT_MS: '10000',

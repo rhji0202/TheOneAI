@@ -20,7 +20,7 @@ import {
   type Toolset,
 } from '../tools/tool-registry.service.js';
 import { type AgentRuntime, RuntimeError, type RunResult } from './agent-runtime.js';
-import { ContextBuilder } from './context-builder.js';
+import { type AgentContext, ContextBuilder } from './context-builder.js';
 import { ExecutorService } from './executor.service.js';
 import { ModelRouterFactory } from './model-router.js';
 import type { PlanView, PromptSkill, PromptTool, WorkNote } from './prompts.js';
@@ -107,34 +107,68 @@ export class AgentLoopRuntime implements AgentRuntime {
         };
       });
 
-    // 2) Plan
-    let plan = await ctx.step(
-      { type: 'plan', name: 'planner.create', input: { model: router.describe('planner') } },
-      async () => {
-        const result = await this.planner.plan(
-          router,
-          context,
-          promptTools,
-          promptSkills,
-          null,
-          signal,
+    const baseRequest = context.request;
+    const applySteers = () => this.applySteers(ctx, context, baseRequest);
+    await applySteers();
+
+    // 2) Plan — 재개면 마지막 checkpoint 의 계획 · 노트에서 이어 간다
+    const resumed = readResume(ctx);
+    let plan: PlanView;
+    let notes: WorkNote[];
+    if (resumed) {
+      plan = resumed.plan;
+      notes = resumed.notes;
+      if (ctx.currentPlan?.version !== ctx.resume!.checkpoint.planVersion) {
+        // checkpoint 뒤에 계획을 고치다 멈춘 경우 — checkpoint 의 계획으로 되돌린다
+        await ctx.setPlan(
+          toPlanSteps(plan, toolset, policies, skills),
+          '마지막 checkpoint 의 계획으로 재개',
         );
-        await ctx.setPlan(toPlanSteps(result.plan, toolset, policies, skills));
-        return {
-          value: result.plan,
-          summary: `${result.plan.steps.length}단계 계획${result.fallback ? ' (기본 계획 사용)' : ''}`,
-          output: { goal: result.plan.goal, fallback: result.fallback },
-          usage: stepUsage(result.usage),
-        };
-      },
-    );
+      }
+      await ctx.record(async (_tx, emit) => {
+        await emit('task.resumed', {
+          reason: ctx.resume!.reason,
+          fromStepId: ctx.resume!.fromStepId,
+          fromPlanIndex: resumed.nextPlanIndex,
+          planVersion: ctx.currentPlan?.version ?? null,
+        });
+      });
+    } else {
+      plan = await ctx.step(
+        { type: 'plan', name: 'planner.create', input: { model: router.describe('planner') } },
+        async () => {
+          const result = await this.planner.plan(
+            router,
+            context,
+            promptTools,
+            promptSkills,
+            null,
+            signal,
+          );
+          await ctx.setPlan(toPlanSteps(result.plan, toolset, policies, skills));
+          return {
+            value: result.plan,
+            summary: `${result.plan.steps.length}단계 계획${result.fallback ? ' (기본 계획 사용)' : ''}`,
+            output: { goal: result.plan.goal, fallback: result.fallback },
+            usage: stepUsage(result.usage),
+          };
+        },
+      );
+      notes = [];
+    }
+    ctx.workingMemory.planView = plan;
 
     // 3) Execute(reason · tool · skill) → Evaluate → 필요하면 재계획
-    const notes: WorkNote[] = [];
-    for (let revision = 0; ; revision++) {
+    const startIndex = resumed?.nextPlanIndex ?? 1;
+    // 답변까지 보낸 뒤 멈췄다면 검증만 남았다
+    const sentAnswer = resumed?.answer ?? null;
+    for (let revision = 0; sentAnswer === null; revision++) {
       for (const [i, step] of plan.steps.entries()) {
         if (step.kind === 'respond') continue;
         const planIndex = i + 1;
+        // 재개: checkpoint 까지 끝난 단계는 다시 하지 않는다 (같은 계획일 때만)
+        if (revision === 0 && planIndex < startIndex) continue;
+        await applySteers();
         const pinned =
           step.kind === 'skill' ? skills.find((k) => k.name === step.skill) : undefined;
         await ctx.step(
@@ -241,6 +275,7 @@ export class AgentLoopRuntime implements AgentRuntime {
             signal,
           );
           await ctx.setPlan(toPlanSteps(result.plan, toolset, policies, skills), assessment.reason);
+          ctx.workingMemory.planView = result.plan;
           return {
             value: result.plan,
             summary: `계획 수정: ${result.plan.steps.length}단계`,
@@ -253,40 +288,44 @@ export class AgentLoopRuntime implements AgentRuntime {
 
     // 4) Respond — 최종 답변 스트리밍
     const respondIndex = plan.steps.findIndex((s) => s.kind === 'respond') + 1;
-    const answer = await ctx.step(
-      {
-        type: 'respond',
-        name: 'executor.respond',
-        planIndex: respondIndex,
-        input: { model: router.describe('executor') },
-      },
-      async () => {
-        let usage: LlmUsage | null = null;
-        const stream = this.executor.respond(router, context, plan, notes, promptTools, signal);
-        async function* texts(): AsyncGenerator<string> {
-          let produced = false;
-          for await (const event of stream) {
-            if (event.type === 'text') {
-              produced = true;
-              yield event.text;
-            } else {
-              usage = event.response.usage;
+    if (!sentAnswer) await applySteers();
+    const answer =
+      sentAnswer ??
+      (await ctx.step(
+        {
+          type: 'respond',
+          name: 'executor.respond',
+          planIndex: respondIndex,
+          input: { model: router.describe('executor') },
+        },
+        async () => {
+          let usage: LlmUsage | null = null;
+          const stream = this.executor.respond(router, context, plan, notes, promptTools, signal);
+          async function* texts(): AsyncGenerator<string> {
+            let produced = false;
+            for await (const event of stream) {
+              if (event.type === 'text') {
+                produced = true;
+                yield event.text;
+              } else {
+                usage = event.response.usage;
+              }
+            }
+            if (!produced) {
+              throw new RuntimeError('MODEL_EMPTY_RESPONSE', '모델이 빈 답변을 돌려주었습니다');
             }
           }
-          if (!produced) {
-            throw new RuntimeError('MODEL_EMPTY_RESPONSE', '모델이 빈 답변을 돌려주었습니다');
-          }
-        }
-        const message = await ctx.streamAssistantMessage(texts());
-        return {
-          value: message,
-          summary: '답변 작성 완료',
-          output: { messageId: message.id, chars: message.text.length },
-          usage: usage ? stepUsage(usage) : undefined,
-          checkpoint: true,
-        };
-      },
-    );
+          const message = await ctx.streamAssistantMessage(texts());
+          ctx.workingMemory.answer = { id: message.id, text: message.text };
+          return {
+            value: message,
+            summary: '답변 작성 완료',
+            output: { messageId: message.id, chars: message.text.length },
+            usage: usage ? stepUsage(usage) : undefined,
+            checkpoint: true,
+          };
+        },
+      ));
 
     // 5) Verify — 결과 검증 (W-04)
     const verification = await ctx.step(
@@ -308,6 +347,29 @@ export class AgentLoopRuntime implements AgentRuntime {
     );
 
     return { messageId: answer.id, verification: verification.checks };
+  }
+
+  /**
+   * 실행 중 추가 지시(steer) 반영 — 아직 반영하지 않은 지시를 요청 뒤에 붙여 다음 단계부터 쓴다.
+   * 반영 위치(cursor)는 checkpoint 에 남아 재개 후에도 중복되지 않는다.
+   */
+  private async applySteers(
+    ctx: RunContext,
+    context: AgentContext,
+    baseRequest: string,
+  ): Promise<void> {
+    const all = await this.contextBuilder.steers(ctx.task);
+    const cursor =
+      typeof ctx.workingMemory.steerCursor === 'string' ? ctx.workingMemory.steerCursor : null;
+    const fresh = cursor ? all.filter((m) => m.id > cursor) : all;
+    if (all.length) {
+      context.request = `${baseRequest}\n\nAdditional instructions the user sent while this task was running (follow the latest when they conflict):\n${all.map((m) => `- ${m.text}`).join('\n')}`;
+    }
+    if (!fresh.length) return;
+    ctx.workingMemory.steerCursor = fresh.at(-1)!.id;
+    await ctx.record(async (_tx, emit) => {
+      await emit('task.steer_applied', { messageIds: fresh.map((m) => m.id) });
+    });
   }
 
   /**
@@ -340,6 +402,26 @@ export class AgentLoopRuntime implements AgentRuntime {
     const reader = toolset.tools.find((t) => t.name === SKILL_READ_FILE && t.builtin);
     return { tools: reader ? [...allowed, reader] : allowed, skill: loaded };
   }
+}
+
+/** 재개 상태 — checkpoint 의 workingMemory 에서 계획 · 노트 · 다음 단계 · 보낸 답변 */
+function readResume(ctx: RunContext): {
+  plan: PlanView;
+  notes: WorkNote[];
+  nextPlanIndex: number;
+  answer: { id: string; text: string } | null;
+} | null {
+  if (!ctx.resume) return null;
+  const memory = ctx.workingMemory;
+  const plan = memory.planView as PlanView | undefined;
+  if (!plan || !Array.isArray(plan.steps) || !plan.steps.length) return null;
+  const answer = memory.answer as { id: string; text: string } | undefined;
+  return {
+    plan,
+    notes: Array.isArray(memory.notes) ? (memory.notes as WorkNote[]) : [],
+    nextPlanIndex: ctx.resume.checkpoint.nextPlanIndex,
+    answer: answer && typeof answer.id === 'string' ? answer : null,
+  };
 }
 
 function toPlanSteps(

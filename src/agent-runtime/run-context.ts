@@ -5,7 +5,7 @@ import type { TaskEventEnvelope, TaskEventsService } from '../events/task-events
 import type { Prisma, StepType } from '../generated/prisma/client.js';
 import type { PrismaService, TenantTx } from '../infrastructure/database/prisma.service.js';
 import type { PlanStep, StoredPlan } from '../tasks/plan.js';
-import { RuntimeError, TaskCancelledError } from './agent-runtime.js';
+import { RuntimeError, TaskCancelledError, TaskPausedError } from './agent-runtime.js';
 
 export interface TaskRunInfo {
   id: string;
@@ -46,6 +46,26 @@ export interface StepOutcome<T> {
   status?: 'succeeded' | 'failed' | 'skipped';
 }
 
+/** docs/data-model.md §4.3 — task_steps.checkpoint */
+export interface Checkpoint {
+  planVersion: number;
+  plan: PlanStep[];
+  nextPlanIndex: number;
+  workingMemory: Record<string, unknown>;
+  artifactRefs: string[];
+  approvalsGranted: unknown[];
+  conversationCursor: string | null;
+  usage: { inputTokens: number; outputTokens: number };
+}
+
+/** 재개할 때 Worker 가 넘겨 주는 상태 */
+export interface ResumeState {
+  checkpoint: Checkpoint;
+  /** checkpoint 를 저장한 단계 */
+  fromStepId: string;
+  reason: 'resume' | 'recover';
+}
+
 /** RunContext.record 안에서 이벤트를 남기는 함수 */
 export type EmitEvent = (type: string, data: unknown) => Promise<void>;
 
@@ -61,16 +81,33 @@ export class RunContext {
   private plan: StoredPlan | null;
   private nextSeq: number;
   private lastCancelPoll = 0;
+  /** 재개면 checkpoint (Agent Loop 가 계획 · 노트 · 다음 단계를 여기서 이어받는다) */
+  readonly resume: ResumeState | null;
+  /** 이전 실행들이 이미 쓴 토큰 (토큰 예산은 작업 전체 기준) */
+  private readonly priorUsage: { inputTokens: number; outputTokens: number };
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly events: TaskEventsService,
     readonly task: TaskRunInfo,
     private readonly controller: AbortController,
-    init: { nextSeq: number; plan: StoredPlan | null },
+    init: {
+      nextSeq: number;
+      plan: StoredPlan | null;
+      resume?: ResumeState | null;
+      priorUsage?: { inputTokens: number; outputTokens: number };
+    },
   ) {
     this.nextSeq = init.nextSeq;
     this.plan = init.plan;
+    this.resume = init.resume ?? null;
+    this.priorUsage = init.priorUsage ?? { inputTokens: 0, outputTokens: 0 };
+    if (this.resume) Object.assign(this.workingMemory, this.resume.checkpoint.workingMemory);
+  }
+
+  /** 지금 계획 (재개 시 checkpoint 와 비교) */
+  get currentPlan(): StoredPlan | null {
+    return this.plan;
   }
 
   get signal(): AbortSignal {
@@ -122,7 +159,11 @@ export class RunContext {
         `최대 단계 수(${this.task.executionPolicy.maxSteps})를 넘었습니다`,
       );
     }
-    const used = this.usage.inputTokens + this.usage.outputTokens;
+    const used =
+      this.priorUsage.inputTokens +
+      this.priorUsage.outputTokens +
+      this.usage.inputTokens +
+      this.usage.outputTokens;
     if (used >= this.task.executionPolicy.tokenBudget) {
       throw new RuntimeError(
         'TOKEN_BUDGET_EXCEEDED',
@@ -216,7 +257,10 @@ export class RunContext {
           inputTokens: outcome.usage?.inputTokens ?? 0,
           outputTokens: outcome.usage?.outputTokens ?? 0,
           ...(checkpoint
-            ? { checkpoint: checkpoint as Prisma.InputJsonValue, checkpointAt: finishedAt }
+            ? {
+                checkpoint: checkpoint as unknown as Prisma.InputJsonValue,
+                checkpointAt: finishedAt,
+              }
             : {}),
         },
       });
@@ -290,19 +334,26 @@ export class RunContext {
     });
   }
 
-  /** 중지 요청 확인: AbortSignal 즉시 + DB 의 cancel_requested_at 을 최대 0.5초 간격으로 */
+  /**
+   * 중지 · 일시정지 요청 확인: AbortSignal 즉시 + DB 를 최대 0.5초 간격으로.
+   * 일시정지는 단계 사이에서만 멈춘다 (실행 중인 Tool 은 끝까지).
+   */
   async throwIfCancelled(): Promise<void> {
     if (this.controller.signal.aborted) throw this.abortError();
     const now = Date.now();
     if (now - this.lastCancelPoll < CANCEL_POLL_MS) return;
     this.lastCancelPoll = now;
     const row = await this.prisma.withTenant(this.task.tenantId, (tx) =>
-      tx.task.findUnique({ where: { id: this.task.id }, select: { cancelRequestedAt: true } }),
+      tx.task.findUnique({
+        where: { id: this.task.id },
+        select: { cancelRequestedAt: true, pauseRequestedAt: true, pausedReason: true },
+      }),
     );
     if (row?.cancelRequestedAt) {
       this.controller.abort(new TaskCancelledError());
       throw new TaskCancelledError();
     }
+    if (row?.pauseRequestedAt) throw new TaskPausedError(row.pausedReason ?? 'pause_requested');
   }
 
   private abortError(): Error {
@@ -311,7 +362,7 @@ export class RunContext {
   }
 
   /** docs/data-model.md §4.3 Checkpoint */
-  private buildCheckpoint(planIndex: number | undefined): Record<string, unknown> {
+  private buildCheckpoint(planIndex: number | undefined): Checkpoint {
     return {
       planVersion: this.plan?.version ?? 0,
       plan: this.plan?.steps ?? [],
@@ -319,7 +370,10 @@ export class RunContext {
       workingMemory: this.workingMemory,
       artifactRefs: [],
       approvalsGranted: [],
-      conversationCursor: this.task.triggerMessageId,
+      conversationCursor:
+        typeof this.workingMemory.steerCursor === 'string'
+          ? this.workingMemory.steerCursor
+          : this.task.triggerMessageId,
       usage: { ...this.usage },
     };
   }

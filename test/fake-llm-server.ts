@@ -25,6 +25,10 @@ import type { AddressInfo } from 'node:net';
  * Skill 시나리오 (test/skills.e2e-spec.ts 의 order-helper)
  *   [스킬]       planner 가 skill 단계를 계획(목록에 있을 때만) → Skill 파일 읽기 → 계산 → 메모
  *   [스킬범위]   Skill 단계에서 allowed-tools 밖의 Tool 호출 → not_allowed
+ * 복구 · 재개 시나리오 (계획은 [분석] 과 같다: reason 1단계 + respond)
+ *   [느린분석]   작업 단계 응답이 1.5초 걸린다 (일시정지 · 추가 지시)
+ *   [느린답변]   답변 스트림이 조각마다 250ms (Worker 유실 시뮬레이션)
+ *   [두번실패]   답변이 작업(#태그)마다 처음 두 번 500 → 재시도 후에도 실패 → 재개하면 성공
  */
 export interface RecordedRequest {
   role: string;
@@ -153,6 +157,8 @@ function toolPlan(text: string, lastUser: string): Record<string, unknown> | nul
 
 export async function startFakeLlm(options: { chunkDelayMs?: number } = {}): Promise<FakeLlm> {
   const requests: RecordedRequest[] = [];
+  /** [두번실패] — 작업 태그별 답변 실패 횟수 */
+  const failures = new Map<string, number>();
   const delay = options.chunkDelayMs ?? 15;
 
   const server: Server = createServer((req, res) => {
@@ -216,7 +222,12 @@ export async function startFakeLlm(options: { chunkDelayMs?: number } = {}): Pro
             }),
           );
         }
-        if (allText.includes('[분석]')) {
+        if (
+          allText.includes('[분석]') ||
+          allText.includes('[느린분석]') ||
+          allText.includes('[느린답변]') ||
+          allText.includes('[두번실패]')
+        ) {
           return reply(
             '```json\n' +
               JSON.stringify({
@@ -279,6 +290,12 @@ export async function startFakeLlm(options: { chunkDelayMs?: number } = {}): Pro
         }
         const results = body.messages.filter((m) => m.role === 'tool').map((m) => m.content);
         const stepTitle = /Current step \d+: ([^\n]+)/.exec(allText)?.[1] ?? '';
+        if (allText.includes('[느린분석]')) {
+          setTimeout(() => {
+            if (!res.destroyed) reply(`분석 메모: ${stepTitle} 완료`);
+          }, 1_500);
+          return;
+        }
         return reply(
           results.length
             ? `도구 메모: ${stepTitle} — ${results.join(' | ')}`
@@ -311,6 +328,14 @@ export async function startFakeLlm(options: { chunkDelayMs?: number } = {}): Pro
       }
 
       if (role.startsWith('Executor (respond')) {
+        const tag = /#[\w-]+/.exec(allText)?.[0] ?? '';
+        if (allText.includes('[두번실패]') && (failures.get(tag) ?? 0) < 2) {
+          failures.set(tag, (failures.get(tag) ?? 0) + 1);
+          res
+            .writeHead(500, { 'Content-Type': 'application/json' })
+            .end(JSON.stringify({ error: { message: 'temporary outage' } }));
+          return;
+        }
         if (allText.includes('[모델오류]')) {
           res
             .writeHead(500, { 'Content-Type': 'application/json' })
@@ -321,6 +346,7 @@ export async function startFakeLlm(options: { chunkDelayMs?: number } = {}): Pro
         const pieces = answer.match(/\S+\s*/g) ?? [answer];
         res.writeHead(200, { 'Content-Type': 'text/event-stream' });
         let i = 0;
+        const chunkDelay = allText.includes('[느린답변]') ? 250 : delay;
         const timer = setInterval(() => {
           if (res.destroyed) return clearInterval(timer);
           if (i < pieces.length) {
@@ -334,7 +360,7 @@ export async function startFakeLlm(options: { chunkDelayMs?: number } = {}): Pro
             `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: USAGE })}\n\n`,
           );
           res.end('data: [DONE]\n\n');
-        }, delay);
+        }, chunkDelay);
         return;
       }
 

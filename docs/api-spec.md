@@ -251,6 +251,15 @@ interface ResumeRequest { mode: 'checkpoint' | 'restart' }
 
 오류: `TASK_NOT_ACTIVE`(409), `TASK_NOT_RESUMABLE`(409), `CHECKPOINT_NOT_FOUND`(409).
 
+구현 메모 (7 · 8단계)
+
+| 항목 | 동작 |
+|---|---|
+| steer | `messages` 에 `task_id` 를 붙여 저장하고 `task.steered` 이벤트. Agent Loop 가 다음 작업 단계 · 답변 직전에 아직 반영하지 않은 지시를 요청 뒤에 붙인다(`task.steer_applied`). 반영 위치는 checkpoint 의 `workingMemory.steerCursor` 로 남는다. 대기 · 실행 · 승인 대기 · 복구 · 일시정지 상태에서 받는다 |
+| resume | `checkpoint`(기본): 마지막 checkpoint(콘솔은 `fromStepId` 지정 가능)의 계획 · 작업 노트 · 다음 단계에서 이어 간다 — 끝난 단계는 다시 하지 않고, 답변까지 보낸 뒤 멈췄으면 검증만 한다(`task.resumed`). `restart`: 계획부터 다시(단계 기록은 유지). 같은 대화에 진행 중인 작업이 있으면 `TASK_ALREADY_ACTIVE` |
+| cancel · pause | 대기 · 승인 대기 · 일시정지 중이면 바로, 실행 · 복구 중이면 Worker 가 현재 단계를 끝낸 뒤 처리한다. 일시정지는 콘솔(§4.2)에서 |
+| 토큰 | 실패 · 중지 · 일시정지 · Worker 종료 때도 그 실행의 토큰을 작업 합계에 더하고, 토큰 예산은 작업 전체(이전 실행 포함) 기준이다 |
+
 ### 2.5 `POST /v1/approvals/:id/decision`
 
 ```ts
@@ -749,7 +758,7 @@ agent.worker (queue: agent-tasks)
 | 큐 | 트리거 | 동작 |
 |---|---|---|
 | `agent-tasks` | 메시지 · 승인 결정 · 재개 | Agent Loop 실행. BullMQ `attempts: 1` — 재시도는 Loop 안에서 단계 단위로 처리 |
-| `agent-recovery` | 1분 주기 | `app_find_stalled_tasks('60 seconds')` → `recovering` 으로 바꾸고 `mode: 'resume'` 재투입 (복구 한도 3회) |
+| `agent-recovery` | 1분 주기 | `app_find_stalled_tasks('60 seconds')` → `recovering` 으로 바꾸고 `mode: 'resume'` 재투입 (복구 한도 3회). 구현: `RECOVERY_TICK_SEC`(30초)마다 heartbeat 가 `RECOVERY_STALE_SEC`(60초) 넘게 끊긴 작업을 잠그고, 실행 중이던 단계를 `failed(worker_lost)` 로 닫은 뒤 `task.recovering` → 재개 Job(`<taskId>:recover:<n>`, 대기 중이면 다시 넣지 않음). 한도(`RECOVERY_MAX_ATTEMPTS`)를 넘으면 `failed(RECOVERY_LIMIT_EXCEEDED)` — checkpoint 가 있으면 사용자가 재개할 수 있다. Worker 는 heartbeat 때 자신이 아직 주인인지(`worker_id`) 확인하고 아니면 멈춘다. Worker 가 SIGTERM 을 받으면 새 Job 을 멈추고 실행 중 작업을 `recovering` 으로 넘겨 바로 재개 Job 을 넣는다 |
 | `approval-expiry` | 1분 주기 | 만료 승인 → `expired`, 작업 `paused` + checkpoint 유지 |
 | `memory-ingest` | 작업 완료 | Reflection 요약 · 임베딩 · 지시문 패턴 검사 후 저장 또는 격리 |
 | `mcp-sync` | 서버별 1시간 | 재탐색 → 변경이 있으면 `mcp_tools.pending_change` 기록 · 헬스 갱신. 구현: `MCP_SYNC_TICK_SEC`(기본 60초)마다 `app_list_mcp_servers_due_for_sync` 로 시기가 된 서버(연결됨 `MCP_SYNC_INTERVAL_SEC`, 오류 상태는 최대 5분)를 확인. 연결 실패 → `error`(Tool 제외), 성공 → `connected`(복구). 헬스 = 최근 24시간 호출 p95 · 오류율(모델의 인자 오류 제외) |

@@ -1,4 +1,15 @@
-import { Controller, Get, HttpCode, Param, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  Post,
+  Query,
+  Req,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import type { Page } from '../common/http/pagination.js';
@@ -11,6 +22,10 @@ import {
   type TaskListQuery,
   taskListQuerySchema,
   TasksService,
+  type ResumeInput,
+  resumeInputSchema,
+  type SteerInput,
+  steerInputSchema,
 } from './tasks.service.js';
 
 const taskId = { schema: z.uuid() };
@@ -49,6 +64,28 @@ export class TasksController {
     @Param('id', taskId) id: string,
   ): Promise<TaskSummaryView> {
     return this.tasks.cancel(session, id);
+  }
+
+  /** W-02 · 실행 중 추가 지시 — 다음 단계 Context 에 반영 (Agent 는 하나로 유지) */
+  @Post(':id/steer')
+  @HttpCode(202)
+  steer(
+    @CurrentSession() session: WidgetSession,
+    @Param('id', taskId) id: string,
+    @Body({ schema: steerInputSchema }) body: SteerInput,
+  ): Promise<{ messageId: string }> {
+    return this.tasks.steer(session, id, body);
+  }
+
+  /** W-05 · 재개 (failed · paused) — checkpoint 부터 또는 처음부터 */
+  @Post(':id/resume')
+  @HttpCode(202)
+  resume(
+    @CurrentSession() session: WidgetSession,
+    @Param('id', taskId) id: string,
+    @Body({ schema: resumeInputSchema }) body: ResumeInput,
+  ): Promise<TaskSummaryView> {
+    return this.tasks.resume(session, id, body);
   }
 
   /** W-02 ~ W-05 · 실행 이벤트 SSE. Last-Event-ID 헤더(또는 ?lastEventId=)로 이어 받기 */

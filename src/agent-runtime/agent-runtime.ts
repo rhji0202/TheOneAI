@@ -2,8 +2,8 @@ import type { RunContext } from './run-context.js';
 
 /**
  * Agent Runtime 계약. Worker 는 작업마다 run() 을 한 번 호출한다.
- * 현재 구현은 PlaceholderAgentRuntime (파이프라인 검증용). 개발 순서 3단계에서
- * Context → Plan → Execute → Observe → Evaluate 를 수행하는 AgentLoop 로 교체한다.
+ * AgentLoopRuntime(Context → Plan → Execute → Evaluate → Respond → Verify) 과
+ * 파이프라인 확인용 PlaceholderAgentRuntime 이 있다. 재개면 ctx.resume 에 checkpoint 가 있다.
  */
 export interface AgentRuntime {
   run(ctx: RunContext): Promise<RunResult>;
@@ -21,6 +21,26 @@ export class TaskCancelledError extends Error {
   constructor() {
     super('작업이 취소되었습니다');
     this.name = 'TaskCancelledError';
+  }
+}
+
+/** 일시정지 요청 — 현재 단계를 마친 뒤 멈춘다 (checkpoint 유지, 재개 가능) */
+export class TaskPausedError extends Error {
+  constructor(readonly reason: string) {
+    super('작업이 일시정지되었습니다');
+    this.name = 'TaskPausedError';
+  }
+}
+
+/** Worker 종료 · 소유권 상실 — 작업은 실패가 아니라 복구 대상이다 */
+export class WorkerStopError extends Error {
+  constructor(readonly reason: 'worker_shutdown' | 'ownership_lost') {
+    super(
+      reason === 'worker_shutdown'
+        ? 'Worker 가 종료되어 작업을 넘깁니다'
+        : '다른 Worker 가 작업을 가져갔습니다',
+    );
+    this.name = 'WorkerStopError';
   }
 }
 

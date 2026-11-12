@@ -27,6 +27,10 @@ const envSchema = z.object({
   MCP_TOOL_TIMEOUT_MS: z.coerce.number().int().min(500).max(600_000).default(30_000),
   /** 서버별 재탐색 주기 */
   MCP_SYNC_INTERVAL_SEC: z.coerce.number().int().min(60).max(604_800).default(3_600),
+  /** heartbeat 가 끊긴 작업 확인 주기 (0 이면 주기 잡을 등록하지 않는다) · 끊겼다고 볼 시간 */
+  RECOVERY_TICK_SEC: z.coerce.number().int().min(0).max(3_600).default(30),
+  RECOVERY_STALE_SEC: z.coerce.number().int().min(20).max(3_600).default(60),
+  RECOVERY_MAX_ATTEMPTS: z.coerce.number().int().min(0).max(10).default(3),
   /** 재탐색 대상 확인 주기. 0 이면 주기 잡을 등록하지 않는다 */
   MCP_SYNC_TICK_SEC: z.coerce.number().int().min(0).max(3_600).default(60),
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(100).default(5),
@@ -54,6 +58,7 @@ export interface AppConfig {
     syncTickSec: number;
   };
   worker: { concurrency: number };
+  recovery: { tickSec: number; staleSec: number; maxAttempts: number };
   /** loop = Agent Loop(LLM), placeholder = 파이프라인 확인용 고정 응답 */
   agentRuntime: 'loop' | 'placeholder';
   llm: { requestTimeoutMs: number; idleTimeoutMs: number; maxRetries: number };
@@ -131,6 +136,11 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
       syncTickSec: env.MCP_SYNC_TICK_SEC,
     },
     worker: { concurrency: env.WORKER_CONCURRENCY },
+    recovery: {
+      tickSec: env.RECOVERY_TICK_SEC,
+      staleSec: env.RECOVERY_STALE_SEC,
+      maxAttempts: env.RECOVERY_MAX_ATTEMPTS,
+    },
     agentRuntime: env.AGENT_RUNTIME,
     llm: {
       requestTimeoutMs: env.LLM_REQUEST_TIMEOUT_MS,

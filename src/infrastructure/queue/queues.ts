@@ -5,8 +5,23 @@ export interface AgentTaskJobData {
   tenantId: string;
   taskId: string;
   mode: 'start' | 'resume';
+  /** resume: 이 단계의 checkpoint 부터 (없으면 마지막 checkpoint) */
   fromStepId?: string;
+  /** resume: checkpoint 를 쓰지 않고 처음부터 (단계 기록은 유지) */
+  restart?: boolean;
 }
 
 /** 등록된 MCP 서버 재탐색 (주기 잡 — 서버별 주기는 MCP_SYNC_INTERVAL_SEC) */
 export const MCP_SYNC_QUEUE = 'mcp-sync';
+
+/** heartbeat 가 끊긴 작업을 찾아 재투입 (주기 잡) */
+export const AGENT_RECOVERY_QUEUE = 'agent-recovery';
+
+/** 같은 작업의 재개 · 복구 Job 은 매번 다른 id (BullMQ 는 완료된 같은 id 를 다시 받지 않는다) */
+export function resumeJobId(
+  taskId: string,
+  kind: 'resume' | 'recover',
+  n: number | string,
+): string {
+  return `${taskId}:${kind}:${n}`;
+}

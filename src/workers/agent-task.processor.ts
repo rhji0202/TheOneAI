@@ -23,6 +23,12 @@ export class AgentTaskProcessor extends WorkerHost implements OnApplicationBoots
     this.worker.concurrency = this.config.worker.concurrency;
   }
 
+  /** 종료: 새 Job 을 받지 않고(대기 Job 은 다른 Worker 가 가져감) 실행 중 작업을 checkpoint 기준으로 넘긴다 */
+  async stop(): Promise<void> {
+    await this.worker.pause(true);
+    await this.execution.shutdown();
+  }
+
   process(job: Job<AgentTaskJobData>): Promise<ExecutionOutcome> {
     return this.execution.execute(job.data, this.workerId);
   }

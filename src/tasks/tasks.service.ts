@@ -1,18 +1,14 @@
-import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
-import type { Queue } from 'bullmq';
 import { z } from 'zod';
 import { AppError } from '../common/errors/app-error.js';
 import { type Page, toPage } from '../common/http/pagination.js';
 import type { ArtifactView } from '../artifacts/artifact-views.js';
 import { toArtifactView } from '../artifacts/artifact-views.js';
-import { type TaskEventEnvelope, TaskEventsService } from '../events/task-events.service.js';
-import type { TaskStatus } from '../generated/prisma/client.js';
 import { PrismaService, type TenantTx } from '../infrastructure/database/prisma.service.js';
-import { AGENT_TASKS_QUEUE, type AgentTaskJobData } from '../infrastructure/queue/queues.js';
 import type { WidgetSession } from '../widget/widget-session.js';
 import { type ApprovalView, toApprovalView } from './approval-views.js';
 import { parseStoredPlan, type PlanStep } from './plan.js';
+import { TaskControlService } from './task-control.service.js';
 import {
   TASK_GROUPS,
   type TaskGroup,
@@ -20,6 +16,13 @@ import {
   toTaskSummary,
   type TaskSummaryView,
 } from './task-views.js';
+
+export const resumeInputSchema = z.object({
+  mode: z.enum(['checkpoint', 'restart']).default('checkpoint'),
+});
+export type ResumeInput = z.infer<typeof resumeInputSchema>;
+export const steerInputSchema = z.object({ text: z.string().trim().min(1).max(2_000) });
+export type SteerInput = z.infer<typeof steerInputSchema>;
 
 export const taskListQuerySchema = z.object({
   group: z.enum(['active', 'completed', 'failed']).default('active'),
@@ -57,8 +60,7 @@ export class TasksService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly events: TaskEventsService,
-    @InjectQueue(AGENT_TASKS_QUEUE) private readonly queue: Queue<AgentTaskJobData>,
+    private readonly control: TaskControlService,
   ) {}
 
   async list(session: WidgetSession, query: TaskListQuery): Promise<Page<TaskSummaryView>> {
@@ -114,60 +116,27 @@ export class TasksService {
    *  - queued · waiting_approval · paused: 즉시 cancelled (실행 중인 Worker 없음)
    *  - running · recovering: cancel_requested_at 만 기록 → Worker 가 현재 단계를 마친 뒤 종료
    */
-  async cancel(session: WidgetSession, taskId: string): Promise<TaskSummaryView> {
-    const { tenantId } = session;
-    const outcome = await this.prisma.withTenant(tenantId, async (tx) => {
-      // 행 잠금: Worker 의 claim(queued → running)과 경쟁하지 않도록 상태를 읽는 순간부터 고정한다.
-      const locked = await tx.$queryRaw<Array<{ status: TaskStatus }>>`
-        SELECT status FROM tasks
-        WHERE id = ${taskId}::uuid AND end_user_id = ${session.endUserId}::uuid
-        FOR UPDATE`;
-      const task = locked[0];
-      if (!task) throw AppError.notFound('작업을 찾을 수 없습니다');
+  /** 중지 · 재개 · 추가 지시는 TaskControlService 가 처리한다 (콘솔과 같은 규칙) */
+  cancel(session: WidgetSession, taskId: string): Promise<TaskSummaryView> {
+    return this.control.cancel(session.tenantId, taskId, { endUserId: session.endUserId });
+  }
 
-      const now = new Date();
-      let event: TaskEventEnvelope | null = null;
-      let removeJob = false;
-      switch (task.status) {
-        case 'queued':
-        case 'waiting_approval':
-        case 'paused': {
-          await tx.task.update({
-            where: { id: taskId },
-            data: { status: 'cancelled', cancelRequestedAt: now, finishedAt: now },
-          });
-          await tx.approval.updateMany({
-            where: { taskId, status: 'pending' },
-            data: { status: 'cancelled', resolvedAt: now },
-          });
-          event = await this.events.append(tx, tenantId, taskId, 'task.status', {
-            status: 'cancelled',
-            reason: 'user_cancelled',
-          });
-          removeJob = task.status === 'queued';
-          break;
-        }
-        case 'running':
-        case 'recovering':
-          await tx.task.update({ where: { id: taskId }, data: { cancelRequestedAt: now } });
-          break;
-        default:
-          throw new AppError(409, 'TASK_NOT_ACTIVE');
-      }
-      const summary = await tx.task.findUniqueOrThrow({
-        where: { id: taskId },
-        select: taskSummarySelect,
-      });
-      return { summary, event, removeJob };
-    });
+  resume(session: WidgetSession, taskId: string, input: ResumeInput): Promise<TaskSummaryView> {
+    return this.control.resume(
+      session.tenantId,
+      taskId,
+      { endUserId: session.endUserId },
+      { mode: input.mode },
+    );
+  }
 
-    if (outcome.event) await this.events.publish(taskId, outcome.event);
-    if (outcome.removeJob) {
-      await this.queue
-        .remove(taskId)
-        .catch((err: unknown) => this.logger.warn(`Job 제거 실패 (${taskId}): ${String(err)}`));
-    }
-    return toTaskSummary(outcome.summary);
+  steer(session: WidgetSession, taskId: string, input: SteerInput): Promise<{ messageId: string }> {
+    return this.control.steer(
+      session.tenantId,
+      taskId,
+      { endUserId: session.endUserId },
+      input.text,
+    );
   }
 
   /** SSE 구독 전 소유 확인 */

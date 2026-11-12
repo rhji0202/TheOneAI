@@ -156,6 +156,8 @@ interface Checkpoint {
 
 재개 규칙: `tasks.last_checkpoint_step_id` 의 checkpoint 를 읽고, 같은 `agent_version_id` · `registry_version_id` 로 다음 계획 단계부터 실행한다. 이미 성공한 비멱등 Tool 은 다시 호출하지 않는다.
 
+`workingMemory` 에 Agent Loop 가 남기는 값: `planView`(목표 · 단계 · 지시 — 재개 시 계획), `notes`(작업 노트), `answer`(보낸 답변 `{id, text}` — 있으면 검증만), `steerCursor`(마지막으로 반영한 추가 지시 메시지). checkpoint 는 작업 단계(reason · tool · skill)와 답변 단계가 끝날 때 저장한다. `tasks.recovery_count` 는 Worker 유실 · 종료로 다시 넣은 횟수다.
+
 ### 4.4 `tool_policy_rules.condition`
 
 ```ts
