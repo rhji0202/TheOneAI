@@ -115,6 +115,13 @@ export class RunContext {
         `최대 단계 수(${this.task.executionPolicy.maxSteps})를 넘었습니다`,
       );
     }
+    const used = this.usage.inputTokens + this.usage.outputTokens;
+    if (used >= this.task.executionPolicy.tokenBudget) {
+      throw new RuntimeError(
+        'TOKEN_BUDGET_EXCEEDED',
+        `작업당 토큰 예산(${this.task.executionPolicy.tokenBudget})을 모두 썼습니다`,
+      );
+    }
     const startedAt = new Date();
     const stepId = uuidv7();
 

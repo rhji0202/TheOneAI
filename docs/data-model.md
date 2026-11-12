@@ -103,6 +103,7 @@ API 는 위젯 세션 토큰의 `tid`, Worker 는 Job 데이터의 `tenantId` �
 |---|---|
 | `…_init` | Prisma DDL + `prisma/sql/001_rls_and_indexes.sql` (RLS · 역할 · 함수 · 부분/벡터 인덱스 · CHECK) |
 | `…_one_active_task_per_conversation` | 대화당 진행 중 작업 1개 부분 유니크 인덱스 (동시 요청 경쟁 방지) |
+| `…_llm_providers` | `provider_kind` 에 `openai` · `deepseek` · `gemini`, `step_type` 에 `reason`, `model_configs.reasoning_effort`(off · low · medium · high · max) 추가 |
 
 부분 인덱스 · CHECK 제약은 Prisma 가 관리하지 않으므로 이후 `migrate dev` 에서 지워지지 않는다. 일반 인덱스는 `schema.prisma` 에 선언해야 한다.
 

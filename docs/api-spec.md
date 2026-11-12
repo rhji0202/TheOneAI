@@ -44,7 +44,7 @@ interface MessageView {
 interface PlanStep {
   index: number;               // 1부터. 위젯 계획 카드의 n / total
   title: string;               // "3월 매출 데이터 조회"
-  kind: 'tool' | 'skill' | 'respond';
+  kind: 'reason' | 'tool' | 'skill' | 'respond'; // reason = Tool 없이 분석 · 초안 작성
   toolName?: string;           // "sales-db.query"
   skill?: { name: string; version: string };
   requiresApproval: boolean;   // 정책상 승인 대상이면 true (계획 단계에서 미리 표시)
@@ -380,7 +380,7 @@ interface TaskTrace {
   plans: Array<{ version: number; steps: PlanStep[]; reason: string | null; createdAt: string }>;
   steps: Array<{
     id: string; seq: number; planIndex: number | null;
-    type: 'context' | 'plan' | 'tool' | 'skill' | 'evaluate' | 'respond';
+    type: 'context' | 'plan' | 'reason' | 'tool' | 'skill' | 'evaluate' | 'respond';
     name: string; status: StepStatus; summary: string | null;
     parallelGroup: string | null; durationMs: number | null;
     checkpoint: { label: string; at: string } | null;  // "cp-4"
@@ -645,6 +645,19 @@ interface WidgetConfigInput {
 | `SKILL_PARSE_FAILED` | 422 | SKILL.md 파싱 실패 (`errors[].line`) | C-06 미리보기 |
 | `SKILL_VERIFICATION_FAILED` | 422 | 신뢰 검증 실패 | 활성화 버튼 비활성 |
 | `AGENT_DRAFT_INVALID` | 422 | 배포 전 검증 실패 | 섹션별 오류 |
+
+`task.failed` 의 `code` (HTTP 오류가 아니라 작업 실패 사유):
+
+| code | 의미 |
+|---|---|
+| `MODEL_NOT_CONFIGURED` | 역할별 모델 설정이 없거나 provider API Key(`secret_ref`)를 찾을 수 없음 |
+| `MODEL_AUTH_FAILED` | provider 인증 실패 (API Key 확인) |
+| `MODEL_RATE_LIMITED` | provider 호출 한도 초과 (재시도 · 대체 모델 후에도) |
+| `MODEL_TIMEOUT` | 응답 시간 초과 (`LLM_REQUEST_TIMEOUT_MS` · `LLM_IDLE_TIMEOUT_MS`) |
+| `MODEL_ERROR` | 그 밖의 provider 오류 (재시도 · 대체 모델 후에도) |
+| `MODEL_EMPTY_RESPONSE` | 모델이 빈 결과를 돌려줌 |
+| `STEP_LIMIT_EXCEEDED` · `TOKEN_BUDGET_EXCEEDED` · `TIME_LIMIT_EXCEEDED` | 실행 정책(`execution_policy`) 한도 초과 |
+| `QUEUE_UNAVAILABLE` · `RUNTIME_ERROR` | 작업 큐 등록 실패 · 그 밖의 내부 오류 |
 | `AGENT_NOT_PUBLISHED` | 503 | 배포된 Agent 버전 없음 | 위젯 “준비 중” 표시 |
 | `RATE_LIMITED` | 429 | 요청 제한 | 재시도 안내 |
 | `SERVICE_UNAVAILABLE` | 503 | 작업 큐 등 내부 의존성 장애 (작업은 `failed · QUEUE_UNAVAILABLE`) | 잠시 후 재시도 |

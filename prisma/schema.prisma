@@ -13,9 +13,9 @@
 // =============================================================================
 
 generator client {
-  provider        = "prisma-client"
-  output          = "../src/generated/prisma"
-  previewFeatures = ["postgresqlExtensions"]
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  previewFeatures     = ["postgresqlExtensions"]
   // NestJS 12 는 ESM(nodenext) — 생성 코드의 상대 import 를 .js 로 맞춘다.
   moduleFormat        = "esm"
   importFileExtension = "js"
@@ -48,13 +48,29 @@ enum AgentVersionStatus {
   @@map("agent_version_status")
 }
 
+/// openai · deepseek · gemini 는 각 사의 OpenAI 호환 Chat Completions API 로 호출한다.
+/// openai_compatible 은 base_url 을 직접 지정하는 기타 호환 엔드포인트.
 enum ProviderKind {
   anthropic
   openai_compatible
   bedrock
   vertex
+  openai
+  deepseek
+  gemini
 
   @@map("provider_kind")
+}
+
+/// 역할별 추론(thinking) 강도. off 는 추론을 끄고 바로 답한다 (provider 별 매핑: src/llm/provider-params.ts).
+enum ReasoningEffort {
+  off
+  low
+  medium
+  high
+  max
+
+  @@map("reasoning_effort")
 }
 
 enum ModelRole {
@@ -93,6 +109,8 @@ enum StepType {
   skill
   evaluate
   respond
+  /// Tool 없이 모델이 분석 · 초안 작성을 하는 단계
+  reason
 
   @@map("step_type")
 }
@@ -529,17 +547,19 @@ model Provider {
 
 /// 역할별 모델 설정 (C-03 모델 구성).
 model ModelConfig {
-  id                 String    @id @default(uuid(7)) @db.Uuid
-  tenantId           String    @map("tenant_id") @db.Uuid
-  agentVersionId     String    @map("agent_version_id") @db.Uuid
+  id                 String           @id @default(uuid(7)) @db.Uuid
+  tenantId           String           @map("tenant_id") @db.Uuid
+  agentVersionId     String           @map("agent_version_id") @db.Uuid
   role               ModelRole
-  providerId         String    @map("provider_id") @db.Uuid
+  providerId         String           @map("provider_id") @db.Uuid
   model              String
-  maxOutputTokens    Int       @map("max_output_tokens")
-  temperature        Float     @default(0)
-  fallbackProviderId String?   @map("fallback_provider_id") @db.Uuid
-  fallbackModel      String?   @map("fallback_model")
-  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  maxOutputTokens    Int              @map("max_output_tokens")
+  temperature        Float            @default(0)
+  /// null 이면 provider 기본값
+  reasoningEffort    ReasoningEffort? @map("reasoning_effort")
+  fallbackProviderId String?          @map("fallback_provider_id") @db.Uuid
+  fallbackModel      String?          @map("fallback_model")
+  createdAt          DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
 
   tenant           Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   agentVersion     AgentVersion @relation(fields: [agentVersionId], references: [id], onDelete: Cascade)

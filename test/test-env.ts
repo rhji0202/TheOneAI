@@ -27,6 +27,16 @@ export const WIDGET_B = {
   secret: 'e2e-secret-b',
   origin: 'https://shop.example.org',
 };
+/** 모델 API Key 가 없는 테넌트 (MODEL_NOT_CONFIGURED 확인용) */
+export const WIDGET_C = {
+  publicKey: 'wk_pub_e2e_c',
+  secretRef: 'vault://widgets/e2e-c',
+  secret: 'e2e-secret-c',
+  origin: 'https://nokey.example.com',
+};
+
+/** 가짜 LLM 서버용 API Key (Authorization 헤더 확인) */
+export const FAKE_LLM_KEY = { ref: 'vault://providers/e2e-llm', value: 'e2e-llm-key' };
 
 export const testEnv: Record<string, string> = {
   NODE_ENV: 'test',
@@ -37,9 +47,13 @@ export const testEnv: Record<string, string> = {
   DEV_SECRETS: JSON.stringify({
     [WIDGET_A.secretRef]: WIDGET_A.secret,
     [WIDGET_B.secretRef]: WIDGET_B.secret,
+    [WIDGET_C.secretRef]: WIDGET_C.secret,
+    [FAKE_LLM_KEY.ref]: FAKE_LLM_KEY.value,
   }),
   WIDGET_SESSION_PRIVATE_KEY: '',
-  PLACEHOLDER_STREAM_DELAY_MS: '20',
+  AGENT_RUNTIME: 'loop',
+  LLM_MAX_RETRIES: '1',
+  LLM_REQUEST_TIMEOUT_MS: '10000',
   WORKER_CONCURRENCY: '4',
 };
 

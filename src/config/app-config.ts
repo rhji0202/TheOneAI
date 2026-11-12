@@ -12,6 +12,10 @@ const envSchema = z.object({
   WIDGET_SESSION_PRIVATE_KEY: z.preprocess(emptyToUndefined, z.string().optional()),
   WIDGET_SESSION_TTL_SEC: z.coerce.number().int().min(60).max(86_400).default(3_600),
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(100).default(5),
+  AGENT_RUNTIME: z.enum(['loop', 'placeholder']).default('loop'),
+  LLM_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(600_000).default(120_000),
+  LLM_IDLE_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(600_000).default(60_000),
+  LLM_MAX_RETRIES: z.coerce.number().int().min(0).max(5).default(2),
   PLACEHOLDER_STREAM_DELAY_MS: z.coerce.number().int().min(0).max(5_000).default(40),
 });
 
@@ -23,6 +27,9 @@ export interface AppConfig {
   secrets: { backend: 'local'; devSecrets: Record<string, string> };
   widgetSession: { privateKeyPem: string | undefined; ttlSec: number };
   worker: { concurrency: number };
+  /** loop = Agent Loop(LLM), placeholder = 파이프라인 확인용 고정 응답 */
+  agentRuntime: 'loop' | 'placeholder';
+  llm: { requestTimeoutMs: number; idleTimeoutMs: number; maxRetries: number };
   placeholderRuntime: { streamDelayMs: number };
 }
 
@@ -65,6 +72,12 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
       ttlSec: env.WIDGET_SESSION_TTL_SEC,
     },
     worker: { concurrency: env.WORKER_CONCURRENCY },
+    agentRuntime: env.AGENT_RUNTIME,
+    llm: {
+      requestTimeoutMs: env.LLM_REQUEST_TIMEOUT_MS,
+      idleTimeoutMs: env.LLM_IDLE_TIMEOUT_MS,
+      maxRetries: env.LLM_MAX_RETRIES,
+    },
     placeholderRuntime: { streamDelayMs: env.PLACEHOLDER_STREAM_DELAY_MS },
   };
 }

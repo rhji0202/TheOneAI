@@ -3,43 +3,86 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { SignJWT } from 'jose';
-import { type SeededTenant, seedTenant } from '../prisma/seed.js';
+import { type SeededTenant, type SeedLlmInput, seedTenant } from '../prisma/seed.js';
 import { AppModule } from '../src/app.module.js';
 import { configureApp } from '../src/bootstrap/configure-app.js';
 import { PrismaClient } from '../src/generated/prisma/client.js';
 import { WorkerModule } from '../src/worker.module.js';
-import { TEST_OWNER_URL, WIDGET_A, WIDGET_B } from './test-env.js';
+import { type FakeLlm, startFakeLlm } from './fake-llm-server.js';
+import { FAKE_LLM_KEY, TEST_OWNER_URL, WIDGET_A, WIDGET_B, WIDGET_C } from './test-env.js';
 
 export interface TestContext {
   app: INestApplication;
   baseUrl: string;
   owner: PrismaClient;
+  llm: FakeLlm;
   tenantA: SeededTenant;
   tenantB: SeededTenant;
+  /** 모델 API Key 가 없는 테넌트 */
+  tenantC: SeededTenant;
+  /** 이번 실행에서 쓰는 위젯 (공개 키에 실행별 접미사가 붙는다) */
+  widgets: { A: TestWidget; B: TestWidget; C: TestWidget };
   close(): Promise<void>;
 }
 
-/** API + Worker 를 한 프로세스에서 띄우고, 테넌트 2개(A · B)를 만든다. */
+export type TestWidget = typeof WIDGET_A;
+
+/** 역할별 모델을 가짜 LLM 서버로 연결 (provider 종류는 deepseek — 요청 파라미터 매핑까지 확인) */
+function fakeLlmConfig(baseUrl: string, secretRef = FAKE_LLM_KEY.ref): SeedLlmInput {
+  return {
+    provider: { name: 'fake-deepseek', kind: 'deepseek', baseUrl, secretRef },
+    models: {
+      planner: { model: 'fake-planner', maxOutputTokens: 1_000, reasoningEffort: 'low' },
+      executor: {
+        model: 'fake-executor',
+        maxOutputTokens: 1_000,
+        temperature: 0.3,
+        reasoningEffort: 'off',
+      },
+      evaluator: { model: 'fake-evaluator', maxOutputTokens: 500 },
+    },
+  };
+}
+
+/** 가짜 LLM 서버 + API + Worker 를 한 프로세스에서 띄우고, 테넌트 3개(A · B · C)를 만든다. */
 export async function startTestApp(): Promise<TestContext> {
+  const llm = await startFakeLlm();
   const owner = new PrismaClient({ adapter: new PrismaPg({ connectionString: TEST_OWNER_URL }) });
-  const suffix = Date.now().toString(36);
+  const suffix = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const widgets = {
+    A: { ...WIDGET_A, publicKey: `${WIDGET_A.publicKey}_${suffix}` },
+    B: { ...WIDGET_B, publicKey: `${WIDGET_B.publicKey}_${suffix}` },
+    C: { ...WIDGET_C, publicKey: `${WIDGET_C.publicKey}_${suffix}` },
+  };
   const tenantA = await seedTenant(owner, {
     slug: `e2e-a-${suffix}`,
     name: '테넌트 A',
     widget: {
-      publicKey: WIDGET_A.publicKey,
-      secretRef: WIDGET_A.secretRef,
-      allowedOrigins: [WIDGET_A.origin],
+      publicKey: widgets.A.publicKey,
+      secretRef: widgets.A.secretRef,
+      allowedOrigins: [widgets.A.origin],
     },
+    llm: fakeLlmConfig(llm.baseUrl),
   });
   const tenantB = await seedTenant(owner, {
     slug: `e2e-b-${suffix}`,
     name: '테넌트 B',
     widget: {
-      publicKey: WIDGET_B.publicKey,
-      secretRef: WIDGET_B.secretRef,
-      allowedOrigins: [WIDGET_B.origin],
+      publicKey: widgets.B.publicKey,
+      secretRef: widgets.B.secretRef,
+      allowedOrigins: [widgets.B.origin],
     },
+    llm: fakeLlmConfig(llm.baseUrl),
+  });
+  const tenantC = await seedTenant(owner, {
+    slug: `e2e-c-${suffix}`,
+    name: '테넌트 C',
+    widget: {
+      publicKey: widgets.C.publicKey,
+      secretRef: widgets.C.secretRef,
+      allowedOrigins: [widgets.C.origin],
+    },
+    llm: fakeLlmConfig(llm.baseUrl, 'vault://providers/missing'),
   });
 
   const moduleRef = await Test.createTestingModule({
@@ -55,11 +98,15 @@ export async function startTestApp(): Promise<TestContext> {
     app,
     baseUrl,
     owner,
+    llm,
     tenantA,
     tenantB,
+    tenantC,
+    widgets,
     async close() {
       await app.close();
       await owner.$disconnect();
+      await llm.close();
     },
   };
 }

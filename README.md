@@ -29,14 +29,37 @@
 필요: Node.js 22+, **npm 11+** (npm 10 은 이 의존성 트리에서 설치 오류가 난다), Docker.
 
 ```bash
-cp .env.example .env
+cp .env.example .env            # DEV_SECRETS 의 <DEEPSEEK_API_KEY> 를 실제 키로 바꾼다 (.env 는 커밋하지 않음)
 docker compose up -d            # PostgreSQL 16 + pgvector, Redis
 npm install                     # postinstall 에서 Prisma Client 생성 → src/generated/prisma
-npm run db:setup                # 마이그레이션 + 개발용 앱 계정(app_rw) + 데모 테넌트 시드
+npm run db:setup                # 마이그레이션 + 개발용 앱 계정(app_rw) + 데모 테넌트 · DeepSeek 모델 시드
 
 npm run start:dev               # API   http://localhost:3000
 npm run start:worker:dev        # Agent Worker (다른 터미널)
 ```
+
+LLM 키 없이 파이프라인만 보려면 `.env` 에 `AGENT_RUNTIME=placeholder` 를 둔다.
+
+## LLM 모델 설정
+
+Agent Loop 는 역할마다 다른 모델을 쓴다 (`model_configs`, 화면 C-03 “모델 구성”). OpenAI · DeepSeek · Gemini 는 모두 각 사의 **OpenAI 호환 Chat Completions API** 로 호출하며, provider 별 차이는 [`src/llm/provider-params.ts`](src/llm/provider-params.ts) 에서 맞춘다.
+
+| provider `kind` | 기본 base URL | 추론 강도(`reasoning_effort`) 매핑 |
+|---|---|---|
+| `deepseek` | `https://api.deepseek.com` | `off` → `thinking: {type: "disabled"}`, 그 외 → `reasoning_effort` (low · high · max) |
+| `openai` | `https://api.openai.com/v1` | `off` → 보내지 않음, 그 외 → `reasoning_effort` (low · medium · high). 출력 토큰은 `max_completion_tokens` |
+| `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai` | `off` → 보내지 않음, 그 외 → `reasoning_effort` |
+| `openai_compatible` | `providers.base_url` 필수 | `reasoning_effort` |
+
+데모 시드의 기본값 (DeepSeek, 실측 기반):
+
+| 역할 | 모델 | 추론 | 대체 모델 | 이유 |
+|---|---|---|---|---|
+| planner | `deepseek-flash` | off | `deepseek-v4-pro` | 계획 단계가 첫 토큰을 늦추므로 빠른 설정 (v4-pro · low 4.1s → flash · off 2~3s) |
+| executor | `deepseek-flash` | off | `deepseek-v4-pro` | 답변 스트리밍 |
+| evaluator | `deepseek-flash` | low | — | JSON 검증 |
+
+OpenAI · Gemini 를 쓰려면 `providers` 에 행(`kind`, `secret_ref`)을 추가하고 `model_configs` 의 provider · model 을 바꾼 뒤, `DEV_SECRETS` 에 같은 `secret_ref` 로 키를 넣는다. 모델 설정 Admin API(C-03)는 다음 단계다.
 
 위젯 흐름을 직접 호출해 보기:
 
@@ -62,6 +85,8 @@ npm run lint && npm run typecheck && npm run build
 
 e2e 가 확인하는 것: bootstrap(허용 도메인 · identity token 서명 · aud · 수명), 세션 Origin 고정, 메시지 → 작업 → Worker → SSE 이벤트 순서, delta 와 최종 메시지 일치, 단계 · checkpoint 저장, `Last-Event-ID` 재전송(중복 없음), 대화당 진행 작업 1개(동시 요청 포함), Idempotency-Key(동시 재시도 포함), 중지, 클라이언트 연결 종료 시 구독 정리, 테넌트 · 사용자 간 격리.
 
+Agent Loop 는 가짜 OpenAI 호환 서버([test/fake-llm-server.ts](test/fake-llm-server.ts))로 검증한다: 계획 → reason → 중간 평가 → 답변 → 검증 순서, 재계획(`plan.revised`), 계획 JSON 오류 시 기본 계획, 모델 오류 · API Key 없음 → `task.failed`, 역할별 모델 · 추론 파라미터 · 인증 헤더, 플랫폼 · 테넌트 지침, 대화 기록 포함, 토큰 사용량 기록. 실제 DeepSeek 로는 수동으로 확인했다(아래).
+
 ## 구현 현황
 
 | 범위 | 상태 |
@@ -69,7 +94,9 @@ e2e 가 확인하는 것: bootstrap(허용 도메인 · identity token 서명 ·
 | 프로젝트 · DB 기반 (스키마, RLS, 마이그레이션, 시드) | 완료 |
 | Widget API: `POST /v1/widget/bootstrap`, 대화 · 메시지, 작업 목록 · 상세 · 중지, SSE (`Last-Event-ID` 재전송, 응답 스트림 스냅샷) | 완료 |
 | 비동기 실행: BullMQ `agent-tasks`, Worker heartbeat, 단계 · checkpoint 저장, 최대 단계 · 시간 제한, 중지 처리 | 완료 |
-| Agent Runtime | **임시 구현** (`PlaceholderAgentRuntime`) — LLM · Tool 없이 파이프라인만 검증. `AGENT_RUNTIME` 토큰 뒤에서 Agent Loop 로 교체 |
+| LLM 연동: OpenAI 호환 클라이언트(OpenAI · DeepSeek · Gemini), 스트리밍 · tool call 파싱 · 재시도 · 대체 모델 · 역할별 추론 강도 | 완료 — DeepSeek 는 실제 API 로 확인, OpenAI · Gemini 는 키가 없어 단위 테스트(요청 형식)까지만 |
+| Agent Loop: Context → Plan → Execute(reason) → Evaluate → 재계획 → Respond(스트리밍) → Verify, 토큰 예산 | 완료 — Tool · Skill · Memory 는 아직 없음 (계획은 reason · respond 단계만) |
+| 비용 계산 (`tasks.cost_amount`) | 다음 단계 — 모델별 단가표 필요. 토큰 수는 기록 중 |
 | 승인 결정 · 재개(`resume`) · steer · 업로드 · 산출물 다운로드 | 다음 단계 (명세 §2.4 · §2.5 · §2.6) |
 | `agent-recovery` · `approval-expiry` · `memory-ingest` 등 주기 잡 | 다음 단계 (명세 §6) |
 | Admin API · 콘솔 | 다음 단계 |
@@ -89,17 +116,30 @@ src/
 ├── conversations/                 대화 · 메시지 → 작업 생성
 ├── tasks/                         작업 조회 · 중지 · SSE 엔드포인트, 계획 · 뷰 타입
 ├── events/                        task_events 아웃박스 · Redis 발행 · SSE 스트림
-├── agent-runtime/                 AgentRuntime 계약 · RunContext · 임시 런타임
+├── llm/                           OpenAI 호환 클라이언트 · provider 별 파라미터 · JSON 출력 파싱 · 클라이언트 팩토리
+├── agent-runtime/                 Agent Loop · 모델 라우터(역할별 · 대체) · Context · Executor · 프롬프트 · RunContext
+├── planner/ · evaluator/          계획 생성 · 수정 / 중간 평가 · 최종 검증
 ├── workers/                       agent-tasks 프로세서 · 작업 실행 수명주기
 └── agents/                        실행 · Memory 정책 스키마
 ```
+
+### 실제 DeepSeek 확인 결과 (2026-11-12)
+
+| 요청 | 계획 | 소요 · 첫 토큰 | 검증 |
+|---|---|---|---|
+| 환불 정책 문의 (단순) | respond 1단계 | 10.4s · 5.3s (planner v4-pro · low) | 4개 중 1개 실패 — “부서 확인을 도와드리겠다”는 수행 불가 제안을 Evaluator 가 잡음 → 답변 프롬프트에 “Tool 없음 · 제안 금지” 추가 |
+| 할인 방식 3가지 비교 · 추천 (복잡) | reason 2 + respond | 31s · 21.6s | 4/4 통과 |
+| 같은 대화 후속 질문 | reason 1 + respond | 10.9s · 8.2s | 4/4 통과, 이전 답변 내용(조건 · 수치)을 이어서 사용 |
+| 환불 + 주문 조회 요청 (프롬프트 수정 후) | reason 1 + respond | 15.8s · 11.5s | 4/4 통과, 주문 조회가 불가함을 밝힘 |
+
+reason 단계가 있으면 첫 토큰이 늦다(그동안 위젯은 계획 · 단계 진행을 SSE 로 보여 준다). reason 결과 스트리밍 · 단계 병렬화는 이후 개선 대상.
 
 ## 개발 순서 (기획안 12장)
 
 1. NestJS 프로젝트 · DB 기반 ✅
 2. Widget 과 SSE 스트리밍 ✅
-3. Agent Loop ← 다음
-4. Tool Registry · Tool Dispatcher
+3. Agent Loop ✅ (OpenAI · DeepSeek · Gemini)
+4. Tool Registry · Tool Dispatcher ← 다음
 5. MCP 동적 연결
 6. SKILL.md Loader
 7. BullMQ 비동기 작업 (기본 파이프라인 ✅, 복구 · 주기 잡은 8단계와 함께)

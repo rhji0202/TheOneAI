@@ -14,7 +14,8 @@ export const stepStatusSchema = z.enum([
 export const planStepSchema = z.object({
   index: z.number().int().min(1),
   title: z.string(),
-  kind: z.enum(['tool', 'skill', 'respond']),
+  /** reason = Tool 없이 분석 · 초안 작성, respond = 사용자에게 보내는 최종 답변 */
+  kind: z.enum(['reason', 'tool', 'skill', 'respond']),
   toolName: z.string().optional(),
   skill: z.object({ name: z.string(), version: z.string() }).optional(),
   requiresApproval: z.boolean(),

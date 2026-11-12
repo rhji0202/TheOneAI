@@ -9,7 +9,6 @@ import {
   waitFor,
 } from './helpers.js';
 import { RedisService } from '../src/infrastructure/redis/redis.service.js';
-import { WIDGET_A, WIDGET_B } from './test-env.js';
 
 interface TaskSummary {
   id: string;
@@ -79,10 +78,10 @@ async function waitForStatus(token: string, taskId: string, statuses: string[]) 
 describe('POST /v1/widget/bootstrap', () => {
   it('허용 도메인 + 올바른 identity token 이면 세션과 위젯 초기 데이터를 준다', async () => {
     const res = await api<BootstrapBody>(ctx.baseUrl, 'POST', '/v1/widget/bootstrap', {
-      origin: WIDGET_A.origin,
+      origin: ctx.widgets.A.origin,
       body: {
-        publicKey: WIDGET_A.publicKey,
-        identityToken: await identityToken(WIDGET_A, 'user-boot'),
+        publicKey: ctx.widgets.A.publicKey,
+        identityToken: await identityToken(ctx.widgets.A, 'user-boot'),
       },
     });
     expect(res.status).toBe(200);
@@ -100,10 +99,10 @@ describe('POST /v1/widget/bootstrap', () => {
     const boot = async () =>
       (
         await api<{ endUser: { id: string } }>(ctx.baseUrl, 'POST', '/v1/widget/bootstrap', {
-          origin: WIDGET_A.origin,
+          origin: ctx.widgets.A.origin,
           body: {
-            publicKey: WIDGET_A.publicKey,
-            identityToken: await identityToken(WIDGET_A, 'user-same'),
+            publicKey: ctx.widgets.A.publicKey,
+            identityToken: await identityToken(ctx.widgets.A, 'user-same'),
           },
         })
       ).body.endUser.id;
@@ -113,7 +112,10 @@ describe('POST /v1/widget/bootstrap', () => {
   it('허용되지 않은 Origin 은 403 ORIGIN_NOT_ALLOWED', async () => {
     const res = await api(ctx.baseUrl, 'POST', '/v1/widget/bootstrap', {
       origin: 'https://evil.example.net',
-      body: { publicKey: WIDGET_A.publicKey, identityToken: await identityToken(WIDGET_A, 'u') },
+      body: {
+        publicKey: ctx.widgets.A.publicKey,
+        identityToken: await identityToken(ctx.widgets.A, 'u'),
+      },
     });
     expect(res.status).toBe(403);
     expect(res.headers.get('content-type')).toContain('application/problem+json');
@@ -122,10 +124,10 @@ describe('POST /v1/widget/bootstrap', () => {
 
   it('다른 위젯 Secret 으로 서명한 토큰은 401 IDENTITY_TOKEN_INVALID', async () => {
     const res = await api(ctx.baseUrl, 'POST', '/v1/widget/bootstrap', {
-      origin: WIDGET_A.origin,
+      origin: ctx.widgets.A.origin,
       body: {
-        publicKey: WIDGET_A.publicKey,
-        identityToken: await identityToken(WIDGET_A, 'u', { secret: WIDGET_B.secret }),
+        publicKey: ctx.widgets.A.publicKey,
+        identityToken: await identityToken(ctx.widgets.A, 'u', { secret: ctx.widgets.B.secret }),
       },
     });
     expect(res.status).toBe(401);
@@ -134,8 +136,8 @@ describe('POST /v1/widget/bootstrap', () => {
 
   it('identity token 이 없으면 401 IDENTITY_TOKEN_REQUIRED', async () => {
     const res = await api(ctx.baseUrl, 'POST', '/v1/widget/bootstrap', {
-      origin: WIDGET_A.origin,
-      body: { publicKey: WIDGET_A.publicKey },
+      origin: ctx.widgets.A.origin,
+      body: { publicKey: ctx.widgets.A.publicKey },
     });
     expect(res.status).toBe(401);
     expect(res.body).toMatchObject({ code: 'IDENTITY_TOKEN_REQUIRED' });
@@ -143,14 +145,14 @@ describe('POST /v1/widget/bootstrap', () => {
 
   it('없는 공개 키는 403 WIDGET_DISABLED, 형식 오류는 400 VALIDATION_FAILED', async () => {
     const unknown = await api(ctx.baseUrl, 'POST', '/v1/widget/bootstrap', {
-      origin: WIDGET_A.origin,
+      origin: ctx.widgets.A.origin,
       body: { publicKey: 'wk_pub_unknown' },
     });
     expect(unknown.status).toBe(403);
     expect(unknown.body).toMatchObject({ code: 'WIDGET_DISABLED' });
 
     const invalid = await api(ctx.baseUrl, 'POST', '/v1/widget/bootstrap', {
-      origin: WIDGET_A.origin,
+      origin: ctx.widgets.A.origin,
       body: { publicKey: 'nope' },
     });
     expect(invalid.status).toBe(400);
@@ -169,7 +171,7 @@ describe('Widget API 인증', () => {
   });
 
   it('bootstrap 때와 다른 Origin 에서 온 요청은 403', async () => {
-    const token = await startSession(ctx.baseUrl, WIDGET_A, 'user-origin');
+    const token = await startSession(ctx.baseUrl, ctx.widgets.A, 'user-origin');
     const res = await api(ctx.baseUrl, 'GET', '/v1/tasks', {
       token,
       origin: 'https://evil.example.net',
@@ -185,7 +187,7 @@ describe('메시지 → 작업 → SSE', () => {
   let events: SseEvent[];
 
   beforeAll(async () => {
-    token = await startSession(ctx.baseUrl, WIDGET_A, 'user-flow');
+    token = await startSession(ctx.baseUrl, ctx.widgets.A, 'user-flow');
     const conversationId = await newConversation(token);
     const res = await send(token, conversationId, '3월 매출 리포트 만들어줘');
     expect(res.status).toBe(202);
@@ -235,7 +237,12 @@ describe('메시지 → 작업 → SSE', () => {
       status: 'completed',
       progress: { completed: 1, total: 1 },
       plan: { version: 1, steps: [expect.objectContaining({ index: 1, status: 'succeeded' })] },
-      result: { verification: [{ label: '응답 메시지 생성', passed: true }] },
+      result: {
+        verification: [
+          { label: '요청에 답함', passed: true },
+          { label: '사용자 언어로 작성', passed: true },
+        ],
+      },
     });
     const completed = events.find((e) => e.event === 'message.completed')!.data as {
       message: { id: string };
@@ -284,7 +291,7 @@ describe('메시지 → 작업 → SSE', () => {
 
 describe('대화당 진행 작업은 하나', () => {
   it('진행 중이면 409 TASK_ALREADY_ACTIVE, 끝나면 다시 보낼 수 있다', async () => {
-    const token = await startSession(ctx.baseUrl, WIDGET_A, 'user-active');
+    const token = await startSession(ctx.baseUrl, ctx.widgets.A, 'user-active');
     const conversationId = await newConversation(token);
     const first = await send(token, conversationId, '첫 번째 요청');
     expect(first.status).toBe(202);
@@ -300,7 +307,7 @@ describe('대화당 진행 작업은 하나', () => {
   });
 
   it('동시에 보내도 하나만 작업이 된다 (DB 부분 유니크 인덱스)', async () => {
-    const token = await startSession(ctx.baseUrl, WIDGET_A, 'user-race');
+    const token = await startSession(ctx.baseUrl, ctx.widgets.A, 'user-race');
     const conversationId = await newConversation(token);
     const results = await Promise.all(
       Array.from({ length: 5 }, (_, i) => send(token, conversationId, `동시 요청 ${i}`)),
@@ -315,7 +322,7 @@ describe('대화당 진행 작업은 하나', () => {
 
 describe('Idempotency-Key', () => {
   it('같은 키 + 같은 본문이면 같은 작업을, 다른 본문이면 409 를 준다', async () => {
-    const token = await startSession(ctx.baseUrl, WIDGET_A, 'user-idem');
+    const token = await startSession(ctx.baseUrl, ctx.widgets.A, 'user-idem');
     const conversationId = await newConversation(token);
     const first = await send(token, conversationId, '멱등 요청', 'idem-key-0001');
     const again = await send(token, conversationId, '멱등 요청', 'idem-key-0001');
@@ -330,7 +337,7 @@ describe('Idempotency-Key', () => {
   });
 
   it('같은 키로 동시에 재시도해도 작업은 하나다', async () => {
-    const token = await startSession(ctx.baseUrl, WIDGET_A, 'user-idem-race');
+    const token = await startSession(ctx.baseUrl, ctx.widgets.A, 'user-idem-race');
     const conversationId = await newConversation(token);
     const results = await Promise.all(
       Array.from({ length: 4 }, () =>
@@ -345,7 +352,7 @@ describe('Idempotency-Key', () => {
 
 describe('SSE 연결 관리', () => {
   it('클라이언트가 끊으면 서버도 구독을 정리한다', async () => {
-    const token = await startSession(ctx.baseUrl, WIDGET_A, 'user-disconnect');
+    const token = await startSession(ctx.baseUrl, ctx.widgets.A, 'user-disconnect');
     const conversationId = await newConversation(token);
     const sent = await send(token, conversationId, '연결을 끊어 볼게요');
     const channel = `task:${sent.body.task.id}`;
@@ -367,7 +374,7 @@ describe('SSE 연결 관리', () => {
 
 describe('중지', () => {
   it('실행 직후 중지하면 cancelled 로 끝나고 SSE 도 닫힌다', async () => {
-    const token = await startSession(ctx.baseUrl, WIDGET_A, 'user-cancel');
+    const token = await startSession(ctx.baseUrl, ctx.widgets.A, 'user-cancel');
     const conversationId = await newConversation(token);
     const sent = await send(token, conversationId, '오래 걸리는 요청을 처리해 줘');
     const cancel = await api<TaskSummary>(
@@ -395,12 +402,12 @@ describe('중지', () => {
 
 describe('테넌트 격리', () => {
   it('다른 테넌트의 대화 · 작업 · 이벤트에 접근할 수 없다 (404)', async () => {
-    const tokenA = await startSession(ctx.baseUrl, WIDGET_A, 'user-iso');
+    const tokenA = await startSession(ctx.baseUrl, ctx.widgets.A, 'user-iso');
     const conversationId = await newConversation(tokenA);
     const sent = await send(tokenA, conversationId, '테넌트 A 요청');
     await waitForStatus(tokenA, sent.body.task.id, ['completed']);
 
-    const tokenB = await startSession(ctx.baseUrl, WIDGET_B, 'user-iso');
+    const tokenB = await startSession(ctx.baseUrl, ctx.widgets.B, 'user-iso');
     expect(
       (await api(ctx.baseUrl, 'GET', `/v1/tasks/${sent.body.task.id}`, { token: tokenB })).status,
     ).toBe(404);
@@ -424,8 +431,8 @@ describe('테넌트 격리', () => {
   });
 
   it('같은 테넌트라도 다른 사용자의 작업은 볼 수 없다', async () => {
-    const owner = await startSession(ctx.baseUrl, WIDGET_A, 'user-owner');
-    const other = await startSession(ctx.baseUrl, WIDGET_A, 'user-other');
+    const owner = await startSession(ctx.baseUrl, ctx.widgets.A, 'user-owner');
+    const other = await startSession(ctx.baseUrl, ctx.widgets.A, 'user-other');
     const conversationId = await newConversation(owner);
     const sent = await send(owner, conversationId, '내 작업');
     expect(
