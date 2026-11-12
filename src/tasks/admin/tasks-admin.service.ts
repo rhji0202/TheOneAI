@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import { z } from 'zod';
 import type { AdminSession } from '../../admin/auth/admin-session.js';
@@ -45,6 +44,7 @@ const rowSelect = {
   ...taskSummarySelect,
   agent: { select: { name: true } },
   endUserId: true,
+  endUser: { select: { pseudonym: true } },
   startedAt: true,
   workerId: true,
   recoveryCount: true,
@@ -106,19 +106,21 @@ export class TasksAdminService {
         },
       });
       if (!task) throw AppError.notFound();
-      const [steps, planEvents, approvals, toolStats] = await Promise.all([
-        tx.taskStep.findMany({ where: { taskId }, orderBy: { seq: 'asc' } }),
-        tx.taskEvent.findMany({
-          where: { taskId, type: { in: ['plan.created', 'plan.revised'] } },
-          orderBy: { id: 'asc' },
-        }),
-        tx.approval.findMany({ where: { taskId }, orderBy: { createdAt: 'asc' } }),
-        tx.toolExecution.aggregate({
-          where: { taskId },
-          _count: { _all: true },
-          _sum: { attempt: true },
-        }),
-      ]);
+      // 한 트랜잭션(연결 하나)이므로 차례로 읽는다
+      const steps = await tx.taskStep.findMany({ where: { taskId }, orderBy: { seq: 'asc' } });
+      const planEvents = await tx.taskEvent.findMany({
+        where: { taskId, type: { in: ['plan.created', 'plan.revised'] } },
+        orderBy: { id: 'asc' },
+      });
+      const approvals = await tx.approval.findMany({
+        where: { taskId },
+        orderBy: { createdAt: 'asc' },
+      });
+      const toolStats = await tx.toolExecution.aggregate({
+        where: { taskId },
+        _count: { _all: true },
+        _sum: { attempt: true },
+      });
       const policies = await tx.toolPolicy.findMany({
         select: { level: true, allowTaskScope: true },
       });
@@ -228,7 +230,7 @@ function toRow(task: Row): AdminTaskRow {
   return {
     ...toTaskSummary(task),
     agentName: task.agent.name,
-    endUserPseudonym: `u-${createHash('sha256').update(task.endUserId).digest('hex').slice(0, 10)}`,
+    endUserPseudonym: task.endUser.pseudonym,
     elapsedMs: (task.finishedAt ?? new Date()).getTime() - started.getTime(),
     workerId: task.workerId,
     recoveryCount: task.recoveryCount,

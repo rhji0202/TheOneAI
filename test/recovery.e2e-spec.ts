@@ -296,7 +296,7 @@ describe('콘솔 작업 조회 (C-02)', () => {
     }>(ctx.baseUrl, 'GET', '/v1/admin/tasks?status=completed&limit=50', { token: ownerToken });
     expect(list.status).toBe(200);
     const recovered = list.body.items.find((t) => t.status === 'completed')!;
-    expect(recovered.endUserPseudonym).toMatch(/^u-[0-9a-f]{10}$/);
+    expect(recovered.endUserPseudonym).toEqual(expect.any(String));
 
     const pauseTask = (await tenantRows((tx) =>
       tx.task.findFirst({ where: { title: { contains: '#pause' } }, select: { id: true } }),

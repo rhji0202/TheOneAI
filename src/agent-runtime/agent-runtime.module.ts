@@ -30,6 +30,6 @@ import { PlaceholderAgentRuntime } from './placeholder-agent-runtime.js';
       ): AgentRuntime => (config.agentRuntime === 'placeholder' ? placeholder : loop),
     },
   ],
-  exports: [AGENT_RUNTIME],
+  exports: [AGENT_RUNTIME, ModelRouterFactory],
 })
 export class AgentRuntimeModule {}

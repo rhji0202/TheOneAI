@@ -40,6 +40,8 @@ export const memoryPolicySchema = z.object({
     .default(['episodic', 'semantic', 'procedural']),
   retentionDays: z.number().int().min(1).max(3_650).default(90),
   topK: z.number().int().min(0).max(50).default(5),
+  /** 유사도와 상관없이 늘 넣는 사용자 프로필(user 범위 semantic) 개수 */
+  profileSize: z.number().int().min(0).max(10).default(3),
   minConfidence: z.number().min(0).max(1).default(0.5),
 });
 export type MemoryPolicy = z.infer<typeof memoryPolicySchema>;

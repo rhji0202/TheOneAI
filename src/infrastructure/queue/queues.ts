@@ -14,6 +14,13 @@ export interface AgentTaskJobData {
 /** 등록된 MCP 서버 재탐색 (주기 잡 — 서버별 주기는 MCP_SYNC_INTERVAL_SEC) */
 export const MCP_SYNC_QUEUE = 'mcp-sync';
 
+/** 작업 완료 후 기억 추출 · 저장 */
+export const MEMORY_INGEST_QUEUE = 'memory-ingest';
+export interface MemoryIngestJobData {
+  tenantId: string;
+  taskId: string;
+}
+
 /** heartbeat 가 끊긴 작업을 찾아 재투입 (주기 잡) */
 export const AGENT_RECOVERY_QUEUE = 'agent-recovery';
 

@@ -123,6 +123,8 @@ Agent Loop 는 가짜 OpenAI 호환 서버([test/fake-llm-server.ts](test/fake-l
 
 재개 · 복구는 [test/recovery.e2e-spec.ts](test/recovery.e2e-spec.ts) 가 확인한다: 실행 중 일시정지 → 현재 단계 마치고 paused → checkpoint 재개(끝난 단계 건너뜀), 답변 실패 → 재개 시 분석 반복 없이 완료 · 실패 실행 토큰 합산, 재개 조건(완료 · checkpoint 없음 · 처음부터), 답변 중 Worker 유실 → 복구 잡이 checkpoint 부터(답변 메시지 하나만), 복구 한도 초과, 살아 있는 작업은 복구 안 함, Worker 종료 시 넘기기, 실행 중 추가 지시 반영 · 끝난 작업 거부, 콘솔 목록 · 트레이스 · 단계 상세.
 
+Memory 는 [test/memory.e2e-spec.ts](test/memory.e2e-spec.ts) 가 확인한다: 작업 완료 → 기억 저장(사용자 사실 · 요약은 user 범위, 처리 요령은 agent 범위, 확신도 → 검증 필요, 보존 90일, 1536차원 임베딩), 같은 내용은 병합(출처만 추가), 숨은 지시문 → 격리 · 카드 번호 마스킹, 같은 사용자의 새 대화에서 계획 · 답변 프롬프트에 기억 포함(격리 항목 제외 · 사용 횟수), 주제가 달라도 사용자 프로필은 포함, 다른 사용자에게는 user 범위 기억이 보이지 않음, 콘솔 의미 · 키워드 검색 · 격리 해제 · 수정(재임베딩) · 고정 · 삭제, 사용자 데이터 삭제 후 같은 사용자는 새 사용자로 시작.
+
 Skill 은 [test/skills.e2e-spec.ts](test/skills.e2e-spec.ts) 가 확인한다: zip · SKILL.md 오류(줄 번호), Viewer 업로드 거부, 신뢰 검증(스크립트 경고 · 숨은 지시문 실패 → 활성화 불가), 중복 · 버전 충돌, 파일 미리보기 · 비교, 활성화 → Registry, 허용 목록 전에는 계획에 안 보임, 초안 → 배포, 위젯 추천 카드, 실행(계획에는 metadata 만 · Skill 단계에서 본문 · 파일 로딩 · allowed-tools + skill.read_file 만 제공), allowed-tools 밖 호출 거부, 일반 단계엔 skill.read_file 없음, 새 버전 활성화 후 새 버전 사용, 저장소 파일 변조 시 사용 안 함, 비활성화 · 감사 로그.
 
 MCP 는 [test/mcp.e2e-spec.ts](test/mcp.e2e-spec.ts) 가 공식 SDK v2 로 만든 MCP 서버([test/fake-mcp-server.ts](test/fake-mcp-server.ts))로 확인한다: 프로토콜 협상(최신 서버는 `server/discover` 로 2026-07-28, 2025 계열 전용 서버는 `initialize` 로 내려감, 2025 계열로 기록된 서버는 재사용 연결에서 탐색 생략, 401 은 인증 실패로), 콘솔 로그인 · 역할(Viewer 는 조회만, 사설망 허용은 Owner 만, 위젯 토큰 거부), SSRF(사설 IP 로 해석되는 호스트를 연결 시점 DNS 검사로 차단, 메타데이터 IP 차단), 등록 마법사(연결 테스트 · API Key 전달 · 탐색 검증 · 보안 실패 Tool 제외 · 등록 → Registry 버전 · 감사 로그), 테넌트 격리, Agent 허용 목록(초안 → 배포, 허용 전 호출은 `not_allowed`), MCP Tool 실행(structuredContent · JSON Schema 인자 검증 · isError 는 재시도 안 함), 재탐색 변경 감지(검토 전에는 고정된 이전 정의 사용 → 승인 시 새 버전, 새 Tool 은 꺼진 채 추가), 서버 장애 → `error` · `tool_unavailable` → 복구 · 헬스, 연결 정보 변경 시 재검토, 비활성화 · 삭제(Secret 삭제 · 이름 재사용).
@@ -137,7 +139,7 @@ Tool 은 [test/tools.e2e-spec.ts](test/tools.e2e-spec.ts) 가 확인한다: tool
 | Widget API: `POST /v1/widget/bootstrap`, 대화 · 메시지, 작업 목록 · 상세 · 중지, SSE (`Last-Event-ID` 재전송, 응답 스트림 스냅샷) | 완료 |
 | 비동기 실행: BullMQ `agent-tasks`, Worker heartbeat, 단계 · checkpoint 저장, 최대 단계 · 시간 제한, 중지 처리 | 완료 |
 | LLM 연동: OpenAI 호환 클라이언트(OpenAI · DeepSeek · Gemini), 스트리밍 · tool call 파싱 · 재시도 · 대체 모델 · 역할별 추론 강도 | 완료 — DeepSeek 는 실제 API 로 확인, OpenAI · Gemini 는 키가 없어 단위 테스트(요청 형식)까지만 |
-| Agent Loop: Context → Plan → Execute(reason · tool) → Evaluate → 재계획 → Respond(스트리밍) → Verify, 토큰 예산 | 완료 — Skill · Memory 는 아직 없음 |
+| Agent Loop: Context → Plan → Execute(reason · tool · skill) → Evaluate → 재계획 → Respond(스트리밍) → Verify, 토큰 예산 | 완료 |
 | 콘솔 인증: `POST /v1/admin/auth/login`(scrypt) · `GET /v1/admin/me`, 역할 가드(Owner > Admin > Operator > Viewer, 매 요청 DB 재확인), 감사 로그 | 완료 — refresh 쿠키 회전 · 로그아웃은 콘솔 UI 단계 |
 | MCP (C-04 · C-05): Streamable HTTP 연결(공식 SDK v2 — 2026-07-28 우선, 2025 계열 서버 자동 호환), SSRF 방어(스킴 · 호스트 · DNS 해석 · 연결 시점 IP 검사, 메타데이터 IP 항상 차단), API Key(Secret 저장소), 연결 테스트 · Tool 탐색 · 검증(JSON Schema · 숨은 지시문 · 보이지 않는 문자 · 민감정보 · 제안 등급), 포함 Tool · 등록 → 새 Registry 버전, Tool 정책, 재탐색 변경 감지 → 운영자 승인, `mcp-sync` 주기 잡(장애 → error · 복구, 헬스 p95 · 오류율), 비활성화 · 삭제, Registry 버전 · diff API | 완료 — stdio(Docker Sandbox) 실행형 · OAuth 인증 · 이미지 서명 검증은 Sandbox 단계 |
 | Skill (C-06): zip 업로드(zip-slip · 심볼릭 링크 · 크기 · 파일 수 검사), SKILL.md 파싱(줄 번호 오류), 신뢰 검증 6항목, 버전(내용 해시 · 중복 · 충돌) · 파일 미리보기 · 비교 · 활성화 → 새 Registry 버전 · 비활성화, Agent 허용 목록, 위젯 추천 카드. 실행: 계획에는 metadata 만, `skill` 단계에서 본문 · 파일 목록 로딩, `skill.read_file`, allowed-tools 로 Tool 범위 제한(서버 강제), 저장 파일 해시 재확인 | 완료 — Git 출처 · 서명 · test-runs · 스크립트 실행(Sandbox) · MCP 서버 Skill 은 이후 |
@@ -146,7 +148,8 @@ Tool 은 [test/tools.e2e-spec.ts](test/tools.e2e-spec.ts) 가 확인한다: tool
 | 비용 계산 (`tasks.cost_amount`) | 다음 단계 — 모델별 단가표 필요. 토큰 수는 기록 중 |
 | 재개 · 복구: checkpoint 재개(계획 · 노트 · 다음 단계 · 보낸 답변) · 처음부터 다시 · 일시정지 · 실행 중 추가 지시(steer) · agent-recovery(heartbeat 끊김 → 마지막 checkpoint 부터, 한도 3회) · Worker 종료 시 넘기기 · 소유권 확인 · 콘솔 작업 목록 · 트레이스 · 단계 상세 · 일시정지 · 중지 · 재개 | 완료 |
 | 승인 결정 · 업로드 · 산출물 다운로드 | 다음 단계 (명세 §2.5 · §2.6) |
-| `approval-expiry` · `memory-ingest` · `metrics-rollup` · `retention` 주기 잡 | 다음 단계 (명세 §6) — `agent-recovery` · `mcp-sync` 는 완료 |
+| Memory (C-08): 작업 완료 → `memory-ingest`(Memory 역할이 사용자 사실 · 선호 / 요약 / 처리 요령 추출, 마스킹 · 지시문 격리 · 중복 병합 · 보존 기간), 임베딩(`local` 해시 · OpenAI · Gemini), Context 구성(사용자 프로필 + pgvector 유사도, 사용자 격리), 콘솔 검색(의미 · 키워드) · 격리 해제 · 수정(재임베딩) · 고정 · 삭제 · 사용자 데이터 삭제 | 완료 — 운영 임베딩은 키가 없어 `local` 로만 확인 |
+| `approval-expiry` · `metrics-rollup` · `retention` 주기 잡 | 다음 단계 (명세 §6) — `agent-recovery` · `mcp-sync` · `memory-ingest` 는 완료 |
 | Admin API · 콘솔 | 다음 단계 |
 | 요청 제한 · OpenTelemetry · Vault 연동 (`SECRETS_BACKEND=local` 은 개발 전용, production 에서 시작 거부) | 다음 단계 |
 
@@ -159,7 +162,7 @@ src/
 ├── bootstrap/                     공통 HTTP 설정 (버전, CORS, 검증, problem+json)
 ├── config/                        환경 변수 검증 (zod)
 ├── common/                        오류(AppError · ProblemDetailsFilter), 페이지네이션, trace id, UUIDv7
-├── infrastructure/                database(PrismaService.withTenant) · redis(공유 Pub/Sub) · queue · secrets
+├── infrastructure/                database(PrismaService.withTenant, 트랜잭션 안 쿼리 직렬화) · redis(공유 Pub/Sub) · queue · secrets · storage
 ├── widget/                        bootstrap · identity token 검증 · 세션 토큰(ES256) · 세션 가드 · Origin 검사
 ├── conversations/                 대화 · 메시지 → 작업 생성
 ├── tasks/                         작업 조회 · 중지 · SSE 엔드포인트, 계획 · 뷰 타입
@@ -171,7 +174,8 @@ src/
 ├── mcp/                           MCP 연결(SDK · SSRF 가드) · 탐색 · 검사 · 변경 감지 · 재탐색(mcp-sync) · 결과 변환 · 관리 API
 ├── skills/                        Skill 번들(zip) · SKILL.md 파서 · 신뢰 검증 · 저장(내용 주소) · 실행 로딩 · skill.read_file · 관리 API
 ├── admin/                         콘솔 인증(로그인 · 토큰 · 역할 가드) · 감사 로그
-├── workers/                       agent-tasks 프로세서 · 작업 실행 수명주기
+├── memory/                        임베딩 · MemoryRetriever(프로필 · 의미 · 키워드) · memory-ingest(추출 · 격리 · 병합) · 관리 API
+├── workers/                       agent-tasks · agent-recovery · memory-ingest 프로세서 · 작업 실행 수명주기
 └── agents/                        실행 · Memory 정책 스키마, Agent 초안 · 배포 API(MCP 허용 목록)
 ```
 
@@ -207,6 +211,14 @@ Skill 연결 후 (2026-11-12, `refund-helper` 를 올려 검증 6항목 통과 �
 |---|---|
 | “주문 A-1003 단순 변심으로 환불하면 얼마 돌려받아요? 상품 가격은 32,000원” | 계획: 주문 조회(tool) → `refund-helper`(skill) → 답변. Skill 단계에서 본문을 따라 `skill.read_file` 로 환불 규정을 읽고 `builtin.calculate` 로 32,000 − 6,000 = 26,000원 계산(앞 단계 조회 결과는 다시 부르지 않음). 7일 기한 · 미사용 조건 · 신청 방법 · 환불 시점을 규정대로 안내하고, 결제 금액은 사용자 입력이라 교차 확인하지 못했다고 밝힘. 검증 4/4 (16.0s) |
 
+Memory 연결 후 (2026-11-12, 임베딩 `local`, Memory 역할 = evaluator `deepseek-flash`):
+
+| 요청 | 결과 |
+|---|---|
+| 사용자 A: “저는 숫자 비교는 항상 표로 받는 게 좋고, 답변은 짧게 해 주세요. 월 3만9천원 24개월과 월 4만5천원 18개월 총액 비교해 줘” | 표 + 한 줄 답변(9.6s). 작업 뒤 `memory-ingest` 가 semantic(“숫자 비교는 표로, 답변은 짧게”, 확신도 0.9) · episodic(요청과 결과, 0.6 → 검증 필요) 저장. 처음 프롬프트에서는 같은 선호를 agent 범위 처리 요령(“숫자 비교는 표로 간결하게”)으로도 저장해 다른 사용자에게 퍼질 수 있었음 → “한 사용자의 선호는 처리 요령으로 만들지 않는다” 규칙 추가 후 user 범위에만 저장 |
+| 사용자 A, 새 대화: “요금제 두 개 비교해 줘. 월 5만5천원 12개월이랑 월 2만9천원 24개월” | 처음에는 선호 기억이 유사도 기준(0.15)에 못 미쳐 빠지고(해시 임베딩은 단어가 겹쳐야 함) 요약만 들어가 답이 길었음 → 사용자 프로필(user 범위 semantic)을 유사도와 상관없이 넣도록 바꾼 뒤 프로필 + 요약(0.359)이 들어가 표 + 한 줄로 답함(12.4s) |
+| 사용자 B, 같은 질문 | 기억 0개 (A 의 기억이 보이지 않음), 제목 · 여러 절이 있는 긴 답변 |
+
 ## 개발 순서 (기획안 12장)
 
 1. NestJS 프로젝트 · DB 기반 ✅
@@ -217,7 +229,7 @@ Skill 연결 후 (2026-11-12, `refund-helper` 를 올려 검증 6항목 통과 �
 6. SKILL.md Loader ✅ (zip 업로드 · 파싱 · 신뢰 검증 · 버전 · 활성화, metadata 기반 선택 → Skill 단계에서만 로딩, allowed-tools 범위)
 7. BullMQ 비동기 작업 ✅ (agent-tasks · agent-recovery · mcp-sync 주기 잡, Worker 종료 시 넘기기)
 8. Checkpoint · Recovery ✅ (checkpoint 재개 · 처음부터 · 일시정지 · 추가 지시 · Worker 유실 복구 · 복구 한도)
-9. Memory ← 다음
-10. Permission · Approval
+9. Memory ✅ (memory-ingest 추출 · 마스킹 · 격리 · 병합, 임베딩, 사용자 프로필 + 유사도 검색, 콘솔 관리 · 사용자 데이터 삭제)
+10. Permission · Approval ← 다음
 11. Reflection · Context Compression
 12. Marketplace · Billing (P2)

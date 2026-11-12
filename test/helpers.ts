@@ -1,7 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
-import { PrismaPg } from '@prisma/adapter-pg';
+import { SerializedPrismaPg } from '../src/infrastructure/database/serialized-pg-adapter.js';
 import { SignJWT } from 'jose';
 import { type SeededTenant, type SeedLlmInput, seedTenant } from '../prisma/seed.js';
 import { AppModule } from '../src/app.module.js';
@@ -49,7 +49,9 @@ function fakeLlmConfig(baseUrl: string, secretRef = FAKE_LLM_KEY.ref): SeedLlmIn
 /** 가짜 LLM 서버 + API + Worker 를 한 프로세스에서 띄우고, 테넌트 3개(A · B · C)를 만든다. */
 export async function startTestApp(): Promise<TestContext> {
   const llm = await startFakeLlm();
-  const owner = new PrismaClient({ adapter: new PrismaPg({ connectionString: TEST_OWNER_URL }) });
+  const owner = new PrismaClient({
+    adapter: new SerializedPrismaPg({ connectionString: TEST_OWNER_URL }),
+  });
   const suffix = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const widgets = {
     A: { ...WIDGET_A, publicKey: `${WIDGET_A.publicKey}_${suffix}` },

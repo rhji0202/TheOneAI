@@ -70,7 +70,7 @@ export class ExecutorService {
       ? `${EXECUTOR_WORK_ROLE}\n\n${skillSection(input.skill)}`
       : EXECUTOR_WORK_ROLE;
     const messages: LlmMessage[] = [
-      { role: 'system', content: systemPrompt(context.tenantPrompt, role) },
+      { role: 'system', content: systemPrompt(context.tenantPrompt, role, context.memories) },
       ...context.history,
       {
         role: 'user',
@@ -144,7 +144,7 @@ export class ExecutorService {
       {
         role: 'system',
         content:
-          systemPrompt(context.tenantPrompt, respondRole(tools)) +
+          systemPrompt(context.tenantPrompt, respondRole(tools), context.memories) +
           (guidance.length ? `\n\n${guidance.join('\n\n')}` : ''),
       },
       ...context.history,

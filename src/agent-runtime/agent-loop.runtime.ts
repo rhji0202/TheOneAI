@@ -101,7 +101,11 @@ export class AgentLoopRuntime implements AgentRuntime {
             tenantPromptChars: built.tenantPrompt.length,
             registryVersionId: ctx.task.registryVersionId,
             tools: prompt.map((t) => ({ name: t.llmName, requiresApproval: t.requiresApproval })),
-            memories: 0,
+            memories: built.memoryHits.map((m) => ({
+              id: m.id,
+              type: m.type,
+              ...(m.via ? { via: m.via } : { score: m.score }),
+            })),
             skills: allowedSkills.map((k) => ({ name: k.name, version: k.version })),
           },
         };

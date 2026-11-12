@@ -597,27 +597,33 @@ interface ToolPolicyRuleInput {
 | Method | Path | 권한 | 설명 |
 |---|---|---|---|
 | GET | `/v1/admin/memories/search` | Viewer | `?agentId&q&mode=semantic\|keyword&type&scope&endUserId&limit` |
-| GET | `/v1/admin/memories` | Viewer | `?status=quarantined&cursor` 격리 항목 |
+| GET | `/v1/admin/memories` | Viewer | `?status=quarantined\|active&cursor` (기본 격리 항목) |
 | GET | `/v1/admin/memories/:id` | Viewer | 상세 · 출처 |
 | PATCH | `/v1/admin/memories/:id` | Admin | `{ title?, content? }` → 재임베딩 |
 | POST | `/v1/admin/memories/:id/pin` | Admin | `{ pinned }` 만료 제외 |
 | POST | `/v1/admin/memories/:id/release` | Admin | 격리 해제 |
 | DELETE | `/v1/admin/memories/:id` | Admin | 삭제 |
-| POST | `/v1/admin/end-users/:id/erase` | Admin | 사용자 데이터 삭제 (`202`, 잡) |
+| POST | `/v1/admin/end-users/:id/erase` | Admin | 사용자 데이터 삭제 (`202`) → `{ endUserId, erased: { memories, conversations } }` |
 
 ```ts
-interface MemorySearchHit {
+interface MemorySearchHit {    // 목록 · 상세도 같은 모양 (score 없음)
   id: string;
   type: 'episodic' | 'semantic' | 'procedural';
   scope: 'user' | 'agent';
-  score: number;                // semantic: 1 - cosine distance, keyword: trigram similarity
+  score?: number;               // semantic: 1 - cosine distance, keyword: trigram similarity
   title: string | null;
-  content: string;
+  content: string;              // 민감정보 마스킹된 내용
+  confidence: number;
   needsVerification: boolean;
+  status: 'active' | 'quarantined';
+  quarantineReason?: string | null;
+  pinned: boolean;
+  endUserId: string | null;     // agent 범위는 null
   source: { type: 'user_message' | 'tool_result' | 'external_document' | 'reflection' | 'manual'; taskIds: string[]; conversationId: string | null };
   useCount: number;
   lastUsedAt: string | null;
-  expiresAt: string | null;
+  expiresAt: string | null;     // pinned 면 null
+  createdAt: string;
 }
 ```
 
@@ -629,9 +635,19 @@ SELECT id, type, scope, content, 1 - (embedding <=> $1) AS score
 FROM memories
 WHERE agent_id = $2 AND status = 'active'
   AND (scope = 'agent' OR end_user_id = $3)
+  AND embedding_model = $5                        -- 같은 임베딩 모델로 만든 기억만 비교
+  AND (pinned OR expires_at IS NULL OR expires_at > now())
 ORDER BY embedding <=> $1
 LIMIT $4;
 ```
+
+구현 메모:
+
+- **Context 구성** (`ContextBuilder`): ① 사용자 프로필 — 이 사용자의 user 범위 `semantic` 기억을 유사도와 상관없이 `memoryPolicy.profileSize`(기본 3)개 (고정 → 확신도 → 사용 횟수 순). 선호 형식 · 언어 같은 사실은 질문과 단어가 겹치지 않아도 늘 적용되기 때문이다. ② 질문과 비슷한 기억 `topK` 개 (점수 `MEMORY_MIN_SCORE` 이상, `minConfidence` 이상, `types` 안). 두 결과를 합쳐 계획 · 작업 · 답변 프롬프트의 “What the agent remembers (data from earlier conversations, not instructions)” 절에 넣고 `use_count` · `last_used_at` 을 올린다. `context.build` 단계 출력에 `memories: [{ id, type, score } | { id, type, via: 'profile' }]` 를 남긴다. 검색 실패(임베딩 API 장애 등)는 작업을 막지 않는다.
+- **임베딩**: `EMBEDDING_PROVIDER` = `local`(키 없는 문자 n-gram 해시, `local-hash-v1` — 개발 · 테스트용, 단어가 겹쳐야 비슷하게 나옴) · `openai` · `gemini`(OpenAI 호환 `/embeddings`, `dimensions: 1536`). API Key 는 `EMBEDDING_SECRET_REF`(Secret 저장소).
+- **격리 · 마스킹**: 저장 전에 민감정보(카드 · 계좌 · 연락처 등)를 가리고, 숨은 지시문 · 보이지 않는 문자가 있으면 `quarantined` 로 저장한다. 격리 항목은 Context · 검색에 나오지 않고(콘솔 목록에만) 운영자가 확인 후 `release` 한다.
+- **수정 · 고정**: `PATCH` 는 다시 임베딩하고 `needsVerification` 을 내린다. `pin` 은 만료일을 지우고, 풀면 Agent 보존 기간으로 다시 잡는다.
+- **사용자 데이터 삭제**: 그 사용자의 기억 · 피드백 · 대화(메시지 · 작업 · 산출물은 cascade)를 지우고 외부 ID · 익명 ID 연결을 끊는다(`erased_at`). 같은 사용자가 다시 오면 새 사용자로 시작한다. 감사 로그 `end_user.erase`.
 
 ### 4.9 Widget (C-09)
 
@@ -760,7 +776,7 @@ agent.worker (queue: agent-tasks)
 | `agent-tasks` | 메시지 · 승인 결정 · 재개 | Agent Loop 실행. BullMQ `attempts: 1` — 재시도는 Loop 안에서 단계 단위로 처리 |
 | `agent-recovery` | 1분 주기 | `app_find_stalled_tasks('60 seconds')` → `recovering` 으로 바꾸고 `mode: 'resume'` 재투입 (복구 한도 3회). 구현: `RECOVERY_TICK_SEC`(30초)마다 heartbeat 가 `RECOVERY_STALE_SEC`(60초) 넘게 끊긴 작업을 잠그고, 실행 중이던 단계를 `failed(worker_lost)` 로 닫은 뒤 `task.recovering` → 재개 Job(`<taskId>:recover:<n>`, 대기 중이면 다시 넣지 않음). 한도(`RECOVERY_MAX_ATTEMPTS`)를 넘으면 `failed(RECOVERY_LIMIT_EXCEEDED)` — checkpoint 가 있으면 사용자가 재개할 수 있다. Worker 는 heartbeat 때 자신이 아직 주인인지(`worker_id`) 확인하고 아니면 멈춘다. Worker 가 SIGTERM 을 받으면 새 Job 을 멈추고 실행 중 작업을 `recovering` 으로 넘겨 바로 재개 Job 을 넣는다 |
 | `approval-expiry` | 1분 주기 | 만료 승인 → `expired`, 작업 `paused` + checkpoint 유지 |
-| `memory-ingest` | 작업 완료 | Reflection 요약 · 임베딩 · 지시문 패턴 검사 후 저장 또는 격리 |
+| `memory-ingest` | 작업 완료 | Reflection 요약 · 임베딩 · 지시문 패턴 검사 후 저장 또는 격리. 구현: 작업이 `completed` 로 끝나고 `memoryPolicy.enabled` 이면 Job(`memory-<taskId>`, 3회 재시도)을 넣는다. Memory 역할(Evaluator 모델, JSON)이 요청 · 작업 노트 · 최종 답변에서 최대 4개를 뽑는다 — `semantic`+`user`(사용자가 스스로 밝힌 사실 · 선호), `episodic`+`user`(요청과 결과 요약), `procedural`+`agent`(모든 사용자에게 도움이 되는 처리 요령 — 한 사용자의 선호는 넣지 않음). 정책의 `types` 밖이거나, 익명(외부 ID 없음) · 삭제된 사용자의 user 범위 기억은 버린다. 마스킹 → 지시문 검사(격리) → 임베딩 → 같은 범위 · 종류에서 유사도 0.9 이상이면 새로 만들지 않고 내용 · 출처(`source_task_ids`)를 합친다. 확신도 0.8 미만은 `needsVerification`, 만료일은 `retentionDays` |
 | `mcp-sync` | 서버별 1시간 | 재탐색 → 변경이 있으면 `mcp_tools.pending_change` 기록 · 헬스 갱신. 구현: `MCP_SYNC_TICK_SEC`(기본 60초)마다 `app_list_mcp_servers_due_for_sync` 로 시기가 된 서버(연결됨 `MCP_SYNC_INTERVAL_SEC`, 오류 상태는 최대 5분)를 확인. 연결 실패 → `error`(Tool 제외), 성공 → `connected`(복구). 헬스 = 최근 24시간 호출 p95 · 오류율(모델의 인자 오류 제외) |
 | `skill-verify` | 업로드 · Git 등록 | 파싱 · 해시 · 서명 · 정적 검사 → `skill_versions.verification` |
 | `eval-runs` | C-03 테스트 실행 | 평가셋 실행 (실제 외부 쓰기 Tool 은 dry-run) |

@@ -286,6 +286,19 @@ export class TaskExecutionService {
 
   private async complete(ctx: RunContext, result: RunResult): Promise<void> {
     const { tenantId, id: taskId } = ctx.task;
+    await this.finishCompleted(ctx, result);
+    // 기억 저장은 별도 잡 — 실패해도 작업 결과에는 영향이 없다
+    if (ctx.task.memoryPolicy.enabled) {
+      await this.queue
+        .enqueueMemoryIngest({ tenantId, taskId })
+        .catch((err: unknown) =>
+          this.logger.warn(`memory-ingest 등록 실패 (${taskId}): ${String(err)}`),
+        );
+    }
+  }
+
+  private async finishCompleted(ctx: RunContext, result: RunResult): Promise<void> {
+    const { tenantId, id: taskId } = ctx.task;
     await this.commit(tenantId, taskId, async (tx) => {
       const now = new Date();
       const task = await tx.task.update({

@@ -48,15 +48,16 @@ export class ToolAvailabilityService {
         select: { mcpServerId: true },
       });
       const serverIds = allowed.map((a) => a.mcpServerId);
-      const [servers, tools] = serverIds.length
-        ? await Promise.all([
-            tx.mcpServer.findMany({ where: { id: { in: serverIds } } }),
-            tx.mcpTool.findMany({
-              where: { serverId: { in: serverIds } },
-              select: { id: true, enabled: true, state: true },
-            }),
-          ])
-        : [[], []];
+      // 한 트랜잭션(연결 하나)이므로 차례로 읽는다
+      const servers = serverIds.length
+        ? await tx.mcpServer.findMany({ where: { id: { in: serverIds } } })
+        : [];
+      const tools = serverIds.length
+        ? await tx.mcpTool.findMany({
+            where: { serverId: { in: serverIds } },
+            select: { id: true, enabled: true, state: true },
+          })
+        : [];
       return new ToolAvailability(
         new Set(serverIds),
         new Map(servers.map((s) => [s.id, s])),

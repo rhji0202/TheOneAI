@@ -1,7 +1,7 @@
 import { Inject, Injectable, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
-import { PrismaPg } from '@prisma/adapter-pg';
 import { type Prisma, PrismaClient } from '../../generated/prisma/client.js';
 import { APP_CONFIG, type AppConfig } from '../../config/app-config.js';
+import { SerializedPrismaPg } from './serialized-pg-adapter.js';
 
 /** 테넌트 컨텍스트가 설정된 트랜잭션 클라이언트. */
 export type TenantTx = Prisma.TransactionClient;
@@ -16,7 +16,7 @@ export type TenantTx = Prisma.TransactionClient;
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
   constructor(@Inject(APP_CONFIG) config: AppConfig) {
-    super({ adapter: new PrismaPg({ connectionString: config.databaseUrl }) });
+    super({ adapter: new SerializedPrismaPg({ connectionString: config.databaseUrl }) });
   }
 
   async onModuleInit(): Promise<void> {

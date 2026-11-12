@@ -27,6 +27,16 @@ const envSchema = z.object({
   MCP_TOOL_TIMEOUT_MS: z.coerce.number().int().min(500).max(600_000).default(30_000),
   /** 서버별 재탐색 주기 */
   MCP_SYNC_INTERVAL_SEC: z.coerce.number().int().min(60).max(604_800).default(3_600),
+  /**
+   * Memory 임베딩. local = 해시 기반(외부 호출 없음, 개발 · 테스트 · 키 없는 환경),
+   * openai · gemini = 각 사의 OpenAI 호환 /embeddings (1536차원으로 요청)
+   */
+  EMBEDDING_PROVIDER: z.enum(['local', 'openai', 'gemini']).default('local'),
+  EMBEDDING_MODEL: z.string().optional(),
+  EMBEDDING_BASE_URL: z.preprocess(emptyToUndefined, z.url().optional()),
+  EMBEDDING_SECRET_REF: z.string().optional(),
+  /** 이 점수(1 - cosine 거리) 미만인 기억은 Context 에 넣지 않는다 */
+  MEMORY_MIN_SCORE: z.coerce.number().min(0).max(1).default(0.15),
   /** heartbeat 가 끊긴 작업 확인 주기 (0 이면 주기 잡을 등록하지 않는다) · 끊겼다고 볼 시간 */
   RECOVERY_TICK_SEC: z.coerce.number().int().min(0).max(3_600).default(30),
   RECOVERY_STALE_SEC: z.coerce.number().int().min(20).max(3_600).default(60),
@@ -59,6 +69,13 @@ export interface AppConfig {
   };
   worker: { concurrency: number };
   recovery: { tickSec: number; staleSec: number; maxAttempts: number };
+  embedding: {
+    provider: 'local' | 'openai' | 'gemini';
+    model: string;
+    baseUrl: string | null;
+    secretRef: string | null;
+  };
+  memory: { minScore: number };
   /** loop = Agent Loop(LLM), placeholder = 파이프라인 확인용 고정 응답 */
   agentRuntime: 'loop' | 'placeholder';
   llm: { requestTimeoutMs: number; idleTimeoutMs: number; maxRetries: number };
@@ -136,6 +153,19 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
       syncTickSec: env.MCP_SYNC_TICK_SEC,
     },
     worker: { concurrency: env.WORKER_CONCURRENCY },
+    embedding: {
+      provider: env.EMBEDDING_PROVIDER,
+      model:
+        env.EMBEDDING_MODEL ??
+        (env.EMBEDDING_PROVIDER === 'openai'
+          ? 'text-embedding-3-small'
+          : env.EMBEDDING_PROVIDER === 'gemini'
+            ? 'gemini-embedding-001'
+            : 'local-hash-v1'),
+      baseUrl: env.EMBEDDING_BASE_URL ?? null,
+      secretRef: env.EMBEDDING_SECRET_REF ?? null,
+    },
+    memory: { minScore: env.MEMORY_MIN_SCORE },
     recovery: {
       tickSec: env.RECOVERY_TICK_SEC,
       staleSec: env.RECOVERY_STALE_SEC,

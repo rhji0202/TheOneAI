@@ -96,7 +96,10 @@ export class PlannerService {
       skills.map((s) => s.name),
     );
     const messages: LlmMessage[] = [
-      { role: 'system', content: systemPrompt(context.tenantPrompt, plannerRole(tools, skills)) },
+      {
+        role: 'system',
+        content: systemPrompt(context.tenantPrompt, plannerRole(tools, skills), context.memories),
+      },
       ...context.history,
       { role: 'user', content: this.userMessage(context, revision) },
     ];
