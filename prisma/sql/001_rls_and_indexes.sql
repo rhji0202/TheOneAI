@@ -10,8 +10,9 @@
 --       일반 인덱스는 schema.prisma 에 선언해야 한다 — 선언하지 않으면 다음 migrate 에서 DROP 된다.)
 --
 -- 적용 방법
---   첫 마이그레이션을 `prisma migrate dev --create-only` 로 만든 뒤 migration.sql 끝에
---   이 파일 내용을 붙여 넣는다. 재실행해도 안전하도록 작성했다(idempotent).
+--   이 내용은 prisma/migrations/*_init/migration.sql 끝에 그대로 포함되어 있다(원본 보관용).
+--   새 테넌트 테이블을 추가하면 아래 RLS 목록에 넣은 새 마이그레이션을 만든다.
+--   재실행해도 안전하도록 작성했다(idempotent).
 --
 -- 테넌트 컨텍스트
 --   애플리케이션은 트랜잭션마다 아래를 먼저 실행한다 (docs/data-model.md §3).

@@ -217,7 +217,9 @@ interface SendMessageResponse {
 
 - 한 트랜잭션에서 `messages` · `tasks` 를 만들고 커밋 후 BullMQ `agent-tasks` 에 `jobId = taskId` 로 넣는다(§6).
 - 작업은 **배포된 Agent 버전**과 **최신 Tool Registry 버전**으로 고정된다.
-- 같은 대화에 실행 중 작업이 있으면 `409 TASK_ALREADY_ACTIVE` — 위젯은 `steer` 로 보낸다.
+- 같은 대화에 실행 중 작업이 있으면 `409 TASK_ALREADY_ACTIVE` — 위젯은 `steer` 로 보낸다. 동시 요청 경쟁은 DB 부분 유니크 인덱스(`tasks_one_active_per_conversation`)가 최종 판단한다.
+- `Idempotency-Key` 는 `messages(conversation_id, idempotency_key)` 유니크로 보장한다. 같은 키 + 같은 본문이면 처음 만든 작업을 그대로 돌려준다.
+- 메시지 목록(`GET /conversations/:id/messages`)은 최신순으로 돌려준다.
 
 ### 2.3 `GET /v1/tasks/:id`
 
@@ -609,7 +611,7 @@ interface WidgetConfigInput {
 
 ```json
 {
-  "type": "https://docs.[YOUR-DOMAIN]/errors/approval-expired",
+  "type": "urn:theoneai:problem:approval-expired",
   "title": "승인 기한이 지났습니다",
   "status": 410,
   "code": "APPROVAL_EXPIRED",
@@ -643,7 +645,9 @@ interface WidgetConfigInput {
 | `SKILL_PARSE_FAILED` | 422 | SKILL.md 파싱 실패 (`errors[].line`) | C-06 미리보기 |
 | `SKILL_VERIFICATION_FAILED` | 422 | 신뢰 검증 실패 | 활성화 버튼 비활성 |
 | `AGENT_DRAFT_INVALID` | 422 | 배포 전 검증 실패 | 섹션별 오류 |
+| `AGENT_NOT_PUBLISHED` | 503 | 배포된 Agent 버전 없음 | 위젯 “준비 중” 표시 |
 | `RATE_LIMITED` | 429 | 요청 제한 | 재시도 안내 |
+| `SERVICE_UNAVAILABLE` | 503 | 작업 큐 등 내부 의존성 장애 (작업은 `failed · QUEUE_UNAVAILABLE`) | 잠시 후 재시도 |
 
 ---
 

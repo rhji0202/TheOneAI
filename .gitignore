@@ -7,3 +7,5 @@ coverage/
 src/generated/
 *.log
 .DS_Store
+*.tsbuildinfo
+dump.rdb

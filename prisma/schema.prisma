@@ -16,6 +16,9 @@ generator client {
   provider        = "prisma-client"
   output          = "../src/generated/prisma"
   previewFeatures = ["postgresqlExtensions"]
+  // NestJS 12 는 ESM(nodenext) — 생성 코드의 상대 import 를 .js 로 맞춘다.
+  moduleFormat        = "esm"
+  importFileExtension = "js"
 }
 
 // 접속 URL 은 prisma.config.ts 에서 주입한다 (Prisma 7).

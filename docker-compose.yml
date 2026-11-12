@@ -1,0 +1,24 @@
+# 로컬 개발용 인프라: PostgreSQL 16 + pgvector, Redis
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: theoneai_owner
+      POSTGRES_PASSWORD: theoneai_owner
+      POSTGRES_DB: theoneai
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U theoneai_owner -d theoneai']
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7.4-alpine
+    ports:
+      - '6379:6379'
+
+volumes:
+  pgdata: {}

@@ -63,28 +63,18 @@ erDiagram
   - `app_find_stalled_tasks(interval, limit)` — 복구 대상 탐색
 - `audit_logs` 는 `app_rw` 에 UPDATE · DELETE 권한이 없다(append-only).
 
-NestJS 에서는 요청(또는 Job)마다 트랜잭션 안에서 테넌트를 설정하는 Prisma 확장을 쓴다.
+NestJS 에서는 테넌트 데이터를 항상 `PrismaService.withTenant()` 트랜잭션 안에서 읽고 쓴다 ([src/infrastructure/database/prisma.service.ts](../src/infrastructure/database/prisma.service.ts)).
 
 ```ts
-// src/infrastructure/database/tenant-prisma.ts
-export function forTenant(prisma: PrismaClient, tenantId: string) {
-  return prisma.$extends({
-    query: {
-      $allModels: {
-        async $allOperations({ args, query }) {
-          const [, result] = await prisma.$transaction([
-            prisma.$executeRaw`SELECT set_config('app.tenant_id', ${tenantId}, TRUE)`,
-            query(args),
-          ]);
-          return result;
-        },
-      },
-    },
+withTenant<T>(tenantId: string, fn: (tx: TenantTx) => Promise<T>): Promise<T> {
+  return this.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT set_config('app.tenant_id', ${tenantId}, true)`;
+    return fn(tx);
   });
 }
 ```
 
-`TenantContextInterceptor` 가 인증 토큰의 `tid` 로 `forTenant()` 클라이언트를 만들어 요청 범위(`REQUEST` scope)에 둔다. Worker 는 Job 데이터의 `tenantId` 로 같은 일을 한다.
+API 는 위젯 세션 토큰의 `tid`, Worker 는 Job 데이터의 `tenantId` 를 넘긴다. 상태 변경과 `task_events` 저장을 같은 트랜잭션에서 하고, 커밋 후 Redis 로 발행한다(아웃박스).
 
 ### 로컬 검증 결과 (PostgreSQL 16 + pgvector)
 
@@ -104,6 +94,17 @@ export function forTenant(prisma: PrismaClient, tenantId: string) {
 | 적용 후 `prisma migrate diff` | 빈 마이그레이션 (Prisma 가 추가 객체를 지우지 않음) |
 | README 절차 (`migrate dev --create-only` → SQL 붙여 넣기 → `migrate dev`, shadow DB 포함) | 적용 성공, 재실행 시 “Already in sync” |
 | `app_rw` 의 `_prisma_migrations` 접근 | 권한 없음 |
+
+이후 e2e 테스트(`npm run test:e2e`)가 실제 API 를 통해 테넌트 · 사용자 간 격리를 매번 다시 확인한다.
+
+### 마이그레이션
+
+| 마이그레이션 | 내용 |
+|---|---|
+| `…_init` | Prisma DDL + `prisma/sql/001_rls_and_indexes.sql` (RLS · 역할 · 함수 · 부분/벡터 인덱스 · CHECK) |
+| `…_one_active_task_per_conversation` | 대화당 진행 중 작업 1개 부분 유니크 인덱스 (동시 요청 경쟁 방지) |
+
+부분 인덱스 · CHECK 제약은 Prisma 가 관리하지 않으므로 이후 `migrate dev` 에서 지워지지 않는다. 일반 인덱스는 `schema.prisma` 에 선언해야 한다.
 
 ## 4. JSON 컬럼 형식
 
