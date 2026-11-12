@@ -314,7 +314,11 @@ describe('Registry 버전 · 승인 · 재시도 · 시간 제한', () => {
     const registry = ctx.app.get(ToolRegistryService);
     const before = await registry.loadToolset(ctx.tenantA.tenantId, builtinOnlyVersion);
     const after = await registry.loadToolset(ctx.tenantA.tenantId, task.registryVersionId);
-    expect(before.tools.map((t) => t.name)).toEqual(['builtin.calculate', 'builtin.current_time']);
+    expect(before.tools.map((t) => t.name)).toEqual([
+      'builtin.calculate',
+      'builtin.current_time',
+      'skill.read_file',
+    ]);
     expect(after.tools.map((t) => t.name)).toContain('test.send_note');
 
     // 계획: 승인 필요 Tool 은 tool 단계로 둘 수 없다 → planner 가 한 번 고친다

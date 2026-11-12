@@ -1,3 +1,6 @@
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 /**
  * e2e 테스트 환경. 기본값은 docker-compose.yml 의 로컬 인프라를 가정한다.
  *  - TEST_DATABASE_ADMIN_URL: 테스트 DB 를 만들고 지울 계정 (기본: theoneai_owner @ postgres DB)
@@ -53,6 +56,7 @@ export const testEnv: Record<string, string> = {
   WIDGET_SESSION_PRIVATE_KEY: '',
   ADMIN_SESSION_PRIVATE_KEY: '',
   LOCAL_SECRETS_FILE: '',
+  OBJECT_STORAGE_DIR: join(tmpdir(), 'theoneai-e2e-storage'),
   // 테스트 MCP 서버는 127.0.0.1 의 http 로 뜬다 (서버별 allowPrivateNetwork 도 필요)
   MCP_ALLOW_INSECURE_HTTP: 'true',
   MCP_CONNECT_TIMEOUT_MS: '3000',

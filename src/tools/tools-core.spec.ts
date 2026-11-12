@@ -35,6 +35,8 @@ describe('calculate', () => {
       taskId: 't',
       endUserId: 'u',
       conversationId: 'c',
+      registryVersionId: 'r',
+      agentVersionId: 'av',
       signal: new AbortController().signal,
     };
     await expect(calculateTool.execute({ expression: '1/0' }, ctx)).resolves.toMatchObject({
@@ -53,6 +55,8 @@ describe('builtin.current_time', () => {
     taskId: 't',
     endUserId: 'u',
     conversationId: 'c',
+    registryVersionId: 'r',
+    agentVersionId: 'av',
     signal: new AbortController().signal,
   };
 

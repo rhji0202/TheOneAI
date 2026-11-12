@@ -77,7 +77,9 @@ describe('checkTool — 보안 검사', () => {
       'shop',
     );
     expect(hidden.security.result).toBe('failed');
-    expect(checkTool(tool({ description: '주문 조회​' }), 'shop').security.result).toBe('failed');
+    expect(checkTool(tool({ description: '주문 조회\u200b' }), 'shop').security.result).toBe(
+      'failed',
+    );
   });
 
   it('민감정보 인자 · 외부 URL 은 warning', () => {

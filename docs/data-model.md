@@ -184,7 +184,15 @@ interface RegistrySnapshot {
     modeOverride: ApprovalMode | null;
     mcpToolId?: string;
   }>;
-  skills: unknown[];           // 6단계 (SKILL.md)
+  skills: Array<{              // 활성 Skill 의 활성 버전 (검증 통과)
+    name: string;
+    skillId: string;
+    versionId: string;
+    version: string;
+    description: string;       // 계획 단계에 보여 줄 metadata
+    allowedTools: string[];
+    contentHash: string;       // 번들 해시 — 실행 시 로딩한 버전과 대조
+  }>;
 }
 ```
 
@@ -214,6 +222,21 @@ interface PendingChange {
 ```
 
 `state = pending_change` 인 동안에도 Registry 에는 이전 정의가 고정되어 있다. 운영자 승인 시 정의를 반영하고 새 Registry 버전을 만든다.
+
+### 4.8 `skill_versions.files` · `verification`
+
+```ts
+type SkillFiles = Array<{ path: string; size: number; sha256: string; kind: 'skill' | 'doc' | 'template' | 'script' | 'asset' }>;
+type Verification = Array<{
+  check: 'source' | 'hash' | 'signature' | 'script_static' | 'instruction_risk' | 'tool_scope';
+  status: 'passed' | 'warning' | 'failed' | 'skipped';
+  detail: string;
+  findings?: string[];         // 파일 경로 + 사유
+}>;
+```
+
+- `content_hash` = 정렬한 `경로\0sha256\n` 줄들의 sha256 (같은 내용이면 같은 해시).
+- `bundle_key` = `skills/<tenantId>/blobs` — 파일은 `<bundle_key>/<sha 앞 2자>/<sha256>` 에 내용 주소로 저장 (개발: `OBJECT_STORAGE_DIR`, 운영: S3 — 산출물 단계).
 
 ### 4.7 MCP 서버 상태
 

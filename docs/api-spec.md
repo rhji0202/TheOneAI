@@ -331,7 +331,7 @@ NestJS: 컨트롤러에서 `@Sse()` 대신 `Response` 를 직접 쓰는 `SseStre
 | `unknown_tool` | 작업이 고정한 Registry 버전에 없는 Tool (또는 실행 구현이 없는 Tool) | 포함 |
 | `blocked_by_policy` | 등급 정책 · Tool 재정의가 `block` | 포함 |
 | `blocked_by_rule` | 조건 규칙(`tool_policy_rules`, effect `block`)에 걸림. `tool_executions.output.matchedRuleIds` 에 규칙 기록 | 포함 |
-| `not_allowed` | MCP Tool 이지만 이 Agent 버전의 허용 목록(`agent_version_mcp_servers`)에 없는 서버 — 모델에게 보이지 않았어야 하는 호출 | 포함 |
+| `not_allowed` | 이 단계에서 모델에게 주지 않은 Tool — Agent 허용 목록(`agent_version_mcp_servers`)에 없는 MCP 서버의 Tool, Skill 단계의 `allowed-tools` 밖 Tool, 일반 단계의 Skill 전용 Tool | 포함 |
 | `approval_required` | 승인이 필요한 Tool. 승인 흐름(개발 순서 10단계) 전까지는 실행하지 않고 이 사유로 거부한다 (모델에게는 “이 버전에서 사용할 수 없음”으로 알린다) | 제외 |
 | `tool_unavailable` | 작업 중에 MCP 서버가 오류 · 비활성 · 삭제 상태가 되었거나 운영자가 Tool 을 껐음 | 제외 |
 
@@ -522,18 +522,30 @@ interface DiscoveredTool {
 | Method | Path | 설명 |
 |---|---|---|
 | GET | `/v1/admin/skills` | 목록 `?status&q` |
-| POST | `/v1/admin/skills` | `multipart/form-data` zip 업로드 (최대 20MB) → 검증 잡 시작, `202` |
+| POST | `/v1/admin/skills` | `multipart/form-data` (`file` = zip, 최대 20MB) → 번들 · SKILL.md 검사 · 신뢰 검증 → `201` (구현: 검증을 요청 안에서 끝내고 결과를 바로 돌려준다) |
 | POST | `/v1/admin/skills/git` | `{ repoUrl, ref, path? }` (태그 · 커밋 고정) → `202` |
 | GET | `/v1/admin/skills/:id` | 상세 |
 | GET | `/v1/admin/skills/:id/versions` | 버전 목록 |
 | GET | `/v1/admin/skills/:id/versions/:versionId` | metadata · 파일 트리 · 검증 결과 |
-| GET | `/v1/admin/skills/:id/versions/:versionId/files/*path` | 파일 내용 (텍스트, 1MB 이하) |
+| GET | `/v1/admin/skills/:id/versions/:versionId/file?path=` | 파일 내용 (텍스트, 1MB 이하) |
 | GET | `/v1/admin/skills/:id/versions/:versionId/diff` | `?against=<versionId>` |
 | POST | `/v1/admin/skills/:id/versions/:versionId/activate` | 활성 버전 변경 → 새 Registry 버전 (검증 통과 버전만) |
 | POST | `/v1/admin/skills/:id/disable` | 비활성화 |
 | POST | `/v1/admin/skills/:id/test-runs` | `{ prompt }` → 선택 여부 · 실행 결과 |
 
 검증 항목(`skill_versions.verification`): `source` · `hash` · `signature` · `script_static` · `instruction_risk` · `tool_scope`. 하나라도 `failed` 면 활성화 불가(`SKILL_VERIFICATION_FAILED` 422).
+
+구현 메모 (6단계)
+
+| 항목 | 동작 |
+|---|---|
+| 번들 | zip 하나 (루트 또는 최상위 폴더 하나에 `SKILL.md`). 파일 512개 · 압축 해제 16MB 상한(Agent Skills · MCP Skills 확장과 같은 값), zip-slip(`..` · 절대 경로) · 심볼릭 링크 · 암호화 항목 거부, 숨김 파일(`.git` 등) 무시. 파일은 테넌트별 내용 주소(sha256)로 저장하고 읽을 때마다 해시를 다시 확인한다 |
+| SKILL.md | YAML frontmatter + Markdown. `name`(소문자 · 숫자 · 하이픈 ≤64) · `description`(≤1024) 필수, `allowed-tools`(공백 · 쉼표 구분 또는 배열, Registry 이름 · `서버.*`), `version`(semver, 없으면 `metadata.version`, 그것도 없으면 자동 증가), `title` · `example_prompt`(위젯 추천 카드). 오류는 `SKILL_PARSE_FAILED` + `errors[].line` |
+| 버전 | 같은 내용(번들 해시) 재업로드는 기존 버전을 돌려준다(`duplicate: true`). 같은 버전 번호 · 다른 내용은 `SKILL_VERSION_EXISTS` 409. 새 Skill 은 `pending_review`(검증 실패면 `verification_failed`), 활성 Skill 의 새 버전은 활성화 전까지 기존 버전이 계속 쓰인다 |
+| 검증 | `signature` 는 업로드 출처라 `skipped`. `script_static`: `curl \| sh` · 난독화 실행 · 리버스 셸 → failed, 네트워크 · 프로세스 · 환경 변수 접근 → warning (스크립트 실행은 Sandbox 단계). `instruction_risk`: SKILL.md · 참조 문서 · 템플릿의 숨은 지시문 · 보이지 않는 문자 → failed, 외부 URL · 대화 반출 지시 → warning. `tool_scope`: Registry 에 없는 Tool · 전체 허용 · 위험 등급 → warning |
+| 실행 | 계획 단계에는 Skill metadata(이름 · 설명)만 넣고, `kind: "skill"` 단계에서만 그 Skill 의 본문 · 파일 목록을 로딩한다. Skill 단계에서 모델에게 주는 Tool 은 `allowed-tools` 와 `skill.read_file`(번들 파일 읽기)뿐이고, 밖의 호출은 서버가 `not_allowed` 로 거부한다. `allowed-tools` 는 범위를 좁힐 뿐 승인 정책을 우회하지 않는다 |
+| 고정 · 반영 | 작업은 생성 시 Registry 에 고정된 Skill 버전(내용 해시)을 끝까지 쓴다. 비활성화 · Agent 허용 목록 변경은 실행 중 작업의 다음 Skill 단계부터 반영. 파일 해시가 맞지 않으면 그 Skill 단계는 실패로 남기고 작업은 계속한다 |
+| 아직 | `POST /skills/git` (Git 출처 · 서명), `test-runs`, 스크립트 실행(Sandbox), MCP 서버가 제공하는 Skill(SDK v2 의 Skills 확장) |
 
 ### 4.7 승인 · 권한 정책 (C-07)
 
@@ -681,7 +693,9 @@ interface WidgetConfigInput {
 | `MCP_SERVER_STATE` | 409 | 상태에 맞지 않는 단계 (예: 탐색 전 등록) | 마법사 단계 이동 |
 | `NAME_TAKEN` | 409 | 같은 이름의 MCP 서버 | 이름 입력 오류 |
 | `MCP_IMAGE_UNSIGNED` | 422 | 이미지 서명 없음 · 불일치 | C-05 ① 오류 |
-| `SKILL_PARSE_FAILED` | 422 | SKILL.md 파싱 실패 (`errors[].line`) | C-06 미리보기 |
+| `SKILL_PARSE_FAILED` | 422 | zip · 번들 규칙 위반 또는 SKILL.md 파싱 실패 (`errors[].line`) | C-06 미리보기 |
+| `SKILL_VERSION_EXISTS` | 409 | 같은 버전 번호 · 다른 내용 | version 올리기 안내 |
+| `PAYLOAD_TOO_LARGE` | 413 | 업로드가 20MB 초과 | 업로드 오류 |
 | `SKILL_VERIFICATION_FAILED` | 422 | 신뢰 검증 실패 | 활성화 버튼 비활성 |
 | `AGENT_DRAFT_INVALID` | 422 | 배포 전 검증 실패 | 섹션별 오류 |
 

@@ -5,7 +5,7 @@ import { PrismaService, type TenantTx } from '../infrastructure/database/prisma.
 import type { LlmToolDefinition } from '../llm/llm.types.js';
 import { BuiltinToolCatalog } from './builtin-tool.catalog.js';
 import { toLlmName } from './tool-names.js';
-import type { BuiltinTool, RegistrySnapshot, SnapshotTool } from './tool.types.js';
+import type { BuiltinTool, RegistrySnapshot, SnapshotSkill, SnapshotTool } from './tool.types.js';
 
 const snapshotToolSchema = z
   .object({
@@ -29,7 +29,20 @@ const snapshotToolSchema = z
 const snapshotSchema = z.object({
   builtinsHash: z.string().default(''),
   tools: z.array(snapshotToolSchema).default([]),
-  skills: z.array(z.unknown()).default([]),
+  skills: z
+    .array(
+      z.object({
+        name: z.string(),
+        skillId: z.string(),
+        versionId: z.string(),
+        version: z.string(),
+        description: z.string().default(''),
+        allowedTools: z.array(z.string()).default([]),
+        contentHash: z.string().default(''),
+      }),
+    )
+    .catch([])
+    .default([]),
 });
 
 export function parseSnapshot(value: unknown): RegistrySnapshot {
@@ -55,6 +68,8 @@ export class Toolset {
   constructor(
     readonly registryVersionId: string,
     readonly tools: ResolvedTool[],
+    /** 이 Registry 버전에 고정된 Skill (Agent 허용 목록 · 활성 여부는 SkillRuntimeService 가 거른다) */
+    readonly skills: SnapshotSkill[] = [],
   ) {
     for (const tool of tools) this.byLlm.set(tool.llmName, tool);
   }
@@ -187,7 +202,7 @@ export class ToolRegistryService {
         builtin: tool.source === 'builtin' ? (this.catalog.get(tool.name) ?? null) : null,
       });
     }
-    return new Toolset(registryVersionId, tools);
+    return new Toolset(registryVersionId, tools, snapshot.skills);
   }
 
   private latest(tx: TenantTx, tenantId: string) {
@@ -223,19 +238,58 @@ export class ToolRegistryService {
       mcpServerId: t.server.id,
       mcpToolName: t.name,
     }));
+    // 활성 Skill 의 활성 버전 (검증 통과) — 작업은 이 버전 · 내용 해시로 고정된다
+    const skillRows = await tx.skill.findMany({
+      where: { status: 'active', deletedAt: null, activeVersion: { verificationStatus: 'passed' } },
+      include: { activeVersion: true },
+      orderBy: { name: 'asc' },
+    });
+    const skills: SnapshotSkill[] = skillRows.map((s) => ({
+      name: s.name,
+      skillId: s.id,
+      versionId: s.activeVersion!.id,
+      version: s.activeVersion!.version,
+      description: truncate(s.activeVersion!.description, MAX_TOOL_DESCRIPTION),
+      allowedTools: s.activeVersion!.allowedTools,
+      contentHash: s.activeVersion!.contentHash,
+    }));
     return {
       builtinsHash: this.catalog.hash(),
       tools: [...this.catalog.snapshotTools(), ...mcp],
-      skills: [],
+      skills,
     };
+  }
+
+  /** 지금 쓸 수 있는 Tool 구성 — 배포된 내장 Tool + 최신 Registry 의 MCP Tool (Skill allowed-tools 검사용) */
+  async latestTools(tx: TenantTx, tenantId: string): Promise<SnapshotTool[]> {
+    const latest = await this.latest(tx, tenantId);
+    const registered = parseSnapshot(latest?.snapshot).tools.filter((t) => t.source !== 'builtin');
+    return [...this.catalog.snapshotTools(), ...registered];
+  }
+
+  async loadSnapshot(tenantId: string, registryVersionId: string): Promise<RegistrySnapshot> {
+    const row = await this.prisma.withTenant(tenantId, (tx) =>
+      tx.toolRegistryVersion.findUnique({
+        where: { id: registryVersionId },
+        select: { snapshot: true },
+      }),
+    );
+    return parseSnapshot(row?.snapshot);
   }
 }
 
-/** Tool 이름 기준 추가 · 삭제 · 변경(스키마 · 설명 · 등급 · 승인 재정의) */
+/** Tool · Skill(`skill:` 접두) 이름 기준 추가 · 삭제 · 변경(스키마 · 설명 · 등급 · 승인 재정의 · Skill 버전) */
 export function diffSnapshots(before: RegistrySnapshot, after: RegistrySnapshot): RegistryDiff {
   const key = (t: SnapshotTool) => `${t.schemaHash}|${t.level}|${t.modeOverride ?? ''}`;
-  const prev = new Map(before.tools.map((t) => [t.name, key(t)]));
-  const next = new Map(after.tools.map((t) => [t.name, key(t)]));
+  const entries = (s: RegistrySnapshot): Array<[string, string]> => [
+    ...s.tools.map((t): [string, string] => [t.name, key(t)]),
+    ...s.skills.map((k): [string, string] => [
+      `skill:${k.name}`,
+      `${k.versionId}|${k.contentHash}`,
+    ]),
+  ];
+  const prev = new Map(entries(before));
+  const next = new Map(entries(after));
   return {
     added: [...next.keys()].filter((n) => !prev.has(n)),
     removed: [...prev.keys()].filter((n) => !next.has(n)),

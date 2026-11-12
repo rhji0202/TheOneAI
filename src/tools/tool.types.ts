@@ -7,6 +7,9 @@ export interface ToolContext {
   taskId: string;
   endUserId: string;
   conversationId: string;
+  /** 작업이 고정한 Registry 버전 · Agent 버전 (Skill 파일 읽기 등) */
+  registryVersionId: string;
+  agentVersionId: string;
   signal: AbortSignal;
 }
 
@@ -42,12 +45,23 @@ export interface SnapshotTool {
   mcpToolName?: string;
 }
 
+/** tool_registry_versions.snapshot 의 Skill 한 줄 — 작업은 이 버전(내용 해시)으로 고정된다 */
+export interface SnapshotSkill {
+  name: string;
+  skillId: string;
+  versionId: string;
+  version: string;
+  description: string;
+  allowedTools: string[];
+  contentHash: string;
+}
+
 /** tool_registry_versions.snapshot */
 export interface RegistrySnapshot {
   /** 이 버전을 만들 때의 내장 Tool 구성 해시. 배포로 내장 Tool 이 바뀌면 새 버전을 만든다. */
   builtinsHash: string;
   tools: SnapshotTool[];
-  skills: unknown[];
+  skills: SnapshotSkill[];
 }
 
 /** 권한 판단 결과 */

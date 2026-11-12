@@ -26,6 +26,8 @@ export interface DispatchResult {
 interface DispatchOptions {
   planIndex?: number;
   parallelGroup?: string;
+  /** 이 단계에서 모델에게 준 Tool (LLM 이름). 밖의 Tool 은 not_allowed (Skill 단계의 allowed-tools 범위 등) */
+  scope?: ReadonlySet<string>;
 }
 
 class ToolTimeoutError extends Error {}
@@ -56,6 +58,7 @@ export class ToolDispatcherService {
     toolset: Toolset,
     calls: LlmToolCall[],
     planIndex?: number,
+    scope?: ReadonlySet<string>,
   ): Promise<DispatchResult[]> {
     const { parallelTools } = ctx.task.executionPolicy;
     const parallel =
@@ -65,7 +68,7 @@ export class ToolDispatcherService {
     if (!parallel) {
       const results: DispatchResult[] = [];
       for (const call of calls)
-        results.push(await this.dispatch(ctx, toolset, call, { planIndex }));
+        results.push(await this.dispatch(ctx, toolset, call, { planIndex, scope }));
       return results;
     }
     const group = `p-${uuidv7().slice(-12)}`;
@@ -75,7 +78,7 @@ export class ToolDispatcherService {
       results.push(
         ...(await Promise.all(
           batch.map((call) =>
-            this.dispatch(ctx, toolset, call, { planIndex, parallelGroup: group }),
+            this.dispatch(ctx, toolset, call, { planIndex, parallelGroup: group, scope }),
           ),
         )),
       );
@@ -222,6 +225,22 @@ export class ToolDispatcherService {
           );
         }
 
+        // 이 단계에 주지 않은 Tool (Skill 의 allowed-tools 밖, 일반 단계의 Skill 전용 Tool 등)
+        if (options.scope && !options.scope.has(call.name)) {
+          await this.recordDenied(
+            ctx,
+            step.seq,
+            base,
+            'not_allowed',
+            '이 단계에서 허용되지 않은 Tool 입니다',
+          );
+          return denial(
+            toolName,
+            'not_allowed',
+            `Tool '${call.name}' is not available in this step. Use only the provided tools.`,
+          );
+        }
+
         // 5) 실행
         return this.execute(ctx, step.seq, tool, parsed.value, base, availability);
       },
@@ -328,6 +347,8 @@ export class ToolDispatcherService {
           taskId: ctx.task.id,
           endUserId: ctx.task.endUserId,
           conversationId: ctx.task.conversationId,
+          registryVersionId: ctx.task.registryVersionId,
+          agentVersionId: ctx.task.agentVersionId,
           signal,
         });
     }

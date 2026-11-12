@@ -25,6 +25,7 @@
     "db:migrate": "prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
     "db:setup": "prisma migrate deploy && tsx prisma/seed.ts",
+    "dev:pack-skill": "tsx scripts/pack-skill.ts",
     "dev:mcp-server": "tsx scripts/dev-mcp-server.ts",
     "dev:identity-token": "tsx scripts/mint-identity-token.ts",
     "postinstall": "prisma generate"
@@ -46,6 +47,8 @@
     "reflect-metadata": "0.2.2",
     "rxjs": "7.8.2",
     "undici": "7.30.1",
+    "yaml": "2.9.1",
+    "yauzl": "3.4.0",
     "zod": "4.6.7"
   },
   "devDependencies": {
@@ -58,6 +61,8 @@
     "@types/node": "22.20.5",
     "@types/pg": "8.23.1",
     "@types/supertest": "7.2.1",
+    "@types/yauzl": "3.4.0",
+    "@types/yazl": "3.3.1",
     "oxlint": "1.90.0",
     "oxlint-tsgolint": "7.0.2005",
     "prettier": "3.9.10",
@@ -67,6 +72,7 @@
     "tsx": "4.23.15",
     "typescript": "6.0.3",
     "vite": "8.3.5",
-    "vitest": "4.1.12"
+    "vitest": "4.1.12",
+    "yazl": "3.3.1"
   }
 }

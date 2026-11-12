@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Tool } from '@modelcontextprotocol/client';
 import type { PermissionLevel, SchemaCheck, SecurityCheck } from '../generated/prisma/client.js';
+import { findInjectionRisks } from '../common/security/text-risk.js';
 import { canonicalJson, compileSchema } from '../tools/json-schema.js';
 
 /** MCP Tool 이름 — 모델 function 이름(서버명__Tool명, 64자 이내)으로 바꿀 수 있어야 한다 */
@@ -96,28 +97,7 @@ function checkSchema(
   };
 }
 
-/** 설명 · 파라미터 속 숨은 지시문(프롬프트 주입), 숨김 문자, 민감정보 · 대량 반출 징후 */
-const INJECTION_PATTERNS: Array<[RegExp, string]> = [
-  [
-    /ignore\s+(all\s+|any\s+|the\s+)?(previous|prior|above|earlier)\s+(instructions|prompts|rules)/i,
-    '이전 지시 무시 요구',
-  ],
-  [/(system|developer)\s+prompt/i, '시스템 프롬프트 언급'],
-  [/<\s*\/?\s*(important|instructions?|system|secret)\s*>/i, '숨은 지시 태그'],
-  [
-    /(do\s*not|don't|never)\s+(tell|inform|mention|reveal|show)\b.{0,40}\buser/i,
-    '사용자에게 숨기라는 지시',
-  ],
-  [/before\s+(using|calling)\s+(this|any)\s+(other\s+)?tool/i, '다른 Tool 사용 전 행동 지시'],
-  [
-    /(read|send|upload|include)\b.{0,40}(~\/\.ssh|id_rsa|\.env|credentials|api[_ ]?keys?)/i,
-    '자격 증명 반출 지시',
-  ],
-  [/이전\s*(의\s*)?지시.{0,10}무시/, '이전 지시 무시 요구'],
-  [/시스템\s*프롬프트/, '시스템 프롬프트 언급'],
-  [/사용자에게\s*(말하지|알리지|보여주지)\s*마/, '사용자에게 숨기라는 지시'],
-];
-const HIDDEN_CHARS = /[​-‏‪-‮⁠-⁤⁦-⁩﻿]|[\u{E0000}-\u{E007F}]/u;
+/** 민감정보를 받는 인자 · 대량 반출 징후 (숨은 지시문 · 보이지 않는 문자는 common/security/text-risk) */
 const SENSITIVE_INPUT =
   /(password|passwd|비밀번호|api[_-]?key|secret|access[_-]?token|credit[_-]?card|card[_-]?number|ssn|주민(등록)?번호)/i;
 const BULK_EXPORT =
@@ -132,13 +112,8 @@ function checkSecurity(
   const failed: string[] = [];
   const warnings: string[] = [];
   const texts = [name, title ?? '', description ?? '', ...collectSchemaText(inputSchema)];
-  const joined = texts.join('\n');
 
-  for (const [pattern, label] of INJECTION_PATTERNS) {
-    if (pattern.test(joined)) failed.push(`숨은 지시문 의심: ${label}`);
-  }
-  if (HIDDEN_CHARS.test(joined))
-    failed.push('보이지 않는 문자(제로폭 · 방향 제어 · 태그 문자)가 있습니다');
+  failed.push(...findInjectionRisks(texts));
   if (/https?:\/\/\S+/i.test(description ?? '')) warnings.push('설명에 외부 URL 이 있습니다');
   const props = Object.keys((inputSchema.properties ?? {}) as Record<string, unknown>);
   const sensitive = props.filter((p) => SENSITIVE_INPUT.test(p));

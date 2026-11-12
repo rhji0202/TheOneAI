@@ -13,6 +13,9 @@ const envSchema = z.object({
   WIDGET_SESSION_TTL_SEC: z.coerce.number().int().min(60).max(86_400).default(3_600),
   ADMIN_SESSION_PRIVATE_KEY: z.preprocess(emptyToUndefined, z.string().optional()),
   ADMIN_SESSION_TTL_SEC: z.coerce.number().int().min(60).max(86_400).default(900),
+  /** 파일 저장소 (Skill 번들 · 이후 산출물). local = 디렉터리 (개발 · 테스트 전용), S3 는 산출물 단계에서 */
+  STORAGE_BACKEND: z.enum(['local']).default('local'),
+  OBJECT_STORAGE_DIR: z.string().default('.storage'),
   /** 개발 · 테스트용 파일 Secret 저장소 (API · Worker 가 함께 읽는다). 비우면 메모리에만 저장 */
   LOCAL_SECRETS_FILE: z.string().optional(),
   /** http:// MCP 엔드포인트 허용 (개발 · 테스트 전용, production 에서는 거부) */
@@ -40,6 +43,7 @@ export interface AppConfig {
   databaseUrl: string;
   redisUrl: string;
   secrets: { backend: 'local'; devSecrets: Record<string, string>; localFile: string | null };
+  storage: { backend: 'local'; dir: string };
   widgetSession: { privateKeyPem: string | undefined; ttlSec: number };
   adminSession: { privateKeyPem: string | undefined; ttlSec: number };
   mcp: {
@@ -85,6 +89,11 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     if (!env.ADMIN_SESSION_PRIVATE_KEY) {
       throw new Error('production 에서는 ADMIN_SESSION_PRIVATE_KEY 가 필요합니다.');
     }
+    if (env.STORAGE_BACKEND === 'local') {
+      throw new Error(
+        'production 에서는 STORAGE_BACKEND=local 을 사용할 수 없습니다 (S3 연동 필요).',
+      );
+    }
     if (env.MCP_ALLOW_INSECURE_HTTP) {
       throw new Error('production 에서는 MCP_ALLOW_INSECURE_HTTP 를 켤 수 없습니다.');
     }
@@ -109,6 +118,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
       privateKeyPem: env.WIDGET_SESSION_PRIVATE_KEY?.replace(/\\n/g, '\n'),
       ttlSec: env.WIDGET_SESSION_TTL_SEC,
     },
+    storage: { backend: env.STORAGE_BACKEND, dir: env.OBJECT_STORAGE_DIR },
     adminSession: {
       privateKeyPem: env.ADMIN_SESSION_PRIVATE_KEY?.replace(/\\n/g, '\n'),
       ttlSec: env.ADMIN_SESSION_TTL_SEC,

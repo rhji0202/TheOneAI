@@ -1,4 +1,7 @@
 import { Module } from '@nestjs/common';
+import { StorageModule } from './infrastructure/storage/storage.module.js';
+import { SkillsAdminModule } from './skills/admin/skills-admin.module.js';
+import { SkillsModule } from './skills/skills.module.js';
 import { AgentsAdminModule } from './agents/admin/agents-admin.module.js';
 import { McpAdminModule } from './mcp/admin/mcp-admin.module.js';
 import { McpModule } from './mcp/mcp.module.js';
@@ -22,9 +25,12 @@ import { WidgetModule } from './widget/widget.module.js';
     DatabaseModule,
     RedisModule,
     SecretsModule,
+    StorageModule,
     QueueModule,
     EventsModule,
     ToolsModule,
+    SkillsModule,
+    SkillsAdminModule,
     McpModule,
     McpAdminModule,
     WidgetModule,

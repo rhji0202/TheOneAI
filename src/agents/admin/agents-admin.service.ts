@@ -10,11 +10,14 @@ import { PrismaService, type TenantTx } from '../../infrastructure/database/pris
  * 지금 받는 초안 필드는 MCP 허용 목록뿐이다 (C-03 의 나머지 — 지침 · 모델 · 정책 편집은 콘솔 단계).
  * 모르는 필드는 조용히 무시하지 않고 거부한다.
  */
+const allowEntry = z.object({ id: z.uuid(), enabled: z.boolean() });
 export const draftInputSchema = z
   .object({
-    mcpServers: z.array(z.object({ id: z.uuid(), enabled: z.boolean() })).max(100),
+    mcpServers: z.array(allowEntry).max(100).optional(),
+    skills: z.array(allowEntry).max(100).optional(),
   })
-  .strict();
+  .strict()
+  .refine((v) => v.mcpServers !== undefined || v.skills !== undefined, '바꿀 값이 없습니다');
 export type DraftInput = z.infer<typeof draftInputSchema>;
 
 export const publishInputSchema = z.object({ changeNote: z.string().trim().max(500).optional() });
@@ -27,6 +30,7 @@ export interface AgentVersionView {
   publishedAt: string | null;
   changeNote: string | null;
   mcpServers: Array<{ id: string; name: string; status: string; enabled: boolean }>;
+  skills: Array<{ id: string; name: string; status: string; enabled: boolean }>;
 }
 
 export interface AgentAdminView {
@@ -76,6 +80,32 @@ export class AgentsAdminService {
   ): Promise<AgentAdminView> {
     return this.prisma.withTenant(admin.tenantId, async (tx) => {
       const draft = await this.draftFor(tx, admin, agentId);
+      if (input.mcpServers) await this.replaceServers(tx, admin, draft.id, input.mcpServers);
+      if (input.skills) await this.replaceSkills(tx, admin, draft.id, input.skills);
+      await this.audit.record(
+        tx,
+        admin,
+        {
+          action: 'agent.draft_update',
+          targetType: 'agent',
+          targetId: agentId,
+          metadata: { mcpServers: input.mcpServers ?? null, skills: input.skills ?? null },
+        },
+        req,
+      );
+      return this.view(tx, agentId);
+    });
+  }
+
+  private async replaceServers(
+    tx: TenantTx,
+    admin: AdminSession,
+    draftId: string,
+    entries: Array<{ id: string; enabled: boolean }>,
+  ): Promise<void> {
+    {
+      const input = { mcpServers: entries };
+      const draft = { id: draftId };
       const ids = input.mcpServers.map((s) => s.id);
       const servers = await tx.mcpServer.findMany({ where: { id: { in: ids }, deletedAt: null } });
       const byId = new Map(servers.map((s) => [s.id, s]));
@@ -106,19 +136,44 @@ export class AgentsAdminService {
           })),
         });
       }
-      await this.audit.record(
-        tx,
-        admin,
-        {
-          action: 'agent.draft_update',
-          targetType: 'agent',
-          targetId: agentId,
-          metadata: { mcpServers: input.mcpServers },
-        },
-        req,
-      );
-      return this.view(tx, agentId);
+    }
+  }
+
+  /** Skill 허용 목록 — 활성 Skill 만 켤 수 있다 (검토 대기 · 검증 실패 · 비활성은 끔으로만) */
+  private async replaceSkills(
+    tx: TenantTx,
+    admin: AdminSession,
+    draftId: string,
+    entries: Array<{ id: string; enabled: boolean }>,
+  ): Promise<void> {
+    const ids = entries.map((s) => s.id);
+    const skills = await tx.skill.findMany({ where: { id: { in: ids }, deletedAt: null } });
+    const byId = new Map(skills.map((s) => [s.id, s]));
+    const issues: FieldIssue[] = [];
+    entries.forEach((s, i) => {
+      const skill = byId.get(s.id);
+      if (!skill) issues.push({ path: `skills.${i}.id`, message: 'Skill 을 찾을 수 없습니다' });
+      else if (s.enabled && skill.status !== 'active') {
+        issues.push({
+          path: `skills.${i}.enabled`,
+          message: `활성 Skill 만 켤 수 있습니다 (현재: ${skill.status})`,
+        });
+      }
     });
+    if (new Set(ids).size !== ids.length)
+      issues.push({ path: 'skills', message: '같은 Skill 이 두 번 있습니다' });
+    if (issues.length) throw new AppError(422, 'AGENT_DRAFT_INVALID', undefined, issues);
+    await tx.agentVersionSkill.deleteMany({ where: { agentVersionId: draftId } });
+    if (entries.length) {
+      await tx.agentVersionSkill.createMany({
+        data: entries.map((s) => ({
+          tenantId: admin.tenantId,
+          agentVersionId: draftId,
+          skillId: s.id,
+          enabled: s.enabled,
+        })),
+      });
+    }
   }
 
   /** 초안 → 배포. 이전 배포 버전은 archived (그 버전으로 실행 중인 작업은 그대로) */
@@ -133,7 +188,11 @@ export class AgentsAdminService {
       if (!agent) throw AppError.notFound();
       const draft = await tx.agentVersion.findFirst({
         where: { agentId, status: 'draft' },
-        include: { modelConfigs: true, mcpServers: { include: { mcpServer: true } } },
+        include: {
+          modelConfigs: true,
+          mcpServers: { include: { mcpServer: true } },
+          skills: { include: { skill: true } },
+        },
       });
       if (!draft) throw new AppError(422, 'AGENT_DRAFT_INVALID', '배포할 초안이 없습니다');
 
@@ -146,6 +205,14 @@ export class AgentsAdminService {
           issues.push({
             path: 'mcpServers',
             message: `'${s.mcpServer.name}' 서버가 연결됨 상태가 아닙니다`,
+          });
+        }
+      }
+      for (const s of draft.skills) {
+        if (s.enabled && (s.skill.deletedAt || s.skill.status !== 'active')) {
+          issues.push({
+            path: 'skills',
+            message: `'${s.skill.name}' Skill 이 활성 상태가 아닙니다`,
           });
         }
       }
@@ -245,7 +312,10 @@ export class AgentsAdminService {
           ...(agent.publishedVersionId ? [{ id: agent.publishedVersionId }] : []),
         ],
       },
-      include: { mcpServers: { include: { mcpServer: true } } },
+      include: {
+        mcpServers: { include: { mcpServer: true } },
+        skills: { include: { skill: true } },
+      },
     });
     const toView = (v: (typeof versions)[number]): AgentVersionView => ({
       id: v.id,
@@ -259,6 +329,14 @@ export class AgentsAdminService {
           id: s.mcpServerId,
           name: s.mcpServer.name,
           status: s.mcpServer.status,
+          enabled: s.enabled,
+        })),
+      skills: v.skills
+        .filter((s) => !s.skill.deletedAt)
+        .map((s) => ({
+          id: s.skillId,
+          name: s.skill.name,
+          status: s.skill.status,
           enabled: s.enabled,
         })),
     });

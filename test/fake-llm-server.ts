@@ -22,6 +22,9 @@ import type { AddressInfo } from 'node:net';
  *   [MCP조회]    shop__lookup_order 호출
  *   [MCP인자]    JSON Schema 에 맞지 않는 인자 → 고쳐서 다시 호출
  *   [MCP오류]    서버가 isError 로 실패를 알림 (읽기 Tool 이어도 재시도하지 않음)
+ * Skill 시나리오 (test/skills.e2e-spec.ts 의 order-helper)
+ *   [스킬]       planner 가 skill 단계를 계획(목록에 있을 때만) → Skill 파일 읽기 → 계산 → 메모
+ *   [스킬범위]   Skill 단계에서 allowed-tools 밖의 Tool 호출 → not_allowed
  */
 export interface RecordedRequest {
   role: string;
@@ -180,6 +183,21 @@ export async function startFakeLlm(options: { chunkDelayMs?: number } = {}): Pro
 
       if (role === 'Planner') {
         if (allText.includes('[형식오류]')) return reply('계획은 이렇습니다만 JSON 은 아닙니다');
+        if (allText.includes('[스킬')) {
+          const listed = /^- (order-helper): /m.exec(system)?.[1];
+          const respond = { title: '답변 작성', kind: 'respond', instructions: '' };
+          return reply(
+            JSON.stringify({
+              goal: '주문 금액 안내',
+              steps: listed
+                ? [
+                    { title: '주문 도우미', kind: 'skill', skill: listed, instructions: '' },
+                    respond,
+                  ]
+                : [{ title: '직접 정리', kind: 'reason', instructions: '' }, respond],
+            }),
+          );
+        }
         const forTools = toolPlan(allText, lastUser);
         if (forTools) return reply(JSON.stringify(forTools));
         if (allText.includes('[재계획]')) {
@@ -223,6 +241,30 @@ export async function startFakeLlm(options: { chunkDelayMs?: number } = {}): Pro
         const round = body.messages.filter(
           (m) => m.role === 'assistant' && m.tool_calls?.length,
         ).length;
+        const skillStep = /## Skill: ([a-z0-9-]+)/.exec(system)?.[1];
+        const skillCalls: Call[] | null = !skillStep
+          ? null
+          : allText.includes('[스킬범위]')
+            ? round === 0
+              ? [['builtin__current_time', {}]]
+              : null
+            : allText.includes('[스킬]')
+              ? round === 0
+                ? [['skill__read_file', { skill: skillStep, path: 'references/policy.md' }]]
+                : round === 1
+                  ? [['builtin__calculate', { expression: '39000*2' }]]
+                  : null
+              : null;
+        if (skillCalls) {
+          return reply(
+            null,
+            skillCalls.map(([name, args], i) => ({
+              id: `call_${round}_${i}`,
+              type: 'function' as const,
+              function: { name, arguments: JSON.stringify(args) },
+            })),
+          );
+        }
         const toolsOffered = (body.tools?.length ?? 0) > 0 && body.tool_choice !== 'none';
         const calls = scripted(allText, round, toolsOffered);
         if (calls) {

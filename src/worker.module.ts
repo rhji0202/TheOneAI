@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { StorageModule } from './infrastructure/storage/storage.module.js';
+import { SkillsModule } from './skills/skills.module.js';
 import { McpModule } from './mcp/mcp.module.js';
 import { AppConfigModule } from './config/config.module.js';
 import { EventsModule } from './events/events.module.js';
@@ -16,9 +18,11 @@ import { ToolsModule } from './tools/tools.module.js';
     DatabaseModule,
     RedisModule,
     SecretsModule,
+    StorageModule,
     QueueModule,
     EventsModule,
     ToolsModule,
+    SkillsModule,
     McpModule,
     WorkersModule,
   ],

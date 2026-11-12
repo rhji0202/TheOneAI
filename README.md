@@ -42,6 +42,19 @@ LLM 키 없이 파이프라인만 보려면 `.env` 에 `AGENT_RUNTIME=placeholde
 
 시드는 콘솔 Owner `owner@demo.local` (워크스페이스 `demo`)를 만든다. 비밀번호는 `.env` 의 `DEV_ADMIN_PASSWORD`, 비어 있으면 생성해 한 번만 출력한다.
 
+### Skill 올려 보기
+
+예제 [examples/skills/refund-helper](examples/skills/refund-helper) (환불 규정 참조 문서 + `demo-shop.lookup_order` · `builtin.calculate` 사용)를 zip 으로 묶어 올리고, 검증 결과를 확인한 뒤 활성화하고 Agent 에서 켠다. 번들 파일은 `OBJECT_STORAGE_DIR`(기본 `.storage/`)에 저장된다.
+
+```bash
+npm run dev:pack-skill -- examples/skills/refund-helper       # refund-helper.zip
+SK=$(curl -s -X POST localhost:3000/v1/admin/skills -H "Authorization: Bearer $A" -F file=@refund-helper.zip)
+echo "$SK" | jq '.version.verification'                         # 신뢰 검증 6항목
+curl -s -X POST localhost:3000/v1/admin/skills/$(echo "$SK" | jq -r .skill.id)/versions/$(echo "$SK" | jq -r .version.id)/activate -H "Authorization: Bearer $A"
+curl -s -X PATCH localhost:3000/v1/admin/agents/$AG/draft "${H[@]}" -d "{\"skills\":[{\"id\":\"$(echo "$SK" | jq -r .skill.id)\",\"enabled\":true}]}"
+curl -s -X POST localhost:3000/v1/admin/agents/$AG/publish "${H[@]}" -d '{}'
+```
+
 ### MCP 서버 연결해 보기
 
 데모 MCP 서버(`scripts/dev-mcp-server.ts` — 주문 조회 · FAQ 검색 · 문의 티켓, SDK v2. `--legacy` 를 주면 2025 계열 프로토콜만 응답)를 띄우고 콘솔 API 로 등록한 뒤 Agent 에서 켠다. 로컬 http 엔드포인트이므로 API · Worker 를 `MCP_ALLOW_INSECURE_HTTP=true` 로 실행하고, 서버는 `allowPrivateNetwork: true`(Owner 만 가능)로 등록한다.
@@ -108,6 +121,8 @@ e2e 가 확인하는 것: bootstrap(허용 도메인 · identity token 서명 ·
 
 Agent Loop 는 가짜 OpenAI 호환 서버([test/fake-llm-server.ts](test/fake-llm-server.ts))로 검증한다: 계획 → reason → 중간 평가 → 답변 → 검증 순서, 재계획(`plan.revised`), 계획 JSON 오류 시 기본 계획, 모델 오류 · API Key 없음 → `task.failed`, 역할별 모델 · 추론 파라미터 · 인증 헤더, 플랫폼 · 테넌트 지침, 대화 기록 포함, 토큰 사용량 기록. 실제 DeepSeek 로는 수동으로 확인했다(아래).
 
+Skill 은 [test/skills.e2e-spec.ts](test/skills.e2e-spec.ts) 가 확인한다: zip · SKILL.md 오류(줄 번호), Viewer 업로드 거부, 신뢰 검증(스크립트 경고 · 숨은 지시문 실패 → 활성화 불가), 중복 · 버전 충돌, 파일 미리보기 · 비교, 활성화 → Registry, 허용 목록 전에는 계획에 안 보임, 초안 → 배포, 위젯 추천 카드, 실행(계획에는 metadata 만 · Skill 단계에서 본문 · 파일 로딩 · allowed-tools + skill.read_file 만 제공), allowed-tools 밖 호출 거부, 일반 단계엔 skill.read_file 없음, 새 버전 활성화 후 새 버전 사용, 저장소 파일 변조 시 사용 안 함, 비활성화 · 감사 로그.
+
 MCP 는 [test/mcp.e2e-spec.ts](test/mcp.e2e-spec.ts) 가 공식 SDK v2 로 만든 MCP 서버([test/fake-mcp-server.ts](test/fake-mcp-server.ts))로 확인한다: 프로토콜 협상(최신 서버는 `server/discover` 로 2026-07-28, 2025 계열 전용 서버는 `initialize` 로 내려감, 2025 계열로 기록된 서버는 재사용 연결에서 탐색 생략, 401 은 인증 실패로), 콘솔 로그인 · 역할(Viewer 는 조회만, 사설망 허용은 Owner 만, 위젯 토큰 거부), SSRF(사설 IP 로 해석되는 호스트를 연결 시점 DNS 검사로 차단, 메타데이터 IP 차단), 등록 마법사(연결 테스트 · API Key 전달 · 탐색 검증 · 보안 실패 Tool 제외 · 등록 → Registry 버전 · 감사 로그), 테넌트 격리, Agent 허용 목록(초안 → 배포, 허용 전 호출은 `not_allowed`), MCP Tool 실행(structuredContent · JSON Schema 인자 검증 · isError 는 재시도 안 함), 재탐색 변경 감지(검토 전에는 고정된 이전 정의 사용 → 승인 시 새 버전, 새 Tool 은 꺼진 채 추가), 서버 장애 → `error` · `tool_unavailable` → 복구 · 헬스, 연결 정보 변경 시 재검토, 비활성화 · 삭제(Secret 삭제 · 이름 재사용).
 
 Tool 은 [test/tools.e2e-spec.ts](test/tools.e2e-spec.ts) 가 확인한다: tool 단계 → 모델의 tool call → 서버 실행 → 결과가 다음 요청 · 답변에 반영, 읽기 Tool 병렬 실행(같은 `parallelGroup`, 결과는 호출 순서), 인자 오류를 모델에게 돌려줘 고치게 함, Tool 왕복 한도(`tool_choice: none` 으로 정리), Registry 에 없는 Tool · 조건 규칙 · 등급 정책 차단(`tool.denied`), 승인 필요 Tool 은 실행하지 않음, 내장 Tool 구성이 바뀌면 새 Registry 버전(이전 버전 불변), 멱등 Tool 재시도, 시간 제한.
@@ -123,6 +138,7 @@ Tool 은 [test/tools.e2e-spec.ts](test/tools.e2e-spec.ts) 가 확인한다: tool
 | Agent Loop: Context → Plan → Execute(reason · tool) → Evaluate → 재계획 → Respond(스트리밍) → Verify, 토큰 예산 | 완료 — Skill · Memory 는 아직 없음 |
 | 콘솔 인증: `POST /v1/admin/auth/login`(scrypt) · `GET /v1/admin/me`, 역할 가드(Owner > Admin > Operator > Viewer, 매 요청 DB 재확인), 감사 로그 | 완료 — refresh 쿠키 회전 · 로그아웃은 콘솔 UI 단계 |
 | MCP (C-04 · C-05): Streamable HTTP 연결(공식 SDK v2 — 2026-07-28 우선, 2025 계열 서버 자동 호환), SSRF 방어(스킴 · 호스트 · DNS 해석 · 연결 시점 IP 검사, 메타데이터 IP 항상 차단), API Key(Secret 저장소), 연결 테스트 · Tool 탐색 · 검증(JSON Schema · 숨은 지시문 · 보이지 않는 문자 · 민감정보 · 제안 등급), 포함 Tool · 등록 → 새 Registry 버전, Tool 정책, 재탐색 변경 감지 → 운영자 승인, `mcp-sync` 주기 잡(장애 → error · 복구, 헬스 p95 · 오류율), 비활성화 · 삭제, Registry 버전 · diff API | 완료 — stdio(Docker Sandbox) 실행형 · OAuth 인증 · 이미지 서명 검증은 Sandbox 단계 |
+| Skill (C-06): zip 업로드(zip-slip · 심볼릭 링크 · 크기 · 파일 수 검사), SKILL.md 파싱(줄 번호 오류), 신뢰 검증 6항목, 버전(내용 해시 · 중복 · 충돌) · 파일 미리보기 · 비교 · 활성화 → 새 Registry 버전 · 비활성화, Agent 허용 목록, 위젯 추천 카드. 실행: 계획에는 metadata 만, `skill` 단계에서 본문 · 파일 목록 로딩, `skill.read_file`, allowed-tools 로 Tool 범위 제한(서버 강제), 저장 파일 해시 재확인 | 완료 — Git 출처 · 서명 · test-runs · 스크립트 실행(Sandbox) · MCP 서버 Skill 은 이후 |
 | Agent MCP 허용 목록: 초안(배포 버전 복사) → 배포, 실행 시 허용 목록 · 서버 상태 · Tool 사용 여부 확인(`not_allowed` · `tool_unavailable`) | 완료 — 초안 편집은 MCP 허용 목록만 (지침 · 모델 · 정책 편집은 C-03 단계) |
 | Tool Registry · Dispatcher: 작업별 Registry 버전 고정, 인자 검증(zod), 권한 판단(등급 정책 → Tool 재정의 → 조건 규칙), 읽기 Tool 병렬 실행, 시간 제한 · 취소 전파, 멱등 Tool 재시도, `tool_executions` 기록(거부 포함) · 민감정보 마스킹, `tool.called` · `tool.result` · `tool.denied` | 완료 — 내장 Tool 2개(`builtin.calculate`, `builtin.current_time`). 승인 필요 Tool 은 승인 흐름(10단계) 전까지 `approval_required` 로 거부 |
 | 비용 계산 (`tasks.cost_amount`) | 다음 단계 — 모델별 단가표 필요. 토큰 수는 기록 중 |
@@ -150,6 +166,7 @@ src/
 ├── planner/ · evaluator/          계획 생성 · 수정 / 중간 평가 · 최종 검증
 ├── tools/                         Tool Registry(버전 스냅샷) · 권한 정책 · 가용성 · Dispatcher · 내장 Tool · JSON Schema 검증 · 마스킹
 ├── mcp/                           MCP 연결(SDK · SSRF 가드) · 탐색 · 검사 · 변경 감지 · 재탐색(mcp-sync) · 결과 변환 · 관리 API
+├── skills/                        Skill 번들(zip) · SKILL.md 파서 · 신뢰 검증 · 저장(내용 주소) · 실행 로딩 · skill.read_file · 관리 API
 ├── admin/                         콘솔 인증(로그인 · 토큰 · 역할 가드) · 감사 로그
 ├── workers/                       agent-tasks 프로세서 · 작업 실행 수명주기
 └── agents/                        실행 · Memory 정책 스키마, Agent 초안 · 배포 API(MCP 허용 목록)
@@ -181,6 +198,12 @@ MCP 연결 후 (2026-11-12, 데모 MCP 서버 `npm run dev:mcp-server` 를 콘�
 | “주문 A-9999 상태 확인하고, 안 되면 상담원 티켓 남겨줘” | 서버가 `isError` 로 “주문 없음”을 알림 → 재시도 없이 그대로 안내. 티켓 생성(write)은 실행하지 않음. 처음엔 답변이 “승인해 주시면 남길 수 있다”고 해서 — 승인 흐름(10단계) 전까지는 모델에게 “승인 필요” 대신 “이 버전에서 사용할 수 없음”으로 알리도록 바꾼 뒤 “생성하지 못했다 · 고객센터 문의” 로 정직하게 답함 |
 | “주문 A-1003 언제 도착했어? 교환하려면?” (SDK v2) | 연결 테스트에서 2026-07-28 협상(93ms). 두 Tool 병렬 실행(60ms · 35ms), 배송 완료 · 택배사 · 교환 조건(7일 · 같은 상품 옵션) 정확, 티켓 접수는 못 했다고 밝힘, 검증 4/4 (14.6s). 다만 FAQ 에 없는 “회수 후 교환품 발송” 절차를 덧붙였고 검증도 통과시킴 — 근거 없는 세부 절차 추가는 이후 Evaluator 보강 대상 |
 
+Skill 연결 후 (2026-11-12, `refund-helper` 를 올려 검증 6항목 통과 → 활성화 → Agent 허용):
+
+| 요청 | 결과 |
+|---|---|
+| “주문 A-1003 단순 변심으로 환불하면 얼마 돌려받아요? 상품 가격은 32,000원” | 계획: 주문 조회(tool) → `refund-helper`(skill) → 답변. Skill 단계에서 본문을 따라 `skill.read_file` 로 환불 규정을 읽고 `builtin.calculate` 로 32,000 − 6,000 = 26,000원 계산(앞 단계 조회 결과는 다시 부르지 않음). 7일 기한 · 미사용 조건 · 신청 방법 · 환불 시점을 규정대로 안내하고, 결제 금액은 사용자 입력이라 교차 확인하지 못했다고 밝힘. 검증 4/4 (16.0s) |
+
 ## 개발 순서 (기획안 12장)
 
 1. NestJS 프로젝트 · DB 기반 ✅
@@ -188,9 +211,9 @@ MCP 연결 후 (2026-11-12, 데모 MCP 서버 `npm run dev:mcp-server` 를 콘�
 3. Agent Loop ✅ (OpenAI · DeepSeek · Gemini)
 4. Tool Registry · Tool Dispatcher ✅ (내장 Tool, 권한 정책 · 규칙, 병렬 · 재시도 · 시간 제한)
 5. MCP 동적 연결 ✅ (Streamable HTTP, SSRF, 탐색 · 검증 · 등록 · 변경 승인, 주기 재탐색, Agent 허용 목록, 콘솔 인증)
-6. SKILL.md Loader ← 다음
+6. SKILL.md Loader ✅ (zip 업로드 · 파싱 · 신뢰 검증 · 버전 · 활성화, metadata 기반 선택 → Skill 단계에서만 로딩, allowed-tools 범위)
 7. BullMQ 비동기 작업 (기본 파이프라인 ✅, 복구 · 주기 잡은 8단계와 함께)
-8. Checkpoint · Recovery
+8. Checkpoint · Recovery ← 다음
 9. Memory
 10. Permission · Approval
 11. Reflection · Context Compression

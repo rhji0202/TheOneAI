@@ -25,6 +25,10 @@ export type ErrorCode =
   | 'MCP_AUTH_UNSUPPORTED'
   | 'MCP_TOOL_INVALID'
   | 'MCP_SERVER_STATE'
+  | 'SKILL_PARSE_FAILED'
+  | 'SKILL_VERIFICATION_FAILED'
+  | 'SKILL_VERSION_EXISTS'
+  | 'PAYLOAD_TOO_LARGE'
   | 'RATE_LIMITED'
   | 'SERVICE_UNAVAILABLE'
   | 'INTERNAL_ERROR';
@@ -32,6 +36,8 @@ export type ErrorCode =
 export interface FieldIssue {
   path: string;
   message: string;
+  /** 파일 안 위치 (SKILL.md 파싱 오류) */
+  line?: number;
 }
 
 const TITLES: Record<ErrorCode, string> = {
@@ -57,6 +63,10 @@ const TITLES: Record<ErrorCode, string> = {
   MCP_AUTH_UNSUPPORTED: '아직 지원하지 않는 인증 방식입니다',
   MCP_TOOL_INVALID: '등록할 수 없는 Tool 입니다',
   MCP_SERVER_STATE: '지금 상태에서는 할 수 없는 작업입니다',
+  SKILL_PARSE_FAILED: 'Skill 번들 · SKILL.md 를 읽을 수 없습니다',
+  SKILL_VERIFICATION_FAILED: '신뢰 검증을 통과하지 못한 Skill 버전입니다',
+  SKILL_VERSION_EXISTS: '같은 버전이 이미 다른 내용으로 등록되어 있습니다',
+  PAYLOAD_TOO_LARGE: '요청이 너무 큽니다',
   RATE_LIMITED: '요청이 너무 많습니다',
   SERVICE_UNAVAILABLE: '일시적으로 처리할 수 없습니다',
   INTERNAL_ERROR: '서버 오류가 발생했습니다',

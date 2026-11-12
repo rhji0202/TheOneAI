@@ -5,6 +5,7 @@ import type { ModelRouter } from '../agent-runtime/model-router.js';
 import {
   MAX_PLAN_STEPS,
   plannerRole,
+  type PromptSkill,
   type PlanView,
   type PromptTool,
   renderNotes,
@@ -19,7 +20,7 @@ import { addUsage, emptyUsage, type LlmMessage, type LlmUsage } from '../llm/llm
  * 계획 출력 스키마. Tool 단계는 실행 가능한(승인 불필요) Tool 만 가리킬 수 있다.
  * 형식이 틀리면 오류 내용을 모델에게 돌려줘 한 번 고치게 한다.
  */
-export function plannerOutputSchema(runnableTools: string[]) {
+export function plannerOutputSchema(runnableTools: string[], skills: string[] = []) {
   return z
     .object({
       goal: z.string().trim().min(1).max(500),
@@ -27,8 +28,9 @@ export function plannerOutputSchema(runnableTools: string[]) {
         .array(
           z.object({
             title: z.string().trim().min(1).max(120),
-            kind: z.enum(['reason', 'tool', 'respond']),
+            kind: z.enum(['reason', 'tool', 'skill', 'respond']),
             tool: z.string().optional(),
+            skill: z.string().optional(),
             instructions: z.string().max(4_000).default(''),
           }),
         )
@@ -50,6 +52,13 @@ export function plannerOutputSchema(runnableTools: string[]) {
             code: 'custom',
             path: ['steps', i, 'tool'],
             message: `"${step.tool ?? ''}" is not an available tool. Use one of: ${runnableTools.join(', ') || '(none — use "reason" or "respond")'}`,
+          });
+        }
+        if (step.kind === 'skill' && (!step.skill || !skills.includes(step.skill))) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['steps', i, 'skill'],
+            message: `"${step.skill ?? ''}" is not an available skill. Use one of: ${skills.join(', ') || '(none — do not use "skill" steps)'}`,
           });
         }
       });
@@ -78,14 +87,16 @@ export class PlannerService {
     router: ModelRouter,
     context: AgentContext,
     tools: PromptTool[],
+    skills: PromptSkill[],
     revision: RevisionInput | null,
     signal: AbortSignal,
   ): Promise<PlannerResult> {
     const schema = plannerOutputSchema(
       tools.filter((t) => !t.requiresApproval).map((t) => t.llmName),
+      skills.map((s) => s.name),
     );
     const messages: LlmMessage[] = [
-      { role: 'system', content: systemPrompt(context.tenantPrompt, plannerRole(tools)) },
+      { role: 'system', content: systemPrompt(context.tenantPrompt, plannerRole(tools, skills)) },
       ...context.history,
       { role: 'user', content: this.userMessage(context, revision) },
     ];
@@ -103,6 +114,7 @@ export class PlannerService {
               title: truncate(s.title, 40),
               kind: s.kind,
               ...(s.kind === 'tool' && s.tool ? { tool: s.tool } : {}),
+              ...(s.kind === 'skill' && s.skill ? { skill: s.skill } : {}),
               instructions: s.instructions,
             })),
           },
