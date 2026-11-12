@@ -1,4 +1,8 @@
 import { Module } from '@nestjs/common';
+import { AgentsAdminModule } from './agents/admin/agents-admin.module.js';
+import { McpAdminModule } from './mcp/admin/mcp-admin.module.js';
+import { McpModule } from './mcp/mcp.module.js';
+import { AdminCoreModule } from './admin/admin-core.module.js';
 import { AppConfigModule } from './config/config.module.js';
 import { ConversationsModule } from './conversations/conversations.module.js';
 import { EventsModule } from './events/events.module.js';
@@ -21,9 +25,13 @@ import { WidgetModule } from './widget/widget.module.js';
     QueueModule,
     EventsModule,
     ToolsModule,
+    McpModule,
+    McpAdminModule,
     WidgetModule,
     ConversationsModule,
     TasksModule,
+    AdminCoreModule,
+    AgentsAdminModule,
   ],
   controllers: [HealthController],
 })

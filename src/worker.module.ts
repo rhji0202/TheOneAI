@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { McpModule } from './mcp/mcp.module.js';
 import { AppConfigModule } from './config/config.module.js';
 import { EventsModule } from './events/events.module.js';
 import { DatabaseModule } from './infrastructure/database/database.module.js';
@@ -18,6 +19,7 @@ import { ToolsModule } from './tools/tools.module.js';
     QueueModule,
     EventsModule,
     ToolsModule,
+    McpModule,
     WorkersModule,
   ],
 })

@@ -5,15 +5,18 @@
  * RLS 가 FORCE 되어 있으므로 테넌트 데이터는 반드시 app.tenant_id 를 설정한 트랜잭션 안에서 넣는다.
  */
 import 'dotenv/config';
+import { randomBytes } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { PrismaPg } from '@prisma/adapter-pg';
 import {
   PrismaClient,
   type IdentityMode,
+  type MemberRole,
   type Prisma,
   type ProviderKind,
   type ReasoningEffort,
 } from '../src/generated/prisma/client.js';
+import { hashPassword } from '../src/admin/auth/password.js';
 import { defaultExecutionPolicy, defaultMemoryPolicy } from '../src/agents/agent-policies.js';
 import { uuidv7 } from '../src/common/uuid.js';
 
@@ -42,6 +45,15 @@ export interface SeedTenantInput {
     identityMode?: IdentityMode;
   };
   llm?: SeedLlmInput;
+  /** 콘솔 멤버 (비밀번호는 scrypt 해시로 저장) */
+  members?: SeedMemberInput[];
+}
+
+export interface SeedMemberInput {
+  email: string;
+  name: string;
+  role: MemberRole;
+  password: string;
 }
 
 /**
@@ -131,6 +143,14 @@ export async function seedTenant(
   const agentVersionId = uuidv7();
   const widgetId = uuidv7();
   const registryVersionId = uuidv7();
+  const members = await Promise.all(
+    (input.members ?? []).map(async (m) => ({
+      email: m.email.toLowerCase(),
+      name: m.name,
+      role: m.role,
+      passwordHash: await hashPassword(m.password),
+    })),
+  );
 
   await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT set_config('app.tenant_id', ${tenantId}, true)`;
@@ -181,6 +201,8 @@ export async function seedTenant(
       },
     });
     if (input.llm) await attachLlm(tx, tenantId, agentVersionId, input.llm);
+    if (members.length)
+      await tx.user.createMany({ data: members.map((m) => ({ ...m, tenantId })) });
   });
 
   return { tenantId, agentId, agentVersionId, widgetId, registryVersionId };
@@ -245,6 +267,29 @@ async function ensureDemoModels(prisma: PrismaClient, tenantId: string): Promise
   });
 }
 
+/** 데모 테넌트에 콘솔 멤버가 없으면 Owner 를 만든다. 비밀번호: DEV_ADMIN_PASSWORD, 없으면 생성해 한 번만 출력 */
+async function ensureDemoOwner(prisma: PrismaClient, tenantId: string): Promise<void> {
+  const exists = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT set_config('app.tenant_id', ${tenantId}, true)`;
+    return (await tx.user.count()) > 0;
+  });
+  if (exists) return;
+  const password = process.env.DEV_ADMIN_PASSWORD || randomBytes(12).toString('base64url');
+  const passwordHash = await hashPassword(password);
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT set_config('app.tenant_id', ${tenantId}, true)`;
+    await tx.user.create({
+      data: { tenantId, email: DEMO_OWNER_EMAIL, name: '데모 Owner', role: 'owner', passwordHash },
+    });
+  });
+  console.log(`✔ 콘솔 Owner 생성: demo / ${DEMO_OWNER_EMAIL}`);
+  if (!process.env.DEV_ADMIN_PASSWORD) {
+    console.log(`  비밀번호(다시 표시하지 않음): ${password}`);
+  }
+}
+
+const DEMO_OWNER_EMAIL = 'owner@demo.local';
+
 /** 개발 환경: DATABASE_URL 의 계정을 app_rw 역할 로그인으로 만든다 (없을 때만). */
 export async function ensureAppLogin(
   prisma: PrismaClient,
@@ -280,6 +325,7 @@ async function main(): Promise<void> {
       Array<{ id: string | null }>
     >`SELECT app_resolve_tenant('demo') AS id`;
     if (found[0]?.id) {
+      await ensureDemoOwner(prisma, found[0].id);
       const attached = await ensureDemoModels(prisma, found[0].id);
       console.log(
         attached
@@ -300,6 +346,7 @@ async function main(): Promise<void> {
       llm: DEMO_DEEPSEEK,
     });
     console.log('✔ 데모 테넌트 생성', seeded);
+    await ensureDemoOwner(prisma, seeded.tenantId);
     console.log(
       '  모델: DeepSeek — DEV_SECRETS 에 vault://providers/deepseek 값(API Key)이 필요합니다.',
     );

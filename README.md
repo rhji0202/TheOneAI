@@ -40,6 +40,27 @@ npm run start:worker:dev        # Agent Worker (다른 터미널)
 
 LLM 키 없이 파이프라인만 보려면 `.env` 에 `AGENT_RUNTIME=placeholder` 를 둔다.
 
+시드는 콘솔 Owner `owner@demo.local` (워크스페이스 `demo`)를 만든다. 비밀번호는 `.env` 의 `DEV_ADMIN_PASSWORD`, 비어 있으면 생성해 한 번만 출력한다.
+
+### MCP 서버 연결해 보기
+
+데모 MCP 서버(`scripts/dev-mcp-server.ts` — 주문 조회 · FAQ 검색 · 문의 티켓)를 띄우고 콘솔 API 로 등록한 뒤 Agent 에서 켠다. 로컬 http 엔드포인트이므로 API · Worker 를 `MCP_ALLOW_INSECURE_HTTP=true` 로 실행하고, 서버는 `allowPrivateNetwork: true`(Owner 만 가능)로 등록한다.
+
+```bash
+npm run dev:mcp-server                         # http://127.0.0.1:3901/mcp
+A=$(curl -s -X POST localhost:3000/v1/admin/auth/login -H 'Content-Type: application/json' \
+  -d '{"tenantSlug":"demo","email":"owner@demo.local","password":"<DEV_ADMIN_PASSWORD>"}' | jq -r .accessToken)
+H=(-H "Authorization: Bearer $A" -H 'Content-Type: application/json')
+S=$(curl -s -X POST localhost:3000/v1/admin/mcp-servers "${H[@]}" -d '{"name":"demo-shop","transport":"streamable_http",
+  "endpointUrl":"http://127.0.0.1:3901/mcp","allowPrivateNetwork":true}' | jq -r .id)
+curl -s -X POST localhost:3000/v1/admin/mcp-servers/$S/test "${H[@]}"       # ① 연결 테스트 (SSRF · 핸드셰이크)
+curl -s -X POST localhost:3000/v1/admin/mcp-servers/$S/discover "${H[@]}"   # ② Tool 탐색 · 검증
+curl -s -X POST localhost:3000/v1/admin/mcp-servers/$S/register "${H[@]}"   # ④ 등록 → 새 Registry 버전
+AG=$(curl -s localhost:3000/v1/admin/agents "${H[@]}" | jq -r '.[0].id')
+curl -s -X PATCH localhost:3000/v1/admin/agents/$AG/draft "${H[@]}" -d "{\"mcpServers\":[{\"id\":\"$S\",\"enabled\":true}]}"
+curl -s -X POST localhost:3000/v1/admin/agents/$AG/publish "${H[@]}" -d '{}'  # Agent 새 버전 배포
+```
+
 ## LLM 모델 설정
 
 Agent Loop 는 역할마다 다른 모델을 쓴다 (`model_configs`, 화면 C-03 “모델 구성”). OpenAI · DeepSeek · Gemini 는 모두 각 사의 **OpenAI 호환 Chat Completions API** 로 호출하며, provider 별 차이는 [`src/llm/provider-params.ts`](src/llm/provider-params.ts) 에서 맞춘다.
@@ -87,6 +108,8 @@ e2e 가 확인하는 것: bootstrap(허용 도메인 · identity token 서명 ·
 
 Agent Loop 는 가짜 OpenAI 호환 서버([test/fake-llm-server.ts](test/fake-llm-server.ts))로 검증한다: 계획 → reason → 중간 평가 → 답변 → 검증 순서, 재계획(`plan.revised`), 계획 JSON 오류 시 기본 계획, 모델 오류 · API Key 없음 → `task.failed`, 역할별 모델 · 추론 파라미터 · 인증 헤더, 플랫폼 · 테넌트 지침, 대화 기록 포함, 토큰 사용량 기록. 실제 DeepSeek 로는 수동으로 확인했다(아래).
 
+MCP 는 [test/mcp.e2e-spec.ts](test/mcp.e2e-spec.ts) 가 공식 SDK 로 만든 MCP 서버([test/fake-mcp-server.ts](test/fake-mcp-server.ts))로 확인한다: 콘솔 로그인 · 역할(Viewer 는 조회만, 사설망 허용은 Owner 만, 위젯 토큰 거부), SSRF(사설 IP 로 해석되는 호스트를 연결 시점 DNS 검사로 차단, 메타데이터 IP 차단), 등록 마법사(연결 테스트 · API Key 전달 · 탐색 검증 · 보안 실패 Tool 제외 · 등록 → Registry 버전 · 감사 로그), 테넌트 격리, Agent 허용 목록(초안 → 배포, 허용 전 호출은 `not_allowed`), MCP Tool 실행(structuredContent · JSON Schema 인자 검증 · isError 는 재시도 안 함), 재탐색 변경 감지(검토 전에는 고정된 이전 정의 사용 → 승인 시 새 버전, 새 Tool 은 꺼진 채 추가), 서버 장애 → `error` · `tool_unavailable` → 복구 · 헬스, 연결 정보 변경 시 재검토, 비활성화 · 삭제(Secret 삭제 · 이름 재사용).
+
 Tool 은 [test/tools.e2e-spec.ts](test/tools.e2e-spec.ts) 가 확인한다: tool 단계 → 모델의 tool call → 서버 실행 → 결과가 다음 요청 · 답변에 반영, 읽기 Tool 병렬 실행(같은 `parallelGroup`, 결과는 호출 순서), 인자 오류를 모델에게 돌려줘 고치게 함, Tool 왕복 한도(`tool_choice: none` 으로 정리), Registry 에 없는 Tool · 조건 규칙 · 등급 정책 차단(`tool.denied`), 승인 필요 Tool 은 실행하지 않음, 내장 Tool 구성이 바뀌면 새 Registry 버전(이전 버전 불변), 멱등 Tool 재시도, 시간 제한.
 
 ## 구현 현황
@@ -98,6 +121,9 @@ Tool 은 [test/tools.e2e-spec.ts](test/tools.e2e-spec.ts) 가 확인한다: tool
 | 비동기 실행: BullMQ `agent-tasks`, Worker heartbeat, 단계 · checkpoint 저장, 최대 단계 · 시간 제한, 중지 처리 | 완료 |
 | LLM 연동: OpenAI 호환 클라이언트(OpenAI · DeepSeek · Gemini), 스트리밍 · tool call 파싱 · 재시도 · 대체 모델 · 역할별 추론 강도 | 완료 — DeepSeek 는 실제 API 로 확인, OpenAI · Gemini 는 키가 없어 단위 테스트(요청 형식)까지만 |
 | Agent Loop: Context → Plan → Execute(reason · tool) → Evaluate → 재계획 → Respond(스트리밍) → Verify, 토큰 예산 | 완료 — Skill · Memory 는 아직 없음 |
+| 콘솔 인증: `POST /v1/admin/auth/login`(scrypt) · `GET /v1/admin/me`, 역할 가드(Owner > Admin > Operator > Viewer, 매 요청 DB 재확인), 감사 로그 | 완료 — refresh 쿠키 회전 · 로그아웃은 콘솔 UI 단계 |
+| MCP (C-04 · C-05): Streamable HTTP 연결(공식 SDK), SSRF 방어(스킴 · 호스트 · DNS 해석 · 연결 시점 IP 검사, 메타데이터 IP 항상 차단), API Key(Secret 저장소), 연결 테스트 · Tool 탐색 · 검증(JSON Schema · 숨은 지시문 · 보이지 않는 문자 · 민감정보 · 제안 등급), 포함 Tool · 등록 → 새 Registry 버전, Tool 정책, 재탐색 변경 감지 → 운영자 승인, `mcp-sync` 주기 잡(장애 → error · 복구, 헬스 p95 · 오류율), 비활성화 · 삭제, Registry 버전 · diff API | 완료 — stdio(Docker Sandbox) 실행형 · OAuth 인증 · 이미지 서명 검증은 Sandbox 단계 |
+| Agent MCP 허용 목록: 초안(배포 버전 복사) → 배포, 실행 시 허용 목록 · 서버 상태 · Tool 사용 여부 확인(`not_allowed` · `tool_unavailable`) | 완료 — 초안 편집은 MCP 허용 목록만 (지침 · 모델 · 정책 편집은 C-03 단계) |
 | Tool Registry · Dispatcher: 작업별 Registry 버전 고정, 인자 검증(zod), 권한 판단(등급 정책 → Tool 재정의 → 조건 규칙), 읽기 Tool 병렬 실행, 시간 제한 · 취소 전파, 멱등 Tool 재시도, `tool_executions` 기록(거부 포함) · 민감정보 마스킹, `tool.called` · `tool.result` · `tool.denied` | 완료 — 내장 Tool 2개(`builtin.calculate`, `builtin.current_time`). 승인 필요 Tool 은 승인 흐름(10단계) 전까지 `approval_required` 로 거부 |
 | 비용 계산 (`tasks.cost_amount`) | 다음 단계 — 모델별 단가표 필요. 토큰 수는 기록 중 |
 | 승인 결정 · 재개(`resume`) · steer · 업로드 · 산출물 다운로드 | 다음 단계 (명세 §2.4 · §2.5 · §2.6) |
@@ -122,9 +148,11 @@ src/
 ├── llm/                           OpenAI 호환 클라이언트 · provider 별 파라미터 · JSON 출력 파싱 · 클라이언트 팩토리
 ├── agent-runtime/                 Agent Loop · 모델 라우터(역할별 · 대체) · Context · Executor · 프롬프트 · RunContext
 ├── planner/ · evaluator/          계획 생성 · 수정 / 중간 평가 · 최종 검증
-├── tools/                         Tool Registry(버전 스냅샷) · 권한 정책 · Dispatcher · 내장 Tool · 마스킹 · 규칙 조건
+├── tools/                         Tool Registry(버전 스냅샷) · 권한 정책 · 가용성 · Dispatcher · 내장 Tool · JSON Schema 검증 · 마스킹
+├── mcp/                           MCP 연결(SDK · SSRF 가드) · 탐색 · 검사 · 변경 감지 · 재탐색(mcp-sync) · 결과 변환 · 관리 API
+├── admin/                         콘솔 인증(로그인 · 토큰 · 역할 가드) · 감사 로그
 ├── workers/                       agent-tasks 프로세서 · 작업 실행 수명주기
-└── agents/                        실행 · Memory 정책 스키마
+└── agents/                        실행 · Memory 정책 스키마, Agent 초안 · 배포 API(MCP 허용 목록)
 ```
 
 ### 실제 DeepSeek 확인 결과 (2026-11-12)
@@ -145,14 +173,21 @@ Tool 연결 후 (2026-11-12, executor `deepseek-v4-flash`):
 | “지금 서울 시간 알려주고 1234*5678 계산해줘” | tool 1 + respond | 9.4s · 7.2s | 모델이 `current_time` · `calculate` 를 한 번에 요청 → 병렬 실행, 7,006,652 · 현재 시각 정확, 검증 4/4 |
 | “내일 서울 날씨 어때? 월 39,000원 18개월이면 총 얼마?” | tool 2 + respond | 14.0s · 11.1s | 날씨 Tool 이 없음을 밝히고 702,000원 계산, 검증 4/4. 처음엔 1단계에서 2단계 계산까지 해 버려 중복 호출 → 작업 단계 프롬프트에 “현재 단계만 · 노트 재사용” 추가 후 중복 없음 |
 
+MCP 연결 후 (2026-11-12, 데모 MCP 서버 `npm run dev:mcp-server` 를 콘솔 API 로 등록 · Agent 에서 허용):
+
+| 요청 | 결과 |
+|---|---|
+| “주문 A-1001 지금 어디쯤 왔어? 단순 변심 반품 비용은?” | 연결 테스트 61ms · Tool 3개 탐색(read · read · write) → 등록(Registry v3) → Agent v2 배포. 모델이 `demo-shop.lookup_order` · `search_faq` 를 한 번에 요청 → 병렬 실행(57ms · 35ms), 배송 현황 · 반품비 6,000원 정확, 검증 4/4 (12.1s · 첫 토큰 8.9s) |
+| “주문 A-9999 상태 확인하고, 안 되면 상담원 티켓 남겨줘” | 서버가 `isError` 로 “주문 없음”을 알림 → 재시도 없이 그대로 안내. 티켓 생성(write)은 실행하지 않음. 처음엔 답변이 “승인해 주시면 남길 수 있다”고 해서 — 승인 흐름(10단계) 전까지는 모델에게 “승인 필요” 대신 “이 버전에서 사용할 수 없음”으로 알리도록 바꾼 뒤 “생성하지 못했다 · 고객센터 문의” 로 정직하게 답함 |
+
 ## 개발 순서 (기획안 12장)
 
 1. NestJS 프로젝트 · DB 기반 ✅
 2. Widget 과 SSE 스트리밍 ✅
 3. Agent Loop ✅ (OpenAI · DeepSeek · Gemini)
 4. Tool Registry · Tool Dispatcher ✅ (내장 Tool, 권한 정책 · 규칙, 병렬 · 재시도 · 시간 제한)
-5. MCP 동적 연결 ← 다음
-6. SKILL.md Loader
+5. MCP 동적 연결 ✅ (Streamable HTTP, SSRF, 탐색 · 검증 · 등록 · 변경 승인, 주기 재탐색, Agent 허용 목록, 콘솔 인증)
+6. SKILL.md Loader ← 다음
 7. BullMQ 비동기 작업 (기본 파이프라인 ✅, 복구 · 주기 잡은 8단계와 함께)
 8. Checkpoint · Recovery
 9. Memory

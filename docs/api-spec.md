@@ -131,6 +131,7 @@ loader.js ──POST /v1/widget/bootstrap { publicKey, identityToken?, anonymous
 - access token: JWT 15분, claims `tid`, `sub`, `role`, `aud: "admin"`
 - refresh token: `HttpOnly; Secure; SameSite=Strict` 쿠키, 14일, 사용할 때마다 회전(재사용 감지 시 전체 세션 폐기)
 - SSO(OIDC)는 2차. `users.sso_subject` 컬럼만 준비.
+- 구현 상태: login · me · 역할 가드 · 감사 로그. access token 서명 키는 `ADMIN_SESSION_PRIVATE_KEY`(위젯 키와 별도). 비밀번호는 scrypt, 계정이 없어도 같은 비용으로 비교하고 실패 응답은 하나(“워크스페이스 · 이메일 · 비밀번호를 확인해 주세요”). 토큰이 유효해도 매 요청 멤버 상태 · 역할을 DB 에서 다시 확인한다. refresh 쿠키 회전 · 로그아웃은 콘솔 UI 단계.
 
 **역할별 권한 (RBAC)**
 
@@ -330,7 +331,9 @@ NestJS: 컨트롤러에서 `@Sse()` 대신 `Response` 를 직접 쓰는 `SseStre
 | `unknown_tool` | 작업이 고정한 Registry 버전에 없는 Tool (또는 실행 구현이 없는 Tool) | 포함 |
 | `blocked_by_policy` | 등급 정책 · Tool 재정의가 `block` | 포함 |
 | `blocked_by_rule` | 조건 규칙(`tool_policy_rules`, effect `block`)에 걸림. `tool_executions.output.matchedRuleIds` 에 규칙 기록 | 포함 |
-| `approval_required` | 승인이 필요한 Tool. 승인 흐름(개발 순서 10단계) 전까지는 실행하지 않고 이 사유로 거부한다 | 제외 |
+| `not_allowed` | MCP Tool 이지만 이 Agent 버전의 허용 목록(`agent_version_mcp_servers`)에 없는 서버 — 모델에게 보이지 않았어야 하는 호출 | 포함 |
+| `approval_required` | 승인이 필요한 Tool. 승인 흐름(개발 순서 10단계) 전까지는 실행하지 않고 이 사유로 거부한다 (모델에게는 “이 버전에서 사용할 수 없음”으로 알린다) | 제외 |
+| `tool_unavailable` | 작업 중에 MCP 서버가 오류 · 비활성 · 삭제 상태가 되었거나 운영자가 Tool 을 껐음 | 제외 |
 
 거부 · 인자 오류(`INVALID_ARGUMENTS`) · 실행 오류(`TOOL_ERROR`) · 시간 초과(`TOOL_TIMEOUT`)는 모두 `tool_executions` 에 남고, 작업을 실패시키지 않고 모델에게 `{ ok: false, error, message }` 로 돌려준다. 모델이 인자를 고치거나 다른 방법을 찾거나, 답변에서 한계를 밝힌다.
 
@@ -442,6 +445,8 @@ interface AgentDraftInput {
 
 배포 규칙: 초안 검증(모델 3역할 지정, 허용 목록의 서버 · Skill 이 활성 상태) 통과 시 `agent_versions.status = published`, `agents.published_version_id` 교체. 실행 중 작업은 영향 없음.
 
+구현 상태: `GET /admin/agents` · `GET /admin/agents/:id`(배포 버전 · 초안) · `PATCH …/draft` · `POST …/publish`. 초안이 없으면 배포 버전(모델 설정 · Skill · MCP 허용 목록 포함)을 복사해 만든다. 지금 초안에서 받는 필드는 `mcpServers` 뿐이고 다른 필드는 400 으로 거부한다. 배포 시 executor 모델과 허용 서버가 `connected` 인지 확인하고, 이전 배포 버전은 `archived`.
+
 ### 4.5 MCP · Tool Registry (C-04 · C-05)
 
 | Method | Path | 설명 |
@@ -491,9 +496,25 @@ interface DiscoveredTool {
   schema: { result: 'valid' | 'warning' | 'error'; issues: string[] };
   security: { result: 'passed' | 'warning' | 'failed'; issues: string[] }; // 설명 속 지시문, 대량 개인정보 반출 등
   suggestedLevel: PermissionLevel;
-  defaultInclude: boolean;                         // 스키마 오류 · 보안 경고면 false
+  defaultInclude: boolean;                         // 스키마 오류 · 보안 경고 · 삭제 · 금전 등급이면 false
 }
 ```
+
+구현 메모 (5단계)
+
+| 항목 | 동작 |
+|---|---|
+| 연결 | Streamable HTTP (공식 TypeScript SDK `@modelcontextprotocol/sdk` 1.x). `stdio_sandbox` 는 `MCP_TRANSPORT_UNSUPPORTED`, `oauth` 는 `MCP_AUTH_UNSUPPORTED` (Sandbox 단계). API Key 는 `Authorization: Bearer` 로 보낸다 |
+| SSRF | https 만(개발 `MCP_ALLOW_INSECURE_HTTP`). 요청마다 스킴 · 호스트(엔드포인트 + `allowedHosts`) 검사, 소켓 연결 시점에 DNS 해석 결과 전부 검사(DNS rebinding 대응), 리다이렉트는 같은 origin 만. 사설 · 루프백 · 링크로컬은 `allowPrivateNetwork`(Owner 만)일 때만, 클라우드 메타데이터 IP 는 항상 차단 |
+| 연결 테스트 | 실패해도 200 + `handshake: 'failed'`(화면이 원인 표시). 탐색 실패는 422 `MCP_SSRF_BLOCKED` · `MCP_HANDSHAKE_FAILED` |
+| 탐색 | 등록 전 서버(draft · pending_review · disabled): 결과를 바로 반영(운영자가 고른 포함 여부 · 등급 유지) → `pending_review`. 등록된 서버(connected · error): 차이를 `mcp_tools.pending_change` 로만 기록 → `changes` 응답 |
+| 보안 검사 | 설명 · 제목 · 파라미터 설명 · enum 속 숨은 지시문(“이전 지시 무시”, `<IMPORTANT>`, “다른 Tool 전에”, 자격 증명 반출 등) · 보이지 않는 문자(제로폭 · 방향 제어 · 태그 문자) → `failed`(포함 불가). 외부 URL · 민감정보 인자 · 대량 반출 징후 → `warning`(기본 제외, 운영자가 선택 가능) |
+| 제안 등급 | 이름 · 설명 키워드와 서버 annotations(`readOnlyHint` · `destructiveHint`) 중 더 엄격한 쪽. annotations 만으로 위험한 이름을 read 로 낮추지 않는다 |
+| 등록 | `pending_review` 에서만, 포함 Tool 1개 이상 → `connected` · `trust = verified` → 새 Registry 버전 |
+| 변경 승인 | added → 정의 반영 후 **꺼진 채** 추가(운영자가 Tool 정책에서 켬), changed → 정의 반영(스키마 오류 · 보안 실패면 끔), removed → `removed`. 승인 전까지 실행은 Registry 에 고정된 이전 정의를 쓴다 |
+| 연결 정보 수정 | 등록된 서버의 엔드포인트 · 인증 · 허용 호스트 · 사설망 설정이 바뀌면 `pending_review` 로 돌아가고 Tool 이 Registry 에서 빠진다 (탐색 → 등록 다시) |
+| 비활성화 · 삭제 | 새 Registry 버전에서 빠지고, 실행 중 작업도 다음 호출부터 `tool_unavailable`. 삭제는 soft delete + Secret 삭제 + 이름 재사용 가능 |
+| 응답 · 오류 | `tools/call` 결과는 `structuredContent` 우선, 없으면 텍스트(JSON 이면 파싱). 이미지 · 오디오는 형식만. `isError` 는 `TOOL_ERROR` 로 모델에게 알리고 재시도하지 않는다. 인자는 Registry 에 고정된 JSON Schema 로 먼저 검증(Ajv) — 틀리면 서버로 보내지 않는다 |
 
 ### 4.6 Skill (C-06)
 
@@ -652,7 +673,12 @@ interface WidgetConfigInput {
 | `APPROVAL_SCOPE_NOT_ALLOWED` | 422 | 범위 승인 불가 등급 | |
 | `ATTACHMENT_NOT_ALLOWED` | 422 | 형식 · 크기 위반 | 입력창 오류 |
 | `MCP_SSRF_BLOCKED` | 422 | 사설 · 메타데이터 IP, 허용 호스트 밖 | C-05 ① 오류 |
-| `MCP_HANDSHAKE_FAILED` | 422 | initialize 실패 | C-05 ① 오류 |
+| `MCP_HANDSHAKE_FAILED` | 422 | initialize 실패 · 인증 거부 | C-05 ① 오류 |
+| `MCP_TRANSPORT_UNSUPPORTED` | 422 | 아직 지원하지 않는 연결 방식 (stdio Sandbox) | C-05 ① |
+| `MCP_AUTH_UNSUPPORTED` | 422 | 아직 지원하지 않는 인증 (OAuth) | C-05 ① |
+| `MCP_TOOL_INVALID` | 422 | 스키마 오류 · 보안 실패 Tool 을 포함하거나 켬 | C-05 ③ · C-04 |
+| `MCP_SERVER_STATE` | 409 | 상태에 맞지 않는 단계 (예: 탐색 전 등록) | 마법사 단계 이동 |
+| `NAME_TAKEN` | 409 | 같은 이름의 MCP 서버 | 이름 입력 오류 |
 | `MCP_IMAGE_UNSIGNED` | 422 | 이미지 서명 없음 · 불일치 | C-05 ① 오류 |
 | `SKILL_PARSE_FAILED` | 422 | SKILL.md 파싱 실패 (`errors[].line`) | C-06 미리보기 |
 | `SKILL_VERIFICATION_FAILED` | 422 | 신뢰 검증 실패 | 활성화 버튼 비활성 |
@@ -711,7 +737,7 @@ agent.worker (queue: agent-tasks)
 | `agent-recovery` | 1분 주기 | `app_find_stalled_tasks('60 seconds')` → `recovering` 으로 바꾸고 `mode: 'resume'` 재투입 (복구 한도 3회) |
 | `approval-expiry` | 1분 주기 | 만료 승인 → `expired`, 작업 `paused` + checkpoint 유지 |
 | `memory-ingest` | 작업 완료 | Reflection 요약 · 임베딩 · 지시문 패턴 검사 후 저장 또는 격리 |
-| `mcp-sync` | 서버별 1시간 | 재탐색 → 변경이 있으면 `mcp_tools.pending_change` 기록 · 헬스 갱신 |
+| `mcp-sync` | 서버별 1시간 | 재탐색 → 변경이 있으면 `mcp_tools.pending_change` 기록 · 헬스 갱신. 구현: `MCP_SYNC_TICK_SEC`(기본 60초)마다 `app_list_mcp_servers_due_for_sync` 로 시기가 된 서버(연결됨 `MCP_SYNC_INTERVAL_SEC`, 오류 상태는 최대 5분)를 확인. 연결 실패 → `error`(Tool 제외), 성공 → `connected`(복구). 헬스 = 최근 24시간 호출 p95 · 오류율(모델의 인자 오류 제외) |
 | `skill-verify` | 업로드 · Git 등록 | 파싱 · 해시 · 서명 · 정적 검사 → `skill_versions.verification` |
 | `eval-runs` | C-03 테스트 실행 | 평가셋 실행 (실제 외부 쓰기 Tool 은 dry-run) |
 | `metrics-rollup` | 5분 주기 | `metrics_daily` 갱신 |

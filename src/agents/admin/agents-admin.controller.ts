@@ -1,0 +1,63 @@
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  Patch,
+  Post,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
+import { z } from 'zod';
+import { AdminAuthGuard, CurrentAdmin, Roles } from '../../admin/auth/admin-auth.guard.js';
+import type { AdminRequest, AdminSession } from '../../admin/auth/admin-session.js';
+import {
+  AgentsAdminService,
+  type DraftInput,
+  draftInputSchema,
+  type PublishInput,
+  publishInputSchema,
+} from './agents-admin.service.js';
+
+const uuid = { schema: z.uuid() };
+
+/** docs/api-spec.md §4.4 중 Agent 조회 · 초안(MCP 허용 목록) · 배포 */
+@Controller({ path: 'admin/agents', version: '1' })
+@UseGuards(AdminAuthGuard)
+export class AgentsAdminController {
+  constructor(private readonly agents: AgentsAdminService) {}
+
+  @Get()
+  list(@CurrentAdmin() admin: AdminSession) {
+    return this.agents.list(admin);
+  }
+
+  @Get(':id')
+  get(@CurrentAdmin() admin: AdminSession, @Param('id', uuid) id: string) {
+    return this.agents.get(admin, id);
+  }
+
+  @Patch(':id/draft')
+  @Roles('admin')
+  updateDraft(
+    @CurrentAdmin() admin: AdminSession,
+    @Param('id', uuid) id: string,
+    @Body({ schema: draftInputSchema }) body: DraftInput,
+    @Req() req: AdminRequest,
+  ) {
+    return this.agents.updateDraft(admin, id, body, req);
+  }
+
+  @Post(':id/publish')
+  @HttpCode(200)
+  @Roles('admin')
+  publish(
+    @CurrentAdmin() admin: AdminSession,
+    @Param('id', uuid) id: string,
+    @Body({ schema: publishInputSchema }) body: PublishInput,
+    @Req() req: AdminRequest,
+  ) {
+    return this.agents.publish(admin, id, body, req);
+  }
+}

@@ -1,11 +1,16 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { RunContext, StepOutcome } from '../agent-runtime/run-context.js';
 import { uuidv7 } from '../common/uuid.js';
+import { APP_CONFIG, type AppConfig } from '../config/app-config.js';
 import type { Prisma, ToolExecutionStatus } from '../generated/prisma/client.js';
 import type { LlmToolCall } from '../llm/llm.types.js';
+import { McpConnectionService } from '../mcp/mcp-connection.service.js';
+import { mcpResultToValue, ToolReportedError } from '../mcp/mcp-result.js';
+import { validateAgainst } from './json-schema.js';
 import { maskSensitive, preview } from './masking.js';
+import { type ToolAvailability, ToolAvailabilityService } from './tool-availability.service.js';
 import { ToolPermissionService } from './tool-permission.service.js';
-import type { ResolvedTool, Toolset } from './tool-registry.service.js';
+import { isExecutable, type ResolvedTool, type Toolset } from './tool-registry.service.js';
 import type { DeniedReason } from './tool.types.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -28,16 +33,22 @@ class ToolTimeoutError extends Error {}
 /**
  * Tool Dispatcher — 모델이 요청한 Tool 호출을 서버에서 검증하고 실행한다.
  *  1) 고정된 Registry 버전에 있는 Tool 인가 (없으면 unknown_tool 로 거부)
- *  2) 인자가 스키마에 맞는가 (아니면 실패를 모델에게 돌려줘 고치게 한다)
- *  3) 권한 정책 (거부 · 승인 필요 · 허용)
- *  4) 실행 (시간 제한 · 취소 전파) → tool_executions 기록, tool.called / tool.result 이벤트
+ *  2) MCP Tool: 이 Agent 의 허용 목록에 있는가(not_allowed) · 지금 서버 · Tool 이 사용 가능한가(tool_unavailable)
+ *  3) 인자가 스키마에 맞는가 (내장: zod, MCP: JSON Schema — 아니면 실패를 모델에게 돌려줘 고치게 한다)
+ *  4) 권한 정책 (거부 · 승인 필요 · 허용)
+ *  5) 실행 (시간 제한 · 취소 전파 · 멱등 Tool 재시도) → tool_executions 기록, tool.called / tool.result 이벤트
  * 모든 호출은 결과와 무관하게 tool_executions 에 남는다 (거부 포함 → 무단 Tool 호출 지표).
  */
 @Injectable()
 export class ToolDispatcherService {
   private readonly logger = new Logger(ToolDispatcherService.name);
 
-  constructor(private readonly permissions: ToolPermissionService) {}
+  constructor(
+    @Inject(APP_CONFIG) private readonly config: AppConfig,
+    private readonly permissions: ToolPermissionService,
+    private readonly availability: ToolAvailabilityService,
+    private readonly mcp: McpConnectionService,
+  ) {}
 
   /** 여러 호출: 모두 읽기 등급이고 병렬 실행이 켜져 있으면 동시에, 아니면 순서대로 (Agent 는 하나) */
   async dispatchAll(
@@ -107,7 +118,7 @@ export class ToolDispatcherService {
         };
 
         // 1) Registry 확인
-        if (!tool || !tool.builtin) {
+        if (!tool || !isExecutable(tool)) {
           await this.recordDenied(
             ctx,
             step.seq,
@@ -122,14 +133,45 @@ export class ToolDispatcherService {
           );
         }
 
-        // 2) 인자 검증
-        const parsed = rawArgs.ok ? tool.builtin.input.safeParse(rawArgs.value) : null;
-        if (!parsed?.success) {
-          const message = !rawArgs.ok
-            ? 'arguments are not valid JSON'
-            : parsed!.error.issues
-                .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
-                .join('; ');
+        // 2) MCP Tool — Agent 허용 목록 · 지금의 서버 · Tool 상태
+        let availability: ToolAvailability | null = null;
+        if (tool.source === 'mcp') {
+          availability = await this.availability.load(ctx.task.tenantId, ctx.task.agentVersionId);
+          const state = availability.check(tool);
+          if (state === 'not_allowed') {
+            await this.recordDenied(
+              ctx,
+              step.seq,
+              base,
+              'not_allowed',
+              '이 Agent 에 허용되지 않은 MCP 서버의 Tool 입니다',
+            );
+            return denial(
+              toolName,
+              'not_allowed',
+              `Tool '${call.name}' is not available. Use only the provided tools.`,
+            );
+          }
+          if (state === 'unavailable') {
+            await this.recordDenied(
+              ctx,
+              step.seq,
+              base,
+              'tool_unavailable',
+              'MCP 서버 또는 Tool 을 지금 사용할 수 없습니다',
+            );
+            return denial(
+              toolName,
+              'tool_unavailable',
+              'This tool is temporarily unavailable. Do not retry it; continue without it and tell the user if it matters.',
+            );
+          }
+        }
+
+        // 3) 인자 검증
+        const parsed = validateArguments(tool, rawArgs);
+        if (!parsed.ok) {
+          const message = parsed.message;
           await this.recordFinished(ctx, step.seq, base, 'failed', {
             errorCode: 'INVALID_ARGUMENTS',
             errorMessage: message,
@@ -147,8 +189,11 @@ export class ToolDispatcherService {
           };
         }
 
-        // 3) 권한
-        const decision = (await this.permissions.load(ctx.task.tenantId)).decide(tool, parsed.data);
+        // 4) 권한
+        const decision = (await this.permissions.load(ctx.task.tenantId)).decide(
+          tool,
+          parsed.value,
+        );
         if (decision.decision === 'deny') {
           await this.recordDenied(
             ctx,
@@ -173,12 +218,12 @@ export class ToolDispatcherService {
           return denial(
             toolName,
             'approval_required',
-            'This action requires user approval, which is not available yet. Do not retry; tell the user it could not be performed.',
+            'This action is not available in this version. Do not retry; tell the user it could not be performed.',
           );
         }
 
-        // 4) 실행
-        return this.execute(ctx, step.seq, tool, parsed.data, base);
+        // 5) 실행
+        return this.execute(ctx, step.seq, tool, parsed.value, base, availability);
       },
     );
   }
@@ -190,8 +235,9 @@ export class ToolDispatcherService {
     tool: ResolvedTool,
     args: unknown,
     base: ExecutionBase,
+    availability: ToolAvailability | null,
   ): Promise<StepOutcome<DispatchResult>> {
-    const builtin = tool.builtin!;
+    const run = this.runner(ctx, tool, args, availability);
     const startedAt = new Date();
     await ctx.record(async (tx, emit) => {
       await tx.toolExecution.create({ data: { ...base, status: 'running', startedAt } });
@@ -205,11 +251,14 @@ export class ToolDispatcherService {
     });
 
     const { toolRetry } = ctx.task.executionPolicy;
-    const maxAttempts = builtin.idempotent ? toolRetry.maxAttempts : 1;
-    const timeoutMs = builtin.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const idempotent = tool.builtin?.idempotent ?? tool.idempotent ?? false;
+    const maxAttempts = idempotent ? toolRetry.maxAttempts : 1;
+    const timeoutMs =
+      tool.builtin?.timeoutMs ??
+      (tool.source === 'mcp' ? this.config.mcp.toolTimeoutMs : DEFAULT_TIMEOUT_MS);
     for (let attempt = 1; ; attempt++) {
       try {
-        const result = await runWithTimeout(builtin, args, ctx, timeoutMs);
+        const result = await runWithTimeout(run, ctx, timeoutMs);
         const masked = maskSensitive(result);
         await this.recordFinished(ctx, seq, base, 'succeeded', {
           output: masked,
@@ -233,7 +282,8 @@ export class ToolDispatcherService {
           : err instanceof Error
             ? err.message
             : String(err);
-        if (attempt < maxAttempts) {
+        // Tool 이 스스로 실패를 알린 경우(MCP isError)는 같은 결과가 나올 것이므로 다시 시도하지 않는다
+        if (attempt < maxAttempts && !(err instanceof ToolReportedError)) {
           this.logger.warn(
             `Tool ${tool.name} 실패 (시도 ${attempt}/${maxAttempts}) — 다시 시도: ${message}`,
           );
@@ -261,6 +311,42 @@ export class ToolDispatcherService {
         };
       }
     }
+  }
+
+  /** 한 번 실행하는 함수 (내장: execute, MCP: tools/call → 결과 변환) */
+  private runner(
+    ctx: RunContext,
+    tool: ResolvedTool,
+    args: unknown,
+    availability: ToolAvailability | null,
+  ): (signal: AbortSignal) => Promise<unknown> {
+    if (tool.builtin) {
+      const builtin = tool.builtin;
+      return (signal) =>
+        builtin.execute(args, {
+          tenantId: ctx.task.tenantId,
+          taskId: ctx.task.id,
+          endUserId: ctx.task.endUserId,
+          conversationId: ctx.task.conversationId,
+          signal,
+        });
+    }
+    const target = availability?.target(tool.mcpServerId!);
+    if (!target) throw new Error(`MCP 서버 정보를 찾을 수 없습니다: ${tool.name}`);
+    const timeoutMs = this.config.mcp.toolTimeoutMs;
+    return async (signal) =>
+      mcpResultToValue(
+        await this.mcp.callTool(
+          target,
+          tool.mcpToolName!,
+          (args ?? {}) as Record<string, unknown>,
+          {
+            signal,
+            // 응답 대기 상한은 Dispatcher 의 시간 제한이 먼저 걸리도록 조금 길게
+            timeoutMs: timeoutMs + 1_000,
+          },
+        ),
+      );
   }
 
   private async recordDenied(
@@ -374,8 +460,7 @@ function denial(
 
 /** 한 번 실행: 시간 제한 + 작업 취소 전파 */
 async function runWithTimeout(
-  builtin: NonNullable<ResolvedTool['builtin']>,
-  args: unknown,
+  run: (signal: AbortSignal) => Promise<unknown>,
   ctx: RunContext,
   timeoutMs: number,
 ): Promise<unknown> {
@@ -385,13 +470,7 @@ async function runWithTimeout(
   let timer: NodeJS.Timeout | undefined;
   try {
     return await Promise.race([
-      builtin.execute(args, {
-        tenantId: ctx.task.tenantId,
-        taskId: ctx.task.id,
-        endUserId: ctx.task.endUserId,
-        conversationId: ctx.task.conversationId,
-        signal: controller.signal,
-      }),
+      run(controller.signal),
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
           controller.abort(new ToolTimeoutError());
@@ -416,6 +495,30 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
     const timer = setTimeout(done, ms);
     signal.addEventListener('abort', done, { once: true });
   });
+}
+
+/** 내장 Tool 은 zod, MCP Tool 은 Registry 에 고정된 JSON Schema 로 검증한다 */
+function validateArguments(
+  tool: ResolvedTool,
+  raw: { ok: true; value: unknown } | { ok: false },
+): { ok: true; value: unknown } | { ok: false; message: string } {
+  if (!raw.ok) return { ok: false, message: 'arguments are not valid JSON' };
+  if (tool.builtin) {
+    const parsed = tool.builtin.input.safeParse(raw.value);
+    return parsed.success
+      ? { ok: true, value: parsed.data }
+      : {
+          ok: false,
+          message: parsed.error.issues
+            .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
+            .join('; '),
+        };
+  }
+  if (!raw.value || typeof raw.value !== 'object' || Array.isArray(raw.value)) {
+    return { ok: false, message: '(root): arguments must be a JSON object' };
+  }
+  const checked = validateAgainst(tool.inputSchema, raw.value);
+  return checked.ok ? { ok: true, value: raw.value } : checked;
 }
 
 function parseArguments(raw: string): { ok: true; value: unknown } | { ok: false } {

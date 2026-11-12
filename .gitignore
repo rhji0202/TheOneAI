@@ -4,6 +4,7 @@ coverage/
 .env
 .env.*
 !.env.example
+.secrets.local.json
 src/generated/
 *.log
 .DS_Store

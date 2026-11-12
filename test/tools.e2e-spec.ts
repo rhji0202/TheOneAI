@@ -328,7 +328,7 @@ describe('Registry 버전 · 승인 · 재시도 · 시간 제한', () => {
     const offered = workRequests('#approval')[0]!.body.tools!.find(
       (t) => t.function.name === 'test__send_note',
     )!;
-    expect(offered.function.description).toContain('Requires user approval');
+    expect(offered.function.description).toContain('Not available in this version');
     expect(toolEvents(events, 'tool.denied')).toEqual([
       expect.objectContaining({ toolName: 'test.send_note', reason: 'approval_required' }),
     ]);

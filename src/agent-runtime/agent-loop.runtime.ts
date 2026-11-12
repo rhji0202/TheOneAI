@@ -3,6 +3,7 @@ import { EvaluatorService } from '../evaluator/evaluator.service.js';
 import type { LlmUsage } from '../llm/llm.types.js';
 import { PlannerService } from '../planner/planner.service.js';
 import type { PlanStep } from '../tasks/plan.js';
+import { ToolAvailabilityService } from '../tools/tool-availability.service.js';
 import { type PolicySet, ToolPermissionService } from '../tools/tool-permission.service.js';
 import {
   type ResolvedTool,
@@ -33,6 +34,7 @@ export class AgentLoopRuntime implements AgentRuntime {
     private readonly evaluator: EvaluatorService,
     private readonly registry: ToolRegistryService,
     private readonly permissions: ToolPermissionService,
+    private readonly availability: ToolAvailabilityService,
   ) {}
 
   async run(ctx: RunContext): Promise<RunResult> {
@@ -49,7 +51,11 @@ export class AgentLoopRuntime implements AgentRuntime {
           ctx.task.registryVersionId,
         );
         const policy = await this.permissions.load(ctx.task.tenantId);
-        const usable = tools.available.filter((t) => policy.planningMode(t) !== 'blocked');
+        // MCP Tool 은 이 Agent 버전의 허용 목록에 있고 서버 · Tool 이 지금 사용 가능한 것만 보여 준다
+        const live = await this.availability.load(ctx.task.tenantId, ctx.task.agentVersionId);
+        const usable = tools.available.filter(
+          (t) => policy.planningMode(t) !== 'blocked' && live.check(t) === 'ok',
+        );
         const prompt: PromptTool[] = usable.map((t) => ({
           llmName: t.llmName,
           level: t.level,

@@ -7,3 +7,6 @@ export interface AgentTaskJobData {
   mode: 'start' | 'resume';
   fromStepId?: string;
 }
+
+/** 등록된 MCP 서버 재탐색 (주기 잡 — 서버별 주기는 MCP_SYNC_INTERVAL_SEC) */
+export const MCP_SYNC_QUEUE = 'mcp-sync';

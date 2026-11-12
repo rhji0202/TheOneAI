@@ -19,7 +19,10 @@ const snapshotToolSchema = z
       .enum(['auto', 'require_approval', 'always_approval', 'block'])
       .nullable()
       .default(null),
+    idempotent: z.boolean().optional(),
     mcpToolId: z.string().optional(),
+    mcpServerId: z.string().optional(),
+    mcpToolName: z.string().optional(),
   })
   .passthrough();
 
@@ -36,9 +39,12 @@ export function parseSnapshot(value: unknown): RegistrySnapshot {
     : { builtinsHash: '', tools: [], skills: [] };
 }
 
+/** 모델에게 보여 줄 Tool 설명 상한 (MCP 서버가 준 설명이 지나치게 길 때) */
+const MAX_TOOL_DESCRIPTION = 1_000;
+
 export interface ResolvedTool extends SnapshotTool {
   llmName: string;
-  /** 실행 구현. MCP Tool 은 5단계에서 연결되며, 그 전까지는 null(사용 불가) */
+  /** 내장 Tool 의 실행 구현. MCP Tool 은 null (McpConnectionService 로 호출) */
   builtin: BuiltinTool | null;
 }
 
@@ -53,9 +59,9 @@ export class Toolset {
     for (const tool of tools) this.byLlm.set(tool.llmName, tool);
   }
 
-  /** 실행 구현이 있는 Tool */
+  /** 실행할 방법이 있는 Tool (내장 구현이 있거나, 서버 · 원래 이름이 기록된 MCP Tool) */
   get available(): ResolvedTool[] {
-    return this.tools.filter((t) => t.builtin !== null);
+    return this.tools.filter((t) => isExecutable(t));
   }
 
   byLlmName(name: string): ResolvedTool | undefined {
@@ -77,11 +83,31 @@ export class Toolset {
   }
 }
 
+export function isExecutable(tool: ResolvedTool): boolean {
+  return tool.source === 'builtin'
+    ? tool.builtin !== null
+    : Boolean(tool.mcpServerId && tool.mcpToolName);
+}
+
+export interface RegistryDiff {
+  added: string[];
+  removed: string[];
+  changed: string[];
+}
+
+export interface PublishedVersion {
+  id: string;
+  version: number;
+  created: boolean;
+  diff: RegistryDiff;
+}
+
 /**
  * Tool Registry — 승인된 Tool 구성의 불변 버전(tool_registry_versions).
+ *  - 스냅샷 = 배포된 내장 Tool + 운영자가 등록한 MCP Tool(연결됨 · 사용 · 스키마 정상).
  *  - 새 작업은 생성 시점의 최신 버전을 고정한다 (실행 중 MCP · Skill 변경과 무관).
- *  - 내장 Tool 은 배포된 코드가 기준이므로, 구성이 바뀌었으면 작업 생성 시 새 버전을 만든다.
- *  - MCP Tool 은 5단계에서 운영자 검토 후 새 버전으로 추가된다.
+ *  - 구성이 바뀔 때마다(내장 Tool 배포, MCP 등록 · 정책 · 변경 승인 · 비활성화) 새 버전을 만든다.
+ *  - 버전 생성은 테넌트 단위 advisory lock 으로 직렬화한다.
  */
 @Injectable()
 export class ToolRegistryService {
@@ -92,41 +118,50 @@ export class ToolRegistryService {
     private readonly catalog: BuiltinToolCatalog,
   ) {}
 
+  /** 작업 생성 시: 최신 버전 id. 배포된 내장 Tool 구성이 달라졌으면 새 버전을 만든다. */
   async ensureCurrentVersion(tx: TenantTx, tenantId: string): Promise<string> {
-    const latest = await tx.toolRegistryVersion.findFirst({
-      where: { tenantId },
-      orderBy: { version: 'desc' },
-      select: { id: true, version: true, snapshot: true },
-    });
-    const current = parseSnapshot(latest?.snapshot);
-    const builtinsHash = this.catalog.hash();
-    if (latest && current.builtinsHash === builtinsHash) return latest.id;
+    const latest = await this.latest(tx, tenantId);
+    if (latest && parseSnapshot(latest.snapshot).builtinsHash === this.catalog.hash()) {
+      return latest.id;
+    }
+    return (await this.publish(tx, tenantId, { reason: 'builtin_tools_changed' })).id;
+  }
 
-    const builtins = this.catalog.snapshotTools();
-    const next: RegistrySnapshot = {
-      builtinsHash,
-      tools: [...builtins, ...current.tools.filter((t) => t.source !== 'builtin')],
-      skills: current.skills,
-    };
-    const before = new Map(
-      current.tools.filter((t) => t.source === 'builtin').map((t) => [t.name, t.schemaHash]),
-    );
-    const after = new Map(builtins.map((t) => [t.name, t.schemaHash]));
+  /**
+   * 현재 구성으로 스냅샷을 만들어, 최신 버전과 다르면 새 버전으로 저장한다.
+   * 같으면 최신 버전을 그대로 돌려준다 (created = false).
+   */
+  async publish(
+    tx: TenantTx,
+    tenantId: string,
+    change: { reason: string; [key: string]: unknown },
+  ): Promise<PublishedVersion> {
+    await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(hashtextextended(${`tool-registry:${tenantId}`}, 0))`;
+    const latest = await this.latest(tx, tenantId);
+    const previous = parseSnapshot(latest?.snapshot);
+    const next = await this.buildSnapshot(tx);
+    const diff = diffSnapshots(previous, next);
+    const unchanged =
+      latest &&
+      previous.builtinsHash === next.builtinsHash &&
+      !diff.added.length &&
+      !diff.removed.length &&
+      !diff.changed.length;
+    if (unchanged) return { id: latest.id, version: latest.version, created: false, diff };
+
     const created = await tx.toolRegistryVersion.create({
       data: {
         tenantId,
         version: (latest?.version ?? 0) + 1,
         snapshot: next as unknown as Prisma.InputJsonValue,
-        changeSummary: {
-          reason: 'builtin_tools_changed',
-          added: [...after.keys()].filter((n) => !before.has(n)),
-          removed: [...before.keys()].filter((n) => !after.has(n)),
-          changed: [...after.keys()].filter((n) => before.has(n) && before.get(n) !== after.get(n)),
-        },
+        changeSummary: { ...change, ...diff } as Prisma.InputJsonValue,
       },
-      select: { id: true },
+      select: { id: true, version: true },
     });
-    return created.id;
+    this.logger.log(
+      `Tool Registry v${created.version} (${change.reason}) +${diff.added.length} -${diff.removed.length} ~${diff.changed.length}`,
+    );
+    return { ...created, created: true, diff };
   }
 
   async loadToolset(tenantId: string, registryVersionId: string): Promise<Toolset> {
@@ -154,4 +189,60 @@ export class ToolRegistryService {
     }
     return new Toolset(registryVersionId, tools);
   }
+
+  private latest(tx: TenantTx, tenantId: string) {
+    return tx.toolRegistryVersion.findFirst({
+      where: { tenantId },
+      orderBy: { version: 'desc' },
+      select: { id: true, version: true, snapshot: true },
+    });
+  }
+
+  private async buildSnapshot(tx: TenantTx): Promise<RegistrySnapshot> {
+    const mcpTools = await tx.mcpTool.findMany({
+      where: {
+        enabled: true,
+        state: { not: 'removed' },
+        schemaCheck: { not: 'error' },
+        // 오류 상태 서버의 Tool 도 스냅샷에는 남긴다 — 실행 가능 여부는 호출 시점의 서버 상태로 판단(복구되면 바로 다시 사용)
+        server: { status: { in: ['connected', 'error'] }, deletedAt: null },
+      },
+      include: { server: { select: { id: true, name: true } } },
+      orderBy: [{ server: { name: 'asc' } }, { name: 'asc' }],
+    });
+    const mcp: SnapshotTool[] = mcpTools.map((t) => ({
+      name: `${t.server.name}.${t.name}`,
+      source: 'mcp',
+      description: truncate(t.description ?? t.title ?? '', MAX_TOOL_DESCRIPTION),
+      inputSchema: t.inputSchema as Record<string, unknown>,
+      schemaHash: t.schemaHash,
+      level: t.permissionLevel,
+      modeOverride: t.approvalModeOverride,
+      idempotent: t.permissionLevel === 'read',
+      mcpToolId: t.id,
+      mcpServerId: t.server.id,
+      mcpToolName: t.name,
+    }));
+    return {
+      builtinsHash: this.catalog.hash(),
+      tools: [...this.catalog.snapshotTools(), ...mcp],
+      skills: [],
+    };
+  }
+}
+
+/** Tool 이름 기준 추가 · 삭제 · 변경(스키마 · 설명 · 등급 · 승인 재정의) */
+export function diffSnapshots(before: RegistrySnapshot, after: RegistrySnapshot): RegistryDiff {
+  const key = (t: SnapshotTool) => `${t.schemaHash}|${t.level}|${t.modeOverride ?? ''}`;
+  const prev = new Map(before.tools.map((t) => [t.name, key(t)]));
+  const next = new Map(after.tools.map((t) => [t.name, key(t)]));
+  return {
+    added: [...next.keys()].filter((n) => !prev.has(n)),
+    removed: [...prev.keys()].filter((n) => !next.has(n)),
+    changed: [...next.keys()].filter((n) => prev.has(n) && prev.get(n) !== next.get(n)),
+  };
+}
+
+function truncate(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }

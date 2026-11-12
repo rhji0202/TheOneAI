@@ -18,6 +18,10 @@ import type { AddressInfo } from 'node:net';
  *   [도구한도]   Tool 을 끝없이 호출 → 왕복 한도 후 tool_choice=none 으로 정리
  *   [재시도]     첫 시도에 실패하는 멱등 Tool (테스트가 등록) → 재시도 후 성공
  *   [시간초과]   시간 제한을 넘기는 Tool (테스트가 등록)
+ * MCP 시나리오 (test/fake-mcp-server.ts 의 shop 서버)
+ *   [MCP조회]    shop__lookup_order 호출
+ *   [MCP인자]    JSON Schema 에 맞지 않는 인자 → 고쳐서 다시 호출
+ *   [MCP오류]    서버가 isError 로 실패를 알림 (읽기 Tool 이어도 재시도하지 않음)
  */
 export interface RecordedRequest {
   role: string;
@@ -64,7 +68,14 @@ type Call = [name: string, args: unknown];
 function scripted(text: string, round: number, toolsOffered: boolean): Call[] | null {
   if (text.includes('[도구한도]'))
     return toolsOffered ? [['builtin__calculate', { expression: `${round}+1` }]] : null;
+  if (text.includes('[MCP인자]')) {
+    if (round === 0) return [['shop__lookup_order', { order: 1001 }]]; // 필수 인자 누락 + 모르는 인자
+    if (round === 1) return [['shop__lookup_order', { orderId: 'A-1002' }]];
+    return null;
+  }
   if (round > 0 && !text.includes('[잘못된인자]')) return null;
+  if (text.includes('[MCP조회]')) return [['shop__lookup_order', { orderId: 'A-1001' }]];
+  if (text.includes('[MCP오류]')) return [['shop__search_faq', { query: 'fail' }]];
   if (text.includes('[도구]')) return [['builtin__calculate', { expression: '1234*5678' }]];
   if (text.includes('[병렬]')) {
     return [
@@ -118,6 +129,14 @@ function toolPlan(text: string, lastUser: string): Record<string, unknown> | nul
       goal: '파일 보기',
       steps: [{ title: '파일 확인', kind: 'reason', instructions: '' }, respond],
     };
+  for (const tag of ['[MCP조회]', '[MCP인자]', '[MCP오류]']) {
+    // 허용 목록에 없을 때도 모델이 Tool 을 부르도록 reason 단계로 계획한다
+    if (text.includes(tag))
+      return {
+        goal: '주문 확인',
+        steps: [{ title: '주문 확인', kind: 'reason', instructions: '' }, respond],
+      };
+  }
   if (text.includes('[재시도]'))
     return { goal: '재고 조회', steps: [tool('재고 조회', 'test__flaky'), respond] };
   if (text.includes('[시간초과]'))

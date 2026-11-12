@@ -9,7 +9,7 @@ import { LocalSecretStore, SecretStore } from './secret-store.js';
       provide: SecretStore,
       inject: [APP_CONFIG],
       useFactory: (config: AppConfig): SecretStore =>
-        new LocalSecretStore(config.secrets.devSecrets),
+        new LocalSecretStore(config.secrets.devSecrets, config.secrets.localFile),
     },
   ],
   exports: [SecretStore],

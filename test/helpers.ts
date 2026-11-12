@@ -22,6 +22,8 @@ export interface TestContext {
   tenantC: SeededTenant;
   /** 이번 실행에서 쓰는 위젯 (공개 키에 실행별 접미사가 붙는다) */
   widgets: { A: TestWidget; B: TestWidget; C: TestWidget };
+  /** 테넌트 slug (콘솔 로그인용) */
+  slugs: { A: string; B: string; C: string };
   close(): Promise<void>;
 }
 
@@ -54,8 +56,10 @@ export async function startTestApp(): Promise<TestContext> {
     B: { ...WIDGET_B, publicKey: `${WIDGET_B.publicKey}_${suffix}` },
     C: { ...WIDGET_C, publicKey: `${WIDGET_C.publicKey}_${suffix}` },
   };
+  const slugs = { A: `e2e-a-${suffix}`, B: `e2e-b-${suffix}`, C: `e2e-c-${suffix}` };
   const tenantA = await seedTenant(owner, {
-    slug: `e2e-a-${suffix}`,
+    slug: slugs.A,
+    members: Object.values(CONSOLE_MEMBERS),
     name: '테넌트 A',
     widget: {
       publicKey: widgets.A.publicKey,
@@ -65,7 +69,8 @@ export async function startTestApp(): Promise<TestContext> {
     llm: fakeLlmConfig(llm.baseUrl),
   });
   const tenantB = await seedTenant(owner, {
-    slug: `e2e-b-${suffix}`,
+    slug: slugs.B,
+    members: [CONSOLE_MEMBERS.owner],
     name: '테넌트 B',
     widget: {
       publicKey: widgets.B.publicKey,
@@ -75,7 +80,7 @@ export async function startTestApp(): Promise<TestContext> {
     llm: fakeLlmConfig(llm.baseUrl),
   });
   const tenantC = await seedTenant(owner, {
-    slug: `e2e-c-${suffix}`,
+    slug: slugs.C,
     name: '테넌트 C',
     widget: {
       publicKey: widgets.C.publicKey,
@@ -103,12 +108,39 @@ export async function startTestApp(): Promise<TestContext> {
     tenantB,
     tenantC,
     widgets,
+    slugs,
     async close() {
       await app.close();
       await owner.$disconnect();
       await llm.close();
     },
   };
+}
+
+/** 테넌트 A 의 콘솔 멤버 (B 에는 owner 만) */
+export const CONSOLE_MEMBERS = {
+  owner: { email: 'owner@e2e.test', name: 'Owner', role: 'owner', password: 'owner-pass-1234' },
+  admin: { email: 'admin@e2e.test', name: 'Admin', role: 'admin', password: 'admin-pass-1234' },
+  viewer: {
+    email: 'viewer@e2e.test',
+    name: 'Viewer',
+    role: 'viewer',
+    password: 'viewer-pass-1234',
+  },
+} as const;
+
+/** 콘솔 로그인 → access token */
+export async function adminLogin(
+  baseUrl: string,
+  tenantSlug: string,
+  member: { email: string; password: string },
+): Promise<string> {
+  const res = await api<{ accessToken: string }>(baseUrl, 'POST', '/v1/admin/auth/login', {
+    body: { tenantSlug, email: member.email, password: member.password },
+  });
+  if (res.status !== 200)
+    throw new Error(`콘솔 로그인 실패: ${res.status} ${JSON.stringify(res.body)}`);
+  return res.body.accessToken;
 }
 
 export async function identityToken(

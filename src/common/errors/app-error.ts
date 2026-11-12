@@ -16,6 +16,15 @@ export type ErrorCode =
   | 'IDEMPOTENCY_KEY_REUSED'
   | 'ATTACHMENT_NOT_ALLOWED'
   | 'AGENT_NOT_PUBLISHED'
+  | 'AGENT_DRAFT_INVALID'
+  | 'NAME_TAKEN'
+  | 'REGISTRY_CHANGED'
+  | 'MCP_SSRF_BLOCKED'
+  | 'MCP_HANDSHAKE_FAILED'
+  | 'MCP_TRANSPORT_UNSUPPORTED'
+  | 'MCP_AUTH_UNSUPPORTED'
+  | 'MCP_TOOL_INVALID'
+  | 'MCP_SERVER_STATE'
   | 'RATE_LIMITED'
   | 'SERVICE_UNAVAILABLE'
   | 'INTERNAL_ERROR';
@@ -39,6 +48,15 @@ const TITLES: Record<ErrorCode, string> = {
   IDEMPOTENCY_KEY_REUSED: '같은 Idempotency-Key 로 다른 요청을 보냈습니다',
   ATTACHMENT_NOT_ALLOWED: '첨부할 수 없는 파일입니다',
   AGENT_NOT_PUBLISHED: '배포된 Agent 가 없습니다',
+  AGENT_DRAFT_INVALID: 'Agent 초안을 배포할 수 없습니다',
+  NAME_TAKEN: '이미 사용 중인 이름입니다',
+  REGISTRY_CHANGED: '검토하는 동안 Tool 구성이 바뀌었습니다',
+  MCP_SSRF_BLOCKED: '허용되지 않은 네트워크 대상입니다',
+  MCP_HANDSHAKE_FAILED: 'MCP 서버와 연결하지 못했습니다',
+  MCP_TRANSPORT_UNSUPPORTED: '아직 지원하지 않는 연결 방식입니다',
+  MCP_AUTH_UNSUPPORTED: '아직 지원하지 않는 인증 방식입니다',
+  MCP_TOOL_INVALID: '등록할 수 없는 Tool 입니다',
+  MCP_SERVER_STATE: '지금 상태에서는 할 수 없는 작업입니다',
   RATE_LIMITED: '요청이 너무 많습니다',
   SERVICE_UNAVAILABLE: '일시적으로 처리할 수 없습니다',
   INTERNAL_ERROR: '서버 오류가 발생했습니다',

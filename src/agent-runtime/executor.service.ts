@@ -54,9 +54,7 @@ export class ExecutorService {
     const { ctx, router, context, plan, stepIndex, notes, toolset } = input;
     const step = plan.steps[stepIndex - 1]!;
     const definitions = toolset.definitions(input.tools, (tool) =>
-      input.requiresApproval(tool)
-        ? '[Requires user approval — not available yet; do not call.]'
-        : null,
+      input.requiresApproval(tool) ? '[Not available in this version — do not call.]' : null,
     );
     const messages: LlmMessage[] = [
       { role: 'system', content: systemPrompt(context.tenantPrompt, EXECUTOR_WORK_ROLE) },

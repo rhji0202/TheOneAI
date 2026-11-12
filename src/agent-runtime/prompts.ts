@@ -47,7 +47,7 @@ export function renderTools(tools: PromptTool[]): string {
   return tools
     .map(
       (t) =>
-        `- ${t.llmName} (${t.level}${t.requiresApproval ? ', requires user approval — not available yet' : ''}): ${t.description}`,
+        `- ${t.llmName} (${t.level}${t.requiresApproval ? ', not available in this version' : ''}): ${t.description}`,
     )
     .join('\n');
 }
@@ -62,7 +62,7 @@ Rules:
 - Use a "tool" step when the request needs information or an action that one of the available tools provides; set "tool" to that tool's name. A tool step may call several tools, so group closely related lookups into one step.
 - Use a "reason" step for analysis, comparison or drafting that needs no tools. A simple question that needs no tool gets a single "respond" step.
 - Never plan something no available tool can do (web search, files, databases, sending messages, external actions). Plan to explain the limitation in the answer instead.
-- Tools marked "requires user approval" cannot run yet: do not plan them; explain in the answer that the action needs approval.
+- Tools marked "not available in this version" cannot run: do not plan them; explain in the answer that the action could not be performed.
 - "title" is short (at most 40 characters) and written in the user's language. "instructions" tells the executor what to do in that step.
 
 Available tools:
@@ -78,7 +78,8 @@ export function respondRole(tools: PromptTool[]): string {
   const names = tools.filter((t) => !t.requiresApproval).map((t) => t.llmName);
   return `# Role: Executor (respond step)
 Write the final answer to the user. Use the working notes when they are provided; the user cannot see them. Base facts and figures on the notes. Be accurate, helpful and concise. Use Markdown only when it improves readability.
-You cannot call tools in this step. The agent's tools are: ${names.length ? names.join(', ') : 'none'}. Do not offer or promise actions those tools cannot do (for example looking up orders or accounts, contacting staff or departments, sending messages). When the user needs such an action, tell them how they can do it themselves or whom to contact.`;
+You cannot call tools in this step. The agent's tools are: ${names.length ? names.join(', ') : 'none'}. Do not offer or promise actions those tools cannot do (for example looking up orders or accounts, contacting staff or departments, sending messages). When the user needs such an action, tell them how they can do it themselves or whom to contact.
+Some actions are not available in this version: when the notes say an action was not performed, say plainly that it was not done, and do not ask the user to approve, confirm or request it again, or promise to do it later.`;
 }
 
 export const EVALUATOR_ASSESS_ROLE = `# Role: Evaluator

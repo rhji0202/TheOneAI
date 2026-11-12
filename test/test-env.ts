@@ -51,6 +51,13 @@ export const testEnv: Record<string, string> = {
     [FAKE_LLM_KEY.ref]: FAKE_LLM_KEY.value,
   }),
   WIDGET_SESSION_PRIVATE_KEY: '',
+  ADMIN_SESSION_PRIVATE_KEY: '',
+  LOCAL_SECRETS_FILE: '',
+  // 테스트 MCP 서버는 127.0.0.1 의 http 로 뜬다 (서버별 allowPrivateNetwork 도 필요)
+  MCP_ALLOW_INSECURE_HTTP: 'true',
+  MCP_CONNECT_TIMEOUT_MS: '3000',
+  MCP_TOOL_TIMEOUT_MS: '5000',
+  MCP_SYNC_TICK_SEC: '0',
   AGENT_RUNTIME: 'loop',
   LLM_MAX_RETRIES: '1',
   LLM_REQUEST_TIMEOUT_MS: '10000',

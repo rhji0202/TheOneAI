@@ -34,7 +34,12 @@ export interface SnapshotTool {
   level: PermissionLevel;
   /** Tool 단위 승인 정책 재정의 (없으면 등급 기본 정책) */
   modeOverride: ApprovalMode | null;
+  /** 같은 인자로 다시 실행해도 안전한가 (자동 재시도). 없으면 내장 Tool 정의 · 등급(read)으로 판단 */
+  idempotent?: boolean;
+  /** source = mcp 일 때: 호출할 서버 · 서버 쪽 원래 Tool 이름 */
   mcpToolId?: string;
+  mcpServerId?: string;
+  mcpToolName?: string;
 }
 
 /** tool_registry_versions.snapshot */
@@ -65,14 +70,22 @@ export type PermissionDecision =
 
 /**
  * tool_executions.denied_reason
- *  - unknown_tool · blocked_by_policy · blocked_by_rule : “무단 Tool 호출” 지표에 포함
+ *  - unknown_tool · not_allowed · blocked_by_policy · blocked_by_rule : “무단 Tool 호출” 지표에 포함
+ *    (not_allowed = 이 Agent 의 허용 목록에 없는 MCP 서버의 Tool)
  *  - approval_required : 승인이 필요해 실행하지 않음 (지표 제외, 승인 흐름은 개발 순서 10단계)
+ *  - tool_unavailable : 작업 중에 서버가 오류 · 비활성 상태가 되었거나 운영자가 Tool 을 껐음 (지표 제외)
  */
 export type DeniedReason =
-  'unknown_tool' | 'blocked_by_policy' | 'blocked_by_rule' | 'approval_required';
+  | 'unknown_tool'
+  | 'not_allowed'
+  | 'blocked_by_policy'
+  | 'blocked_by_rule'
+  | 'approval_required'
+  | 'tool_unavailable';
 
 export const UNAUTHORIZED_REASONS: DeniedReason[] = [
   'unknown_tool',
+  'not_allowed',
   'blocked_by_policy',
   'blocked_by_rule',
 ];

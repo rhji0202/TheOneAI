@@ -61,6 +61,7 @@ erDiagram
   - `app_resolve_widget(public_key)` — 위젯 bootstrap
   - `app_resolve_tenant(slug)` — 콘솔 로그인
   - `app_find_stalled_tasks(interval, limit)` — 복구 대상 탐색
+  - `app_list_mcp_servers_due_for_sync(interval, limit)` — 재탐색 시기가 된 MCP 서버 (mcp-sync, 마이그레이션 `20261112170000_mcp_sync`)
 - `audit_logs` 는 `app_rw` 에 UPDATE · DELETE 권한이 없다(append-only).
 
 NestJS 에서는 테넌트 데이터를 항상 `PrismaService.withTenant()` 트랜잭션 안에서 읽고 쓴다 ([src/infrastructure/database/prisma.service.ts](../src/infrastructure/database/prisma.service.ts)).
@@ -190,6 +191,41 @@ interface RegistrySnapshot {
 - 작업 생성 시 테넌트의 최신 버전을 `tasks.registry_version_id` 로 고정한다. 배포된 내장 Tool 구성(`builtinsHash`)이 최신 버전과 다르면 그 자리에서 다음 버전을 만든다(`changeSummary: { reason: 'builtin_tools_changed', added, removed, changed }`). 동시에 만들다 `(tenant_id, version)` 충돌이 나면 다시 읽는다.
 - MCP Tool 은 운영자 검토 후 새 버전으로 추가된다(5단계). 이전 버전은 바뀌지 않으므로 실행 중 작업은 시작할 때의 Tool 구성으로 끝까지 간다.
 - 모델에게 줄 function 이름은 `.` → `__` (예: `builtin__calculate`). OpenAI 호환 API 의 이름 형식(`^[a-zA-Z0-9_-]{1,64}$`) 때문.
+- MCP Tool 항목: `name = <서버 이름>.<Tool 이름>`, `source = 'mcp'`, `mcpToolId` · `mcpServerId` · `mcpToolName`(서버 쪽 원래 이름), `idempotent`(read 등급만 true — 자동 재시도). 스냅샷에는 연결됨 · 오류 상태 서버의 사용 중 Tool 이 들어가고, 실행 가능 여부는 호출 시점의 서버 상태 · Tool 사용 여부 · Agent 허용 목록으로 판단한다 (오류 서버가 복구되면 새 버전 없이 바로 다시 쓰임).
+- 버전 생성은 테넌트 단위 `pg_advisory_xact_lock` 으로 직렬화하고, 구성이 같으면 새 버전을 만들지 않는다.
+
+### 4.6 `mcp_tools.pending_change`
+
+```ts
+interface PendingChange {
+  kind: 'added' | 'changed' | 'removed';
+  detectedAt: string;              // 처음 감지한 시각 (같은 변경이 반복 감지되어도 유지)
+  next?: {                         // added · changed: 서버가 지금 알려 주는 정의와 검사 결과
+    title: string | null;
+    description: string | null;
+    inputSchema: JSONSchema;
+    outputSchema: JSONSchema | null;
+    schemaHash: string;            // sha256(정렬된 JSON: 제목 · 설명 · 입력 · 출력 스키마)
+    schema: { result: SchemaCheck; issues: string[] };
+    security: { result: SecurityCheck; issues: string[] };
+    suggestedLevel: PermissionLevel;
+  };
+}
+```
+
+`state = pending_change` 인 동안에도 Registry 에는 이전 정의가 고정되어 있다. 운영자 승인 시 정의를 반영하고 새 Registry 버전을 만든다.
+
+### 4.7 MCP 서버 상태
+
+```
+draft ──discover──▶ pending_review ──register──▶ connected ◀──sync 성공── error
+                         ▲                          │  └──sync 실패──▶ error
+                         └── 연결 정보 수정 ────────┘
+connected · error ──disable──▶ disabled ──discover──▶ pending_review
+어느 상태든 ──delete──▶ (deleted_at, 이름 뒤에 ~deleted~)
+```
+
+Secret 은 `vault://mcp/<tenantId>/<serverId>` 참조로만 DB 에 남는다. 개발 환경의 Secret 저장소는 `DEV_SECRETS`(읽기 전용) + `LOCAL_SECRETS_FILE`(콘솔에서 입력한 값, API · Worker 공유).
 
 ## 5. 설계 결정
 
