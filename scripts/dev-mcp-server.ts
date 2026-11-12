@@ -1,22 +1,27 @@
 /**
- * 개발용 데모 MCP 서버 (Streamable HTTP, stateless) — 가상의 쇼핑몰 주문 · FAQ · 문의 Tool.
- *   npm run dev:mcp-server -- [--port 3901] [--key <API Key>]
+ * 개발용 데모 MCP 서버 (Streamable HTTP, 공식 SDK v2) — 가상의 쇼핑몰 주문 · FAQ · 문의 Tool.
+ *   npm run dev:mcp-server -- [--port 3901] [--key <API Key>] [--legacy]
+ *   기본은 2026-07-28 · 2025 계열 모두 응답, --legacy 면 2025 계열만 (v1 SDK 서버와 같은 동작)
  * 콘솔에서 연결: endpointUrl http://127.0.0.1:3901/mcp, allowPrivateNetwork true (Owner),
  * API 서버 · Worker 는 MCP_ALLOW_INSECURE_HTTP=true 로 실행 (개발 전용 — production 에서는 https 만).
  */
-import { createServer, type IncomingMessage } from 'node:http';
+import { createServer } from 'node:http';
 import { parseArgs } from 'node:util';
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { toNodeHandler } from '@modelcontextprotocol/node';
 import {
   type CallToolResult,
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
+  createMcpHandler,
+  legacyStatelessFallback,
+  Server,
   type Tool,
-} from '@modelcontextprotocol/sdk/types.js';
+} from '@modelcontextprotocol/server';
 
 const { values } = parseArgs({
-  options: { port: { type: 'string', default: '3901' }, key: { type: 'string' } },
+  options: {
+    port: { type: 'string', default: '3901' },
+    key: { type: 'string' },
+    legacy: { type: 'boolean', default: false },
+  },
 });
 
 const ORDERS: Record<
@@ -104,10 +109,10 @@ function buildServer(): Server {
     { name: 'demo-shop', version: '0.1.0' },
     { capabilities: { tools: {} } },
   );
-  server.setRequestHandler(ListToolsRequestSchema, () => ({
+  server.setRequestHandler('tools/list', () => ({
     tools: TOOLS.map(({ handler: _h, ...t }) => t),
   }));
-  server.setRequestHandler(CallToolRequestSchema, (req) => {
+  server.setRequestHandler('tools/call', (req) => {
     const tool = TOOLS.find((t) => t.name === req.params.name);
     console.log(`tools/call ${req.params.name} ${JSON.stringify(req.params.arguments ?? {})}`);
     return tool
@@ -117,11 +122,9 @@ function buildServer(): Server {
   return server;
 }
 
-async function readJson(req: IncomingMessage): Promise<unknown> {
-  let raw = '';
-  for await (const chunk of req) raw += (chunk as Buffer).toString();
-  return raw ? JSON.parse(raw) : undefined;
-}
+const node = toNodeHandler(
+  values.legacy ? { fetch: legacyStatelessFallback(buildServer) } : createMcpHandler(buildServer),
+);
 
 const http = createServer((req, res) => {
   void (async () => {
@@ -129,22 +132,7 @@ const http = createServer((req, res) => {
       res.writeHead(401).end();
       return;
     }
-    if (req.method !== 'POST') {
-      res.writeHead(405).end();
-      return;
-    }
-    const body = await readJson(req);
-    const server = buildServer();
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-      enableJsonResponse: true,
-    });
-    res.on('close', () => {
-      void transport.close();
-      void server.close();
-    });
-    await server.connect(transport);
-    await transport.handleRequest(req, res, body);
+    await node(req, res);
   })().catch((err: unknown) => {
     if (!res.headersSent) res.writeHead(500).end(String(err));
   });
@@ -152,6 +140,6 @@ const http = createServer((req, res) => {
 
 http.listen(Number(values.port), '127.0.0.1', () => {
   console.log(
-    `데모 MCP 서버: http://127.0.0.1:${values.port}/mcp${values.key ? ' (API Key 필요)' : ''}`,
+    `데모 MCP 서버: http://127.0.0.1:${values.port}/mcp${values.key ? ' (API Key 필요)' : ''}${values.legacy ? ' · 2025 계열만' : ''}`,
   );
 });

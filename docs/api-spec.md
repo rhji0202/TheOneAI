@@ -504,7 +504,8 @@ interface DiscoveredTool {
 
 | 항목 | 동작 |
 |---|---|
-| 연결 | Streamable HTTP (공식 TypeScript SDK `@modelcontextprotocol/sdk` 1.x). `stdio_sandbox` 는 `MCP_TRANSPORT_UNSUPPORTED`, `oauth` 는 `MCP_AUTH_UNSUPPORTED` (Sandbox 단계). API Key 는 `Authorization: Bearer` 로 보낸다 |
+| 연결 | Streamable HTTP (공식 TypeScript SDK v2 `@modelcontextprotocol/client`). `stdio_sandbox` 는 `MCP_TRANSPORT_UNSUPPORTED`, `oauth` 는 `MCP_AUTH_UNSUPPORTED` (Sandbox 단계). API Key 는 `Authorization: Bearer` 로 보낸다 |
+| 프로토콜 버전 | `versionNegotiation: 'auto'` — `server/discover` 로 2026-07-28 을 먼저 확인하고, 2025 계열 서버면 `initialize` 핸드셰이크로 내려간다(왕복 1회 추가). 401 · 403 은 버전 근거로 쓰지 않고 인증 실패로 알린다. 협상 결과는 `mcp_servers.protocol_version` 에 남기고, 2025 계열로 기록된 서버는 Worker 의 재사용 연결에서 탐색을 건너뛴다(`prior: legacy`, 재탐색이 매시간 갱신). 연결 테스트 응답에 `era: 'modern' \| 'legacy'` |
 | SSRF | https 만(개발 `MCP_ALLOW_INSECURE_HTTP`). 요청마다 스킴 · 호스트(엔드포인트 + `allowedHosts`) 검사, 소켓 연결 시점에 DNS 해석 결과 전부 검사(DNS rebinding 대응), 리다이렉트는 같은 origin 만. 사설 · 루프백 · 링크로컬은 `allowPrivateNetwork`(Owner 만)일 때만, 클라우드 메타데이터 IP 는 항상 차단 |
 | 연결 테스트 | 실패해도 200 + `handshake: 'failed'`(화면이 원인 표시). 탐색 실패는 422 `MCP_SSRF_BLOCKED` · `MCP_HANDSHAKE_FAILED` |
 | 탐색 | 등록 전 서버(draft · pending_review · disabled): 결과를 바로 반영(운영자가 고른 포함 여부 · 등급 유지) → `pending_review`. 등록된 서버(connected · error): 차이를 `mcp_tools.pending_change` 로만 기록 → `changes` 응답 |
@@ -514,7 +515,7 @@ interface DiscoveredTool {
 | 변경 승인 | added → 정의 반영 후 **꺼진 채** 추가(운영자가 Tool 정책에서 켬), changed → 정의 반영(스키마 오류 · 보안 실패면 끔), removed → `removed`. 승인 전까지 실행은 Registry 에 고정된 이전 정의를 쓴다 |
 | 연결 정보 수정 | 등록된 서버의 엔드포인트 · 인증 · 허용 호스트 · 사설망 설정이 바뀌면 `pending_review` 로 돌아가고 Tool 이 Registry 에서 빠진다 (탐색 → 등록 다시) |
 | 비활성화 · 삭제 | 새 Registry 버전에서 빠지고, 실행 중 작업도 다음 호출부터 `tool_unavailable`. 삭제는 soft delete + Secret 삭제 + 이름 재사용 가능 |
-| 응답 · 오류 | `tools/call` 결과는 `structuredContent` 우선, 없으면 텍스트(JSON 이면 파싱). 이미지 · 오디오는 형식만. `isError` 는 `TOOL_ERROR` 로 모델에게 알리고 재시도하지 않는다. 인자는 Registry 에 고정된 JSON Schema 로 먼저 검증(Ajv) — 틀리면 서버로 보내지 않는다 |
+| 응답 · 오류 | `tools/call` 결과는 `structuredContent` 우선, 없으면 텍스트(JSON 이면 파싱). 이미지 · 오디오는 형식만. `isError` 와 서버의 JSON-RPC 오류(`ProtocolError`, 예: 모르는 Tool)는 `TOOL_ERROR` 로 모델에게 알리고 재시도하지 않는다(연결 유지). 인자는 Registry 에 고정된 JSON Schema 로 먼저 검증(Ajv) — 틀리면 서버로 보내지 않는다. 호출 시 고정된 정의를 `toolDefinition` 으로 넘겨 재사용 연결에서 `tools/list` 를 다시 부르지 않는다 |
 
 ### 4.6 Skill (C-06)
 

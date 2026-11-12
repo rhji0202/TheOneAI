@@ -40,6 +40,7 @@ export function toTarget(server: McpServer): McpServerTarget {
     secretRef: server.secretRef,
     allowedHosts: server.allowedHosts,
     allowPrivateNetwork: server.allowPrivateNetwork,
+    protocolVersion: server.protocolVersion,
     updatedAt: server.updatedAt,
   };
 }

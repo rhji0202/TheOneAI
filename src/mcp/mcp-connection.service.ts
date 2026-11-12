@@ -1,12 +1,20 @@
 import { isIP } from 'node:net';
 import { Inject, Injectable, Logger, type OnModuleDestroy } from '@nestjs/common';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js';
+import {
+  type CallToolResult,
+  Client,
+  type ConnectOptions,
+  type FetchLike,
+  ProtocolError,
+  SdkHttpError,
+  StreamableHTTPClientTransport,
+  type Tool,
+} from '@modelcontextprotocol/client';
 import { Agent, fetch as undiciFetch, type RequestInit as UndiciRequestInit } from 'undici';
 import { APP_CONFIG, type AppConfig } from '../config/app-config.js';
 import type { McpAuthType, McpTransport } from '../generated/prisma/client.js';
 import { SecretStore } from '../infrastructure/secrets/secret-store.js';
+import { ToolReportedError } from './mcp-result.js';
 import {
   type BlockedReason,
   checkEndpoint,
@@ -29,6 +37,8 @@ export interface McpServerTarget {
   secretRef: string | null;
   allowedHosts: string[];
   allowPrivateNetwork: boolean;
+  /** 마지막으로 협상한 프로토콜 버전 (2025 계열이면 재사용 연결에서 버전 탐색을 건너뛴다) */
+  protocolVersion: string | null;
   updatedAt: Date;
 }
 
@@ -53,6 +63,8 @@ export class McpConnectionError extends Error {
 export interface ConnectionTestResult {
   handshake: 'ok' | 'failed';
   protocolVersion: string | null;
+  /** modern = 2026-07-28 이후(요청 단위 프로토콜), legacy = 2025 계열(initialize 핸드셰이크) */
+  era: 'modern' | 'legacy' | null;
   latencyMs: number | null;
   ssrf: SsrfCheck;
   server?: { name: string; version: string };
@@ -75,7 +87,9 @@ const IDLE_CLOSE_MS = 5 * 60_000;
 const CLIENT_INFO = { name: 'theoneai-agent', version: '0.1.0' };
 
 /**
- * MCP 서버 연결 (Streamable HTTP). 탐색 · 연결 테스트는 매번 새 연결, Tool 호출은 Worker 프로세스 안에서 재사용한다.
+ * MCP 서버 연결 (Streamable HTTP, 공식 TypeScript SDK v2 `@modelcontextprotocol/client`).
+ *  - 프로토콜: 2026-07-28 을 먼저 확인(server/discover)하고, 2025 계열 서버면 initialize 핸드셰이크로 내려간다.
+ *  - 탐색 · 연결 테스트는 매번 새 연결(서버 업그레이드도 감지), Tool 호출은 Worker 프로세스 안에서 재사용한다.
  * stdio(Docker Sandbox) 실행형과 OAuth 인증은 Sandbox 단계에서 추가한다.
  */
 @Injectable()
@@ -114,6 +128,7 @@ export class McpConnectionService implements OnModuleDestroy {
       return {
         handshake: 'failed',
         protocolVersion: null,
+        era: null,
         latencyMs: null,
         ssrf,
         error: `SSRF 차단: ${ssrf.blockedReason}`,
@@ -126,7 +141,8 @@ export class McpConnectionService implements OnModuleDestroy {
         const info = conn.client.getServerVersion();
         return {
           handshake: 'ok',
-          protocolVersion: conn.transport.protocolVersion ?? null,
+          protocolVersion: negotiatedVersion(conn),
+          era: conn.client.getProtocolEra() ?? null,
           latencyMs: Date.now() - started,
           ssrf,
           ...(info ? { server: { name: info.name, version: info.version } } : {}),
@@ -139,6 +155,7 @@ export class McpConnectionService implements OnModuleDestroy {
       return {
         handshake: 'failed',
         protocolVersion: null,
+        era: null,
         latencyMs: null,
         ssrf,
         error: e.message,
@@ -146,25 +163,19 @@ export class McpConnectionService implements OnModuleDestroy {
     }
   }
 
-  /** tools/list (모든 페이지). 매번 새 연결 — 탐색 결과가 이전 연결 상태에 영향받지 않도록 */
+  /** tools/list (SDK 가 모든 페이지를 모아 준다, 최대 64쪽). 매번 새 연결 — 이전 연결 상태 · 캐시와 무관하게 */
   async listTools(
     server: McpServerTarget,
     signal?: AbortSignal,
   ): Promise<{ tools: Tool[]; protocolVersion: string | null }> {
     const conn = await this.open(server);
     try {
-      const tools: Tool[] = [];
-      let cursor: string | undefined;
-      for (let page = 0; page < 20; page++) {
-        const res = await conn.client.listTools(cursor ? { cursor } : undefined, {
-          signal,
-          timeout: this.config.mcp.connectTimeoutMs,
-        });
-        tools.push(...res.tools);
-        cursor = res.nextCursor;
-        if (!cursor) break;
-      }
-      return { tools, protocolVersion: conn.transport.protocolVersion ?? null };
+      const res = await conn.client.listTools(undefined, {
+        signal,
+        timeout: this.config.mcp.connectTimeoutMs,
+        cacheMode: 'bypass',
+      });
+      return { tools: res.tools, protocolVersion: negotiatedVersion(conn) };
     } catch (err) {
       throw toConnectionError(err);
     } finally {
@@ -172,21 +183,32 @@ export class McpConnectionService implements OnModuleDestroy {
     }
   }
 
-  /** tools/call. 연결은 서버 설정이 바뀌기 전까지 재사용하고, 전송 오류가 나면 버린다. */
+  /**
+   * tools/call. 연결은 서버 설정이 바뀌기 전까지 재사용하고, 전송 오류가 나면 버린다.
+   * inputSchema 는 Registry 에 고정된 정의를 넘긴다 — 재사용 연결에서 tools/list 를 다시 부르지 않도록
+   * (2026-07-28 의 Mcp-Param-* 헤더도 이 정의로 만든다).
+   * 서버가 JSON-RPC 오류로 거절하면(모르는 Tool · 잘못된 인자 등) ToolReportedError — 연결은 유지하고 재시도하지 않는다.
+   */
   async callTool(
     server: McpServerTarget,
     name: string,
     args: Record<string, unknown>,
-    options: { signal: AbortSignal; timeoutMs: number },
+    options: { signal: AbortSignal; timeoutMs: number; inputSchema?: Record<string, unknown> },
   ): Promise<CallToolResult> {
     const conn = await this.pooled(server);
     try {
-      const result = await conn.client.callTool({ name, arguments: args }, undefined, {
-        signal: options.signal,
-        timeout: options.timeoutMs,
-      });
-      return result as CallToolResult;
+      return await conn.client.callTool(
+        { name, arguments: args },
+        {
+          signal: options.signal,
+          timeout: options.timeoutMs,
+          ...(options.inputSchema
+            ? { toolDefinition: { name, inputSchema: options.inputSchema } as Tool }
+            : {}),
+        },
+      );
     } catch (err) {
+      if (ProtocolError.isInstance(err)) throw new ToolReportedError(err.message);
       if (!options.signal.aborted) await this.invalidate(server.id);
       throw err;
     }
@@ -207,7 +229,10 @@ export class McpConnectionService implements OnModuleDestroy {
       return existing.connection;
     }
     if (existing) await this.invalidate(server.id);
-    const connection = this.open(server);
+    // 2025 계열로 확인된 서버는 server/discover 탐색 왕복을 건너뛴다 (시기 판단은 매시간 재탐색이 갱신)
+    const prior: ConnectOptions['prior'] =
+      server.protocolVersion && server.protocolVersion < '2026' ? { kind: 'legacy' } : undefined;
+    const connection = this.open(server, prior);
     const entry: PoolEntry = { key, connection, lastUsed: Date.now() };
     this.pool.set(server.id, entry);
     connection.catch(() => {
@@ -216,7 +241,10 @@ export class McpConnectionService implements OnModuleDestroy {
     return connection;
   }
 
-  private async open(server: McpServerTarget): Promise<Connection> {
+  private async open(
+    server: McpServerTarget,
+    prior?: ConnectOptions['prior'],
+  ): Promise<Connection> {
     if (server.transport !== 'streamable_http') {
       throw new McpConnectionError(
         'unsupported_transport',
@@ -256,9 +284,18 @@ export class McpConnectionService implements OnModuleDestroy {
         maxRetries: 1,
       },
     });
-    const client = new Client(CLIENT_INFO, { capabilities: {} });
+    const client = new Client(CLIENT_INFO, {
+      capabilities: {},
+      versionNegotiation: {
+        mode: 'auto',
+        probe: { timeoutMs: this.config.mcp.connectTimeoutMs },
+      },
+    });
     try {
-      await client.connect(transport, { timeout: this.config.mcp.connectTimeoutMs });
+      await client.connect(transport, {
+        timeout: this.config.mcp.connectTimeoutMs,
+        ...(prior ? { prior } : {}),
+      });
     } catch (err) {
       await client.close().catch(() => undefined);
       await agent.close().catch(() => undefined);
@@ -283,8 +320,12 @@ export class McpConnectionService implements OnModuleDestroy {
   }
 }
 
+function negotiatedVersion(conn: Connection): string | null {
+  return conn.client.getNegotiatedProtocolVersion() ?? conn.transport.protocolVersion ?? null;
+}
+
 /** 모든 요청(리다이렉트 포함)의 스킴 · 호스트 · IP 리터럴을 검사하고, 소켓 연결은 guardedLookup 을 거친다 */
-function guardedFetch(endpoint: URL, policy: EgressPolicy, agent: Agent) {
+function guardedFetch(endpoint: URL, policy: EgressPolicy, agent: Agent): FetchLike {
   const endpointHost = endpoint.hostname.replace(/^\[|\]$/g, '');
   return async (input: string | URL, init?: RequestInit): Promise<Response> => {
     const url = new URL(typeof input === 'string' ? input : input.href);
@@ -311,8 +352,8 @@ export function toConnectionError(err: unknown): McpConnectionError {
       return new McpConnectionError('ssrf_blocked', e.message, e.reason);
     }
     const name = (e as { name?: string }).name;
-    const code = (e as { code?: unknown }).code;
-    if (name === 'UnauthorizedError' || code === 401 || code === 403) {
+    const status = SdkHttpError.isInstance(e) ? e.status : (e as { status?: unknown }).status;
+    if (name === 'UnauthorizedError' || status === 401 || status === 403) {
       return new McpConnectionError('auth_failed', 'MCP 서버가 인증을 거부했습니다');
     }
   }

@@ -44,7 +44,7 @@ LLM 키 없이 파이프라인만 보려면 `.env` 에 `AGENT_RUNTIME=placeholde
 
 ### MCP 서버 연결해 보기
 
-데모 MCP 서버(`scripts/dev-mcp-server.ts` — 주문 조회 · FAQ 검색 · 문의 티켓)를 띄우고 콘솔 API 로 등록한 뒤 Agent 에서 켠다. 로컬 http 엔드포인트이므로 API · Worker 를 `MCP_ALLOW_INSECURE_HTTP=true` 로 실행하고, 서버는 `allowPrivateNetwork: true`(Owner 만 가능)로 등록한다.
+데모 MCP 서버(`scripts/dev-mcp-server.ts` — 주문 조회 · FAQ 검색 · 문의 티켓, SDK v2. `--legacy` 를 주면 2025 계열 프로토콜만 응답)를 띄우고 콘솔 API 로 등록한 뒤 Agent 에서 켠다. 로컬 http 엔드포인트이므로 API · Worker 를 `MCP_ALLOW_INSECURE_HTTP=true` 로 실행하고, 서버는 `allowPrivateNetwork: true`(Owner 만 가능)로 등록한다.
 
 ```bash
 npm run dev:mcp-server                         # http://127.0.0.1:3901/mcp
@@ -108,7 +108,7 @@ e2e 가 확인하는 것: bootstrap(허용 도메인 · identity token 서명 ·
 
 Agent Loop 는 가짜 OpenAI 호환 서버([test/fake-llm-server.ts](test/fake-llm-server.ts))로 검증한다: 계획 → reason → 중간 평가 → 답변 → 검증 순서, 재계획(`plan.revised`), 계획 JSON 오류 시 기본 계획, 모델 오류 · API Key 없음 → `task.failed`, 역할별 모델 · 추론 파라미터 · 인증 헤더, 플랫폼 · 테넌트 지침, 대화 기록 포함, 토큰 사용량 기록. 실제 DeepSeek 로는 수동으로 확인했다(아래).
 
-MCP 는 [test/mcp.e2e-spec.ts](test/mcp.e2e-spec.ts) 가 공식 SDK 로 만든 MCP 서버([test/fake-mcp-server.ts](test/fake-mcp-server.ts))로 확인한다: 콘솔 로그인 · 역할(Viewer 는 조회만, 사설망 허용은 Owner 만, 위젯 토큰 거부), SSRF(사설 IP 로 해석되는 호스트를 연결 시점 DNS 검사로 차단, 메타데이터 IP 차단), 등록 마법사(연결 테스트 · API Key 전달 · 탐색 검증 · 보안 실패 Tool 제외 · 등록 → Registry 버전 · 감사 로그), 테넌트 격리, Agent 허용 목록(초안 → 배포, 허용 전 호출은 `not_allowed`), MCP Tool 실행(structuredContent · JSON Schema 인자 검증 · isError 는 재시도 안 함), 재탐색 변경 감지(검토 전에는 고정된 이전 정의 사용 → 승인 시 새 버전, 새 Tool 은 꺼진 채 추가), 서버 장애 → `error` · `tool_unavailable` → 복구 · 헬스, 연결 정보 변경 시 재검토, 비활성화 · 삭제(Secret 삭제 · 이름 재사용).
+MCP 는 [test/mcp.e2e-spec.ts](test/mcp.e2e-spec.ts) 가 공식 SDK v2 로 만든 MCP 서버([test/fake-mcp-server.ts](test/fake-mcp-server.ts))로 확인한다: 프로토콜 협상(최신 서버는 `server/discover` 로 2026-07-28, 2025 계열 전용 서버는 `initialize` 로 내려감, 2025 계열로 기록된 서버는 재사용 연결에서 탐색 생략, 401 은 인증 실패로), 콘솔 로그인 · 역할(Viewer 는 조회만, 사설망 허용은 Owner 만, 위젯 토큰 거부), SSRF(사설 IP 로 해석되는 호스트를 연결 시점 DNS 검사로 차단, 메타데이터 IP 차단), 등록 마법사(연결 테스트 · API Key 전달 · 탐색 검증 · 보안 실패 Tool 제외 · 등록 → Registry 버전 · 감사 로그), 테넌트 격리, Agent 허용 목록(초안 → 배포, 허용 전 호출은 `not_allowed`), MCP Tool 실행(structuredContent · JSON Schema 인자 검증 · isError 는 재시도 안 함), 재탐색 변경 감지(검토 전에는 고정된 이전 정의 사용 → 승인 시 새 버전, 새 Tool 은 꺼진 채 추가), 서버 장애 → `error` · `tool_unavailable` → 복구 · 헬스, 연결 정보 변경 시 재검토, 비활성화 · 삭제(Secret 삭제 · 이름 재사용).
 
 Tool 은 [test/tools.e2e-spec.ts](test/tools.e2e-spec.ts) 가 확인한다: tool 단계 → 모델의 tool call → 서버 실행 → 결과가 다음 요청 · 답변에 반영, 읽기 Tool 병렬 실행(같은 `parallelGroup`, 결과는 호출 순서), 인자 오류를 모델에게 돌려줘 고치게 함, Tool 왕복 한도(`tool_choice: none` 으로 정리), Registry 에 없는 Tool · 조건 규칙 · 등급 정책 차단(`tool.denied`), 승인 필요 Tool 은 실행하지 않음, 내장 Tool 구성이 바뀌면 새 Registry 버전(이전 버전 불변), 멱등 Tool 재시도, 시간 제한.
 
@@ -122,7 +122,7 @@ Tool 은 [test/tools.e2e-spec.ts](test/tools.e2e-spec.ts) 가 확인한다: tool
 | LLM 연동: OpenAI 호환 클라이언트(OpenAI · DeepSeek · Gemini), 스트리밍 · tool call 파싱 · 재시도 · 대체 모델 · 역할별 추론 강도 | 완료 — DeepSeek 는 실제 API 로 확인, OpenAI · Gemini 는 키가 없어 단위 테스트(요청 형식)까지만 |
 | Agent Loop: Context → Plan → Execute(reason · tool) → Evaluate → 재계획 → Respond(스트리밍) → Verify, 토큰 예산 | 완료 — Skill · Memory 는 아직 없음 |
 | 콘솔 인증: `POST /v1/admin/auth/login`(scrypt) · `GET /v1/admin/me`, 역할 가드(Owner > Admin > Operator > Viewer, 매 요청 DB 재확인), 감사 로그 | 완료 — refresh 쿠키 회전 · 로그아웃은 콘솔 UI 단계 |
-| MCP (C-04 · C-05): Streamable HTTP 연결(공식 SDK), SSRF 방어(스킴 · 호스트 · DNS 해석 · 연결 시점 IP 검사, 메타데이터 IP 항상 차단), API Key(Secret 저장소), 연결 테스트 · Tool 탐색 · 검증(JSON Schema · 숨은 지시문 · 보이지 않는 문자 · 민감정보 · 제안 등급), 포함 Tool · 등록 → 새 Registry 버전, Tool 정책, 재탐색 변경 감지 → 운영자 승인, `mcp-sync` 주기 잡(장애 → error · 복구, 헬스 p95 · 오류율), 비활성화 · 삭제, Registry 버전 · diff API | 완료 — stdio(Docker Sandbox) 실행형 · OAuth 인증 · 이미지 서명 검증은 Sandbox 단계 |
+| MCP (C-04 · C-05): Streamable HTTP 연결(공식 SDK v2 — 2026-07-28 우선, 2025 계열 서버 자동 호환), SSRF 방어(스킴 · 호스트 · DNS 해석 · 연결 시점 IP 검사, 메타데이터 IP 항상 차단), API Key(Secret 저장소), 연결 테스트 · Tool 탐색 · 검증(JSON Schema · 숨은 지시문 · 보이지 않는 문자 · 민감정보 · 제안 등급), 포함 Tool · 등록 → 새 Registry 버전, Tool 정책, 재탐색 변경 감지 → 운영자 승인, `mcp-sync` 주기 잡(장애 → error · 복구, 헬스 p95 · 오류율), 비활성화 · 삭제, Registry 버전 · diff API | 완료 — stdio(Docker Sandbox) 실행형 · OAuth 인증 · 이미지 서명 검증은 Sandbox 단계 |
 | Agent MCP 허용 목록: 초안(배포 버전 복사) → 배포, 실행 시 허용 목록 · 서버 상태 · Tool 사용 여부 확인(`not_allowed` · `tool_unavailable`) | 완료 — 초안 편집은 MCP 허용 목록만 (지침 · 모델 · 정책 편집은 C-03 단계) |
 | Tool Registry · Dispatcher: 작업별 Registry 버전 고정, 인자 검증(zod), 권한 판단(등급 정책 → Tool 재정의 → 조건 규칙), 읽기 Tool 병렬 실행, 시간 제한 · 취소 전파, 멱등 Tool 재시도, `tool_executions` 기록(거부 포함) · 민감정보 마스킹, `tool.called` · `tool.result` · `tool.denied` | 완료 — 내장 Tool 2개(`builtin.calculate`, `builtin.current_time`). 승인 필요 Tool 은 승인 흐름(10단계) 전까지 `approval_required` 로 거부 |
 | 비용 계산 (`tasks.cost_amount`) | 다음 단계 — 모델별 단가표 필요. 토큰 수는 기록 중 |
@@ -173,12 +173,13 @@ Tool 연결 후 (2026-11-12, executor `deepseek-v4-flash`):
 | “지금 서울 시간 알려주고 1234*5678 계산해줘” | tool 1 + respond | 9.4s · 7.2s | 모델이 `current_time` · `calculate` 를 한 번에 요청 → 병렬 실행, 7,006,652 · 현재 시각 정확, 검증 4/4 |
 | “내일 서울 날씨 어때? 월 39,000원 18개월이면 총 얼마?” | tool 2 + respond | 14.0s · 11.1s | 날씨 Tool 이 없음을 밝히고 702,000원 계산, 검증 4/4. 처음엔 1단계에서 2단계 계산까지 해 버려 중복 호출 → 작업 단계 프롬프트에 “현재 단계만 · 노트 재사용” 추가 후 중복 없음 |
 
-MCP 연결 후 (2026-11-12, 데모 MCP 서버 `npm run dev:mcp-server` 를 콘솔 API 로 등록 · Agent 에서 허용):
+MCP 연결 후 (2026-11-12, 데모 MCP 서버 `npm run dev:mcp-server` 를 콘솔 API 로 등록 · Agent 에서 허용. 아래 두 줄은 SDK v1(2025-11-25), 세 번째는 SDK v2 로 옮긴 뒤(2026-07-28)):
 
 | 요청 | 결과 |
 |---|---|
 | “주문 A-1001 지금 어디쯤 왔어? 단순 변심 반품 비용은?” | 연결 테스트 61ms · Tool 3개 탐색(read · read · write) → 등록(Registry v3) → Agent v2 배포. 모델이 `demo-shop.lookup_order` · `search_faq` 를 한 번에 요청 → 병렬 실행(57ms · 35ms), 배송 현황 · 반품비 6,000원 정확, 검증 4/4 (12.1s · 첫 토큰 8.9s) |
 | “주문 A-9999 상태 확인하고, 안 되면 상담원 티켓 남겨줘” | 서버가 `isError` 로 “주문 없음”을 알림 → 재시도 없이 그대로 안내. 티켓 생성(write)은 실행하지 않음. 처음엔 답변이 “승인해 주시면 남길 수 있다”고 해서 — 승인 흐름(10단계) 전까지는 모델에게 “승인 필요” 대신 “이 버전에서 사용할 수 없음”으로 알리도록 바꾼 뒤 “생성하지 못했다 · 고객센터 문의” 로 정직하게 답함 |
+| “주문 A-1003 언제 도착했어? 교환하려면?” (SDK v2) | 연결 테스트에서 2026-07-28 협상(93ms). 두 Tool 병렬 실행(60ms · 35ms), 배송 완료 · 택배사 · 교환 조건(7일 · 같은 상품 옵션) 정확, 티켓 접수는 못 했다고 밝힘, 검증 4/4 (14.6s). 다만 FAQ 에 없는 “회수 후 교환품 발송” 절차를 덧붙였고 검증도 통과시킴 — 근거 없는 세부 절차 추가는 이후 Evaluator 보강 대상 |
 
 ## 개발 순서 (기획안 12장)
 

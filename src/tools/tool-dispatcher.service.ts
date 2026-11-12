@@ -344,6 +344,7 @@ export class ToolDispatcherService {
             signal,
             // 응답 대기 상한은 Dispatcher 의 시간 제한이 먼저 걸리도록 조금 길게
             timeoutMs: timeoutMs + 1_000,
+            inputSchema: tool.inputSchema,
           },
         ),
       );

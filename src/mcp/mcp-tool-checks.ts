@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import type { Tool } from '@modelcontextprotocol/client';
 import type { PermissionLevel, SchemaCheck, SecurityCheck } from '../generated/prisma/client.js';
 import { canonicalJson, compileSchema } from '../tools/json-schema.js';
 

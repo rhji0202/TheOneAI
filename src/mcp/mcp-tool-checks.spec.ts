@@ -1,4 +1,4 @@
-import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import type { Tool } from '@modelcontextprotocol/client';
 import { checkTool, hashTool, suggestLevel } from './mcp-tool-checks.js';
 
 const tool = (over: Partial<Tool> = {}): Tool => ({

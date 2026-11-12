@@ -1,4 +1,4 @@
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult } from '@modelcontextprotocol/client';
 
 /** MCP 서버가 isError 로 돌려준 실패 — 전송 오류가 아니므로 다시 시도하지 않는다 */
 export class ToolReportedError extends Error {

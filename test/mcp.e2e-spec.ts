@@ -1,4 +1,6 @@
 import { SecretStore } from '../src/infrastructure/secrets/secret-store.js';
+import { McpConnectionService } from '../src/mcp/mcp-connection.service.js';
+import { toTarget } from '../src/mcp/mcp-discovery.service.js';
 import { McpSyncService } from '../src/mcp/mcp-sync.service.js';
 import type { RecordedRequest } from './fake-llm-server.js';
 import { type FakeMcp, startFakeMcp } from './fake-mcp-server.js';
@@ -211,6 +213,30 @@ describe('MCP 서버 연결 정보 · SSRF', () => {
   });
 });
 
+describe('인증 실패', () => {
+  it('API Key 가 틀리면 버전 탐색 단계의 401 을 인증 실패로 알린다 (2025 계열로 잘못 내려가지 않음)', async () => {
+    const created = await admin<{ id: string }>('POST', '/mcp-servers', {
+      name: 'wrong-key',
+      transport: 'streamable_http',
+      endpointUrl: mcp.url,
+      authType: 'api_key',
+      secret: 'not-the-key',
+      allowPrivateNetwork: true,
+    });
+    const test = await admin<{ handshake: string; error: string }>(
+      'POST',
+      `/mcp-servers/${created.body.id}/test`,
+    );
+    expect(test.body).toMatchObject({
+      handshake: 'failed',
+      error: 'MCP 서버가 인증을 거부했습니다',
+    });
+    const discover = await admin('POST', `/mcp-servers/${created.body.id}/discover`);
+    expect(discover).toMatchObject({ status: 422, body: { code: 'MCP_HANDSHAKE_FAILED' } });
+    await admin('DELETE', `/mcp-servers/${created.body.id}`);
+  });
+});
+
 describe('등록 마법사 (C-05)', () => {
   it('① 연결 정보 저장 — Secret 은 저장소로, 응답에는 참조만', async () => {
     const res = await admin<{ id: string; secretRef: string; status: string }>(
@@ -239,14 +265,18 @@ describe('등록 마법사 (C-05)', () => {
     expect(dup).toMatchObject({ status: 409, body: { code: 'NAME_TAKEN' } });
   });
 
-  it('① 연결 테스트 — 핸드셰이크 · 프로토콜 버전 · API Key 전달', async () => {
+  it('① 연결 테스트 — 2026-07-28 협상 · API Key 전달', async () => {
     const res = await admin<Record<string, unknown>>('POST', `/mcp-servers/${serverId}/test`);
     expect(res.body).toMatchObject({
       handshake: 'ok',
+      era: 'modern',
+      protocolVersion: '2026-07-28',
       server: { name: 'fake-shop', version: '1.2.3' },
       ssrf: { allowed: true, resolvedIps: ['127.0.0.1'] },
     });
-    expect(typeof res.body.protocolVersion).toBe('string');
+    // 최신 서버에는 server/discover 로 바로 연결 (2025 계열 initialize 없이)
+    expect(mcp.methods).toContain('server/discover');
+    expect(mcp.methods).not.toContain('initialize');
     expect(mcp.authHeaders.at(-1)).toBe(`Bearer ${MCP_KEY}`);
   });
 
@@ -629,5 +659,64 @@ describe('장애 · 연결 정보 변경 · 비활성화 · 삭제', () => {
       secret: MCP_KEY,
     });
     expect(recreated.status).toBe(201);
+  });
+});
+
+describe('2025 계열(legacy) MCP 서버 호환', () => {
+  let legacy: FakeMcp;
+  let legacyId: string;
+
+  beforeAll(async () => {
+    legacy = await startFakeMcp({ era: 'legacy', name: 'legacy-shop' });
+  });
+
+  afterAll(async () => {
+    await legacy?.close();
+  });
+
+  it('2026-07-28 을 먼저 확인하고, 아니면 2025 계열 initialize 로 내려가 연결 · 탐색한다', async () => {
+    const created = await admin<{ id: string }>('POST', '/mcp-servers', {
+      name: 'legacy-shop',
+      transport: 'streamable_http',
+      endpointUrl: legacy.url,
+      allowPrivateNetwork: true,
+    });
+    legacyId = created.body.id;
+    const test = await admin('POST', `/mcp-servers/${legacyId}/test`);
+    expect(test.body).toMatchObject({
+      handshake: 'ok',
+      era: 'legacy',
+      protocolVersion: '2025-11-25',
+      server: { name: 'legacy-shop' },
+    });
+    expect(legacy.methods.slice(0, 2)).toEqual(['server/discover', 'initialize']);
+
+    const discovered = await admin<{
+      server: { protocolVersion: string };
+      tools: Array<{ name: string }>;
+    }>('POST', `/mcp-servers/${legacyId}/discover`);
+    expect(discovered.body.server.protocolVersion).toBe('2025-11-25');
+    expect(discovered.body.tools.map((t) => t.name)).toContain('lookup_order');
+  });
+
+  it('2025 계열로 기록된 서버는 재사용 연결에서 탐색 왕복 없이 initialize 로 바로 호출한다', async () => {
+    const server = await tenantRows((tx) =>
+      tx.mcpServer.findUniqueOrThrow({ where: { id: legacyId } }),
+    );
+    const connections = ctx.app.get(McpConnectionService);
+    legacy.methods.length = 0;
+    const result = await connections.callTool(
+      toTarget(server),
+      'lookup_order',
+      { orderId: 'A-7' },
+      {
+        signal: new AbortController().signal,
+        timeoutMs: 3_000,
+      },
+    );
+    expect(result.structuredContent).toMatchObject({ orderId: 'A-7', status: '배송 중' });
+    expect(legacy.methods).not.toContain('server/discover');
+    expect(legacy.methods).toEqual(expect.arrayContaining(['initialize', 'tools/call']));
+    await connections.invalidate(server.id);
   });
 });

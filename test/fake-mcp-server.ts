@@ -1,17 +1,19 @@
-import { createServer, type IncomingMessage, type Server as HttpServer } from 'node:http';
+import { createServer, type Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { toNodeHandler } from '@modelcontextprotocol/node';
 import {
   type CallToolResult,
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
+  createMcpHandler,
+  legacyStatelessFallback,
+  Server,
   type Tool,
-} from '@modelcontextprotocol/sdk/types.js';
+} from '@modelcontextprotocol/server';
 
 /**
- * e2e 용 MCP 서버 (Streamable HTTP, stateless). 공식 SDK 의 저수준 Server 로 만들어
+ * e2e 용 MCP 서버 (Streamable HTTP). 공식 SDK v2 의 저수준 Server 로 만들어
  * Tool 정의(JSON Schema)를 테스트가 마음대로 바꿀 수 있다 — 변경 감지 확인용.
+ *  - era 'both'   : createMcpHandler — 2026-07-28 과 2025 계열을 한 엔드포인트에서 (v2 서버의 기본)
+ *  - era 'legacy' : legacyStatelessFallback — 2025 계열만 (아직 v1 SDK 로 만든 서버와 같은 동작)
  */
 export interface FakeMcpTool extends Tool {
   handler: (args: Record<string, unknown>) => CallToolResult | Promise<CallToolResult>;
@@ -26,6 +28,8 @@ export interface FakeMcp {
   authHeaders: Array<string | undefined>;
   /** true 면 모든 요청에 503 (서버 장애) */
   down: boolean;
+  /** 받은 요청의 JSON-RPC method (server/discover · initialize · tools/call …) */
+  methods: string[];
   close(): Promise<void>;
 }
 
@@ -105,7 +109,9 @@ export function defaultShopTools(): FakeMcpTool[] {
   ];
 }
 
-export async function startFakeMcp(options: { apiKey?: string } = {}): Promise<FakeMcp> {
+export async function startFakeMcp(
+  options: { apiKey?: string; era?: 'both' | 'legacy'; name?: string } = {},
+): Promise<FakeMcp> {
   const state: FakeMcp = {
     url: '',
     port: 0,
@@ -113,8 +119,24 @@ export async function startFakeMcp(options: { apiKey?: string } = {}): Promise<F
     calls: [],
     authHeaders: [],
     down: false,
+    methods: [],
     close: async () => undefined,
   };
+  const factory = () => buildServer(state, options.name ?? 'fake-shop');
+  const mcpHandler =
+    options.era === 'legacy'
+      ? { fetch: legacyStatelessFallback(factory) }
+      : createMcpHandler(factory);
+  const node = toNodeHandler({
+    fetch: async (request) => {
+      const body = (await request
+        .clone()
+        .json()
+        .catch(() => null)) as { method?: string } | null;
+      if (body?.method) state.methods.push(body.method);
+      return mcpHandler.fetch(request);
+    },
+  });
 
   const http: HttpServer = createServer((req, res) => {
     void (async () => {
@@ -127,22 +149,7 @@ export async function startFakeMcp(options: { apiKey?: string } = {}): Promise<F
         res.writeHead(401, { 'Content-Type': 'application/json' }).end('{"error":"unauthorized"}');
         return;
       }
-      if (req.method !== 'POST') {
-        res.writeHead(405).end();
-        return;
-      }
-      const body = await readJson(req);
-      const server = buildServer(state, req.headers.authorization);
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: undefined,
-        enableJsonResponse: true,
-      });
-      res.on('close', () => {
-        void transport.close();
-        void server.close();
-      });
-      await server.connect(transport);
-      await transport.handleRequest(req, res, body);
+      await node(req, res);
     })().catch((err: unknown) => {
       if (!res.headersSent) res.writeHead(500).end(String(err));
     });
@@ -158,26 +165,18 @@ export async function startFakeMcp(options: { apiKey?: string } = {}): Promise<F
   return state;
 }
 
-function buildServer(state: FakeMcp, authorization: string | undefined): Server {
-  const server = new Server(
-    { name: 'fake-shop', version: '1.2.3' },
-    { capabilities: { tools: {} } },
-  );
-  server.setRequestHandler(ListToolsRequestSchema, () => ({
+function buildServer(state: FakeMcp, name: string): Server {
+  const server = new Server({ name, version: '1.2.3' }, { capabilities: { tools: {} } });
+  server.setRequestHandler('tools/list', () => ({
     tools: state.tools.map(({ handler: _handler, ...tool }) => tool),
   }));
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler('tools/call', async (request, ctx) => {
     const tool = state.tools.find((t) => t.name === request.params.name);
     const args = (request.params.arguments ?? {}) as Record<string, unknown>;
+    const authorization = ctx.http?.req?.headers.get('authorization') ?? undefined;
     state.calls.push({ name: request.params.name, args, authorization });
     if (!tool) return { isError: true, content: [{ type: 'text', text: 'unknown tool' }] };
     return tool.handler(args);
   });
   return server;
-}
-
-async function readJson(req: IncomingMessage): Promise<unknown> {
-  let raw = '';
-  for await (const chunk of req) raw += (chunk as Buffer).toString();
-  return raw ? JSON.parse(raw) : undefined;
 }
