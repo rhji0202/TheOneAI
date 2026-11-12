@@ -384,6 +384,7 @@ model Tenant {
 
   users                  User[]
   modelPrices            ModelPrice[]
+  marketplaceListings    MarketplaceListing[]
   usageRecords           UsageRecord[]
   endUsers               EndUser[]
   agents                 Agent[]
@@ -1025,21 +1026,24 @@ model Approval {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model Skill {
-  id              String      @id @default(uuid(7)) @db.Uuid
-  tenantId        String      @map("tenant_id") @db.Uuid
-  name            String
-  source          SkillSource
-  gitRepoUrl      String?     @map("git_repo_url")
-  status          SkillStatus @default(pending_review)
-  activeVersionId String?     @unique @map("active_version_id") @db.Uuid
-  createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt       DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
-  deletedAt       DateTime?   @map("deleted_at") @db.Timestamptz(3)
+  id                   String      @id @default(uuid(7)) @db.Uuid
+  tenantId             String      @map("tenant_id") @db.Uuid
+  name                 String
+  source               SkillSource
+  gitRepoUrl           String?     @map("git_repo_url")
+  status               SkillStatus @default(pending_review)
+  activeVersionId      String?     @unique @map("active_version_id") @db.Uuid
+  /// 마켓플레이스에서 설치한 Skill (source = marketplace)
+  marketplaceListingId String?     @map("marketplace_listing_id") @db.Uuid
+  createdAt            DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt            DateTime?   @map("deleted_at") @db.Timestamptz(3)
 
-  tenant        Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  activeVersion SkillVersion?       @relation("SkillActiveVersion", fields: [activeVersionId], references: [id])
-  versions      SkillVersion[]      @relation("SkillVersions")
-  agentVersions AgentVersionSkill[]
+  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  activeVersion      SkillVersion?       @relation("SkillActiveVersion", fields: [activeVersionId], references: [id])
+  marketplaceListing MarketplaceListing? @relation(fields: [marketplaceListingId], references: [id], onDelete: SetNull)
+  versions           SkillVersion[]      @relation("SkillVersions")
+  agentVersions      AgentVersionSkill[]
 
   @@unique([tenantId, name])
   @@map("skills")
@@ -1350,4 +1354,54 @@ model UsageRecord {
   @@index([tenantId, createdAt])
   @@index([taskId])
   @@map("usage_records")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Marketplace (테넌트 간 공유 — RLS 없음, 게시 테넌트만 바꿀 수 있다는 규칙은 서비스가 지킨다)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// 공유 목록 한 항목 (Skill 또는 MCP 서버 템플릿)
+model MarketplaceListing {
+  id                String   @id @default(uuid(7)) @db.Uuid
+  /// skill | mcp
+  kind              String
+  /// Skill 이름 · MCP 서버 이름 (kind 안에서 유일)
+  name              String
+  title             String
+  description       String
+  publisherTenantId String   @map("publisher_tenant_id") @db.Uuid
+  publisherName     String   @map("publisher_name")
+  /// published | withdrawn
+  status            String   @default("published")
+  latestVersion     String   @map("latest_version")
+  installCount      Int      @default(0) @map("install_count")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  publisherTenant Tenant               @relation(fields: [publisherTenantId], references: [id], onDelete: Cascade)
+  versions        MarketplaceVersion[]
+  installedSkills Skill[]
+
+  @@unique([kind, name])
+  @@map("marketplace_listings")
+}
+
+/// 게시한 버전 — 내용(manifest)과 플랫폼 서명. Skill 파일은 marketplace/blobs 에 내용 주소로 저장
+model MarketplaceVersion {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  listingId   String   @map("listing_id") @db.Uuid
+  version     String
+  description String
+  /// skill: { files, allowedTools, frontmatter }, mcp: { endpointUrl, transport, authType, tools }
+  manifest    Json
+  contentHash String   @map("content_hash")
+  /// Ed25519 서명 (base64) — 이름 · 종류 · 버전 · 내용 해시 · manifest 의 정규화 JSON
+  signature   String
+  keyId       String   @map("key_id")
+  publishedAt DateTime @default(now()) @map("published_at") @db.Timestamptz(3)
+
+  listing MarketplaceListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@unique([listingId, version])
+  @@map("marketplace_versions")
 }

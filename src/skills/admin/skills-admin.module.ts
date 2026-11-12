@@ -6,5 +6,6 @@ import { SkillsAdminService } from './skills-admin.service.js';
 @Module({
   controllers: [SkillsAdminController],
   providers: [SkillsAdminService],
+  exports: [SkillsAdminService],
 })
 export class SkillsAdminModule {}

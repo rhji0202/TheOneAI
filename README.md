@@ -133,6 +133,8 @@ Tool 은 [test/tools.e2e-spec.ts](test/tools.e2e-spec.ts) 가 확인한다: tool
 
 승인은 [test/approvals.e2e-spec.ts](test/approvals.e2e-spec.ts) 가 확인한다: 승인 필요 Tool 호출 → 승인 요청(카드 데이터 · 계획 카드 · 단계 상태 · checkpoint) → `waiting_approval`(Worker 해제), 승인 → 모델을 다시 부르지 않고 같은 호출 · 같은 인자로 실행 → 완료(once 승인 사용 처리), 다른 사용자 결정 불가, 거절 → 실행 안 함 · 사유를 모델에게 데이터로, task 범위 승인 → 같은 Tool 의 다음 호출은 묻지 않음, 한 응답의 읽기 + 쓰기 → 읽기는 한 번만 실행, 중지 → 승인 취소, 만료 → `paused` → 재개 시 새 승인 · 만료 직후 결정은 410, 조건 규칙(require_operator) → 사용자 승인 후에도 운영자 대기 · 규칙 승인은 task 범위 불가 · 콘솔 목록 · Viewer 거부 · 사유 필수 · 운영자 승인 → 실행 · 이력 · 감사 로그, 운영자 전용 승인(FORBIDDEN_APPROVER) · 운영자 거절, 정책 강화는 대기 중인 작업에도 즉시 · 완화는 새 작업부터, 등급 정책 교체(기본값 · task 범위 불가 등급) · 규칙 검증 · 수정 · 삭제. [test/worker-boot.e2e-spec.ts](test/worker-boot.e2e-spec.ts) 는 Worker 프로세스(WorkerModule 만)의 의존성을 확인한다.
 
+마켓플레이스는 [test/marketplace.e2e-spec.ts](test/marketplace.e2e-spec.ts) 가 확인한다: 게시(Viewer 거부 · 서명 · 파일 목록 · 같은 버전 거부), 다른 테넌트 설치(검토 대기 · source marketplace · 서명 항목 통과 · 활성화 · 중복 설치), 새 버전 설치, 파일 변조 · manifest 변조 → 설치 거부 · signatureValid false, 이름 충돌 · 설치본 업로드 · 재게시 거부, 철회(게시자만 · 목록 · 설치에서 빠짐 · 설치본 유지), MCP 템플릿(비밀값 없음 · 같은 내용 재게시 거부 · 서버를 만들지 않음).
+
 사용량 · 지표는 [test/billing.e2e-spec.ts](test/billing.e2e-spec.ts) 가 확인한다: 단가 교체(Viewer 거부 · 중복 거부), 작업 사용량을 역할 · 모델별로 기록하고 단가로 비용 계산(단가 없는 모델은 0 · priced=false), 기억 추출 사용량도 그 작업에, 사용량 보고(합계 · 일별 · 모델별 · 용도별), 월 한도(Owner 만 설정 · 넘으면 402 · 풀면 재개 · 감사 로그), 피드백(바꾸기 · 다른 사용자 거부), 일별 집계 → KPI(성공률 · 목표 · 무단 호출 · 평균 비용 · 소요 시간) · 피드백 · 최근 실패(원인 · 실패 단계) · Agent 필터.
 
 Reflection · Context Compression 은 [test/reflection.e2e-spec.ts](test/reflection.e2e-spec.ts) 가 확인한다: 긴 대화 → 창 밖 메시지 8개 요약 · 저장 · 계획 · 작업 · 답변 프롬프트에 포함, 다음 작업은 새로 밀려난 2개만 이전 요약에 합침, 짧은 대화는 요약 안 함, 작업 노트가 길면 앞 단계 노트 압축(단계 기록 · 토큰) · 답변은 줄인 노트 사용, 재계획에 거부된 Tool 호출 전달, 작업의 실패 · 재계획 사유가 기억 추출로, 검증 오류 → 정정 메시지(두 번째 assistant 메시지) → 다시 검증, `selfCorrection` 끄면 정정 안 함.
@@ -160,6 +162,7 @@ Reflection · Context Compression 은 [test/reflection.e2e-spec.ts](test/reflect
 | Memory (C-08): 작업 완료 → `memory-ingest`(Memory 역할이 사용자 사실 · 선호 / 요약 / 처리 요령 추출, 마스킹 · 지시문 격리 · 중복 병합 · 보존 기간), 임베딩(`local` 해시 · OpenAI · Gemini), Context 구성(사용자 프로필 + pgvector 유사도, 사용자 격리), 콘솔 검색(의미 · 키워드) · 격리 해제 · 수정(재임베딩) · 고정 · 삭제 · 사용자 데이터 삭제 | 완료 — 운영 임베딩은 키가 없어 `local` 로만 확인 |
 | Billing: 모델 호출 사용량(역할 · 실제 응답 모델별, 기억 추출 포함) → `usage_records` · 작업 비용(테넌트 단가), 사용량 보고(일별 · 모델별 · 용도별 · 단가 없는 호출), 월 한도(`BUDGET_EXCEEDED`), 단가 · 한도 관리(감사 로그) | 완료 — 단가는 테넌트가 등록 (플랫폼 기본 단가 없음) |
 | 대시보드 지표 (C-01): `metrics-rollup`(일별 집계 SQL 함수) · `GET /admin/metrics`(기간 KPI · 직전 기간 비교 · 목표 · 최근 실패 · 피드백), 결과 피드백 API | 완료 — 평가셋 성공률은 평가셋 실행(C-03) 단계 |
+| Marketplace (P2): Skill 게시(검증 통과 버전 · 파일 내용 주소 복사 · 플랫폼 Ed25519 서명) · 설치(서명 · 파일 해시 확인 → 업로드와 같은 검증 → 검토 대기 버전) · 새 버전 · 철회 · 이름 충돌, MCP 서버 템플릿 공유(비밀값 제외 · 등록 마법사용) | 완료 — 플랫폼 운영자 검수 · 유료 판매는 범위 밖 |
 | `retention` 주기 잡 | 다음 단계 (명세 §6) — `agent-recovery` · `mcp-sync` · `memory-ingest` · `approval-expiry` · `metrics-rollup` 는 완료 |
 | Admin API · 콘솔 | 다음 단계 |
 | 요청 제한 · OpenTelemetry · Vault 연동 (`SECRETS_BACKEND=local` 은 개발 전용, production 에서 시작 거부) | 다음 단계 |
@@ -186,6 +189,9 @@ src/
 ├── skills/                        Skill 번들(zip) · SKILL.md 파서 · 신뢰 검증 · 저장(내용 주소) · 실행 로딩 · skill.read_file · 관리 API
 ├── admin/                         콘솔 인증(로그인 · 토큰 · 역할 가드) · 감사 로그(AuditModule — API · Worker 공용)
 ├── approvals/                     승인 결정(위젯 · 콘솔 대리) · 만료 · 콘솔 승인 목록 · 이력 · 권한 정책 · 조건 규칙 관리
+├── billing/                       사용량 측정(UsageMeter) · 비용 · 월 한도 · 단가 · 사용량 보고
+├── metrics/                       대시보드 품질 지표 (metrics_daily 집계는 workers/metrics-rollup)
+├── marketplace/                   Skill · MCP 템플릿 공유 · 플랫폼 서명
 ├── memory/                        임베딩 · MemoryRetriever(프로필 · 의미 · 키워드) · memory-ingest(추출 · 격리 · 병합) · 관리 API
 ├── workers/                       agent-tasks · agent-recovery · memory-ingest 프로세서 · 작업 실행 수명주기
 └── agents/                        실행 · Memory 정책 스키마, Agent 초안 · 배포 API(MCP 허용 목록)
@@ -255,4 +261,4 @@ Context Compression 연결 후 (2026-11-12): 같은 대화에 이전 메시지 1
 9. Memory ✅ (memory-ingest 추출 · 마스킹 · 격리 · 병합, 임베딩, 사용자 프로필 + 유사도 검색, 콘솔 관리 · 사용자 데이터 삭제)
 10. Permission · Approval ✅ (승인 대기 → 결정 → 같은 호출부터 재개, once · task 범위, 운영자 승인 · 규칙, 만료, 정책 관리 · 적용 시점)
 11. Reflection · Context Compression ✅ (대화 요약 · 노트 압축 · Tool 결과 축약, 재계획 반성 · 정정 메시지 · 실패 교훈 기억)
-12. Marketplace · Billing (P2) ← 다음
+12. Marketplace · Billing (P2) ✅ (사용량 · 비용 · 월 한도, 품질 지표 · 집계 잡 · 피드백, Skill · MCP 공유 · 서명)

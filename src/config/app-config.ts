@@ -45,6 +45,11 @@ const envSchema = z.object({
   APPROVAL_EXPIRY_TICK_SEC: z.coerce.number().int().min(0).max(3_600).default(60),
   /** 지표 집계 주기. 0 이면 주기 잡을 등록하지 않는다 */
   METRICS_ROLLUP_TICK_SEC: z.coerce.number().int().min(0).max(86_400).default(300),
+  /** 마켓플레이스 서명 키(Ed25519 PKCS#8 PEM)의 Secret 참조 */
+  MARKETPLACE_SIGNING_KEY_REF: z
+    .string()
+    .min(1)
+    .default('vault://platform/marketplace-signing-key'),
   /** 재탐색 대상 확인 주기. 0 이면 주기 잡을 등록하지 않는다 */
   MCP_SYNC_TICK_SEC: z.coerce.number().int().min(0).max(3_600).default(60),
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(100).default(5),
@@ -75,6 +80,7 @@ export interface AppConfig {
   recovery: { tickSec: number; staleSec: number; maxAttempts: number };
   approvals: { expiryTickSec: number };
   metrics: { rollupTickSec: number };
+  marketplace: { signingKeyRef: string };
   embedding: {
     provider: 'local' | 'openai' | 'gemini';
     model: string;
@@ -179,6 +185,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     },
     approvals: { expiryTickSec: env.APPROVAL_EXPIRY_TICK_SEC },
     metrics: { rollupTickSec: env.METRICS_ROLLUP_TICK_SEC },
+    marketplace: { signingKeyRef: env.MARKETPLACE_SIGNING_KEY_REF },
     agentRuntime: env.AGENT_RUNTIME,
     llm: {
       requestTimeoutMs: env.LLM_REQUEST_TIMEOUT_MS,

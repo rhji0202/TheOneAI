@@ -35,6 +35,7 @@ export type ErrorCode =
   | 'SKILL_PARSE_FAILED'
   | 'SKILL_VERIFICATION_FAILED'
   | 'SKILL_VERSION_EXISTS'
+  | 'MARKETPLACE_SIGNATURE_INVALID'
   | 'PAYLOAD_TOO_LARGE'
   | 'RATE_LIMITED'
   | 'SERVICE_UNAVAILABLE'
@@ -80,6 +81,7 @@ const TITLES: Record<ErrorCode, string> = {
   SKILL_PARSE_FAILED: 'Skill 번들 · SKILL.md 를 읽을 수 없습니다',
   SKILL_VERIFICATION_FAILED: '신뢰 검증을 통과하지 못한 Skill 버전입니다',
   SKILL_VERSION_EXISTS: '같은 버전이 이미 다른 내용으로 등록되어 있습니다',
+  MARKETPLACE_SIGNATURE_INVALID: '마켓플레이스 서명 · 파일 해시를 확인하지 못했습니다',
   PAYLOAD_TOO_LARGE: '요청이 너무 큽니다',
   RATE_LIMITED: '요청이 너무 많습니다',
   SERVICE_UNAVAILABLE: '일시적으로 처리할 수 없습니다',

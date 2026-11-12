@@ -6,14 +6,25 @@ import { AppError } from '../../common/errors/app-error.js';
 import type { Prisma, Skill, SkillVersion } from '../../generated/prisma/client.js';
 import { PrismaService, type TenantTx } from '../../infrastructure/database/prisma.service.js';
 import { type PublishedVersion, ToolRegistryService } from '../../tools/tool-registry.service.js';
-import { BundleError, bundleHash, decodeText, readSkillZip } from '../bundle/skill-bundle.js';
+import {
+  BundleError,
+  type BundleFile,
+  bundleHash,
+  decodeText,
+  readSkillZip,
+} from '../bundle/skill-bundle.js';
 import { parseSkillMd, SkillParseError } from '../skill-md.js';
 import {
   SkillStoreService,
   type StoredSkillFile,
   storedFilesSchema,
 } from '../skill-store.service.js';
-import { overallStatus, type VerificationCheck, verifySkill } from '../skill-verifier.js';
+import {
+  overallStatus,
+  type SkillBundleSource,
+  type VerificationCheck,
+  verifySkill,
+} from '../skill-verifier.js';
 
 export const skillListQuerySchema = z.object({
   status: z.enum(['active', 'pending_review', 'inactive', 'verification_failed']).optional(),
@@ -84,6 +95,19 @@ export class SkillsAdminService {
         ]);
       throw err;
     }
+    return this.ingest(admin, files, { kind: 'upload', uploadedBy: admin.email }, req);
+  }
+
+  /**
+   * 번들 → SKILL.md 검사 → 신뢰 검증 → 버전 저장(검토 대기). 업로드와 마켓플레이스 설치가 같은 경로를 쓴다.
+   * 마켓플레이스에서 설치한 Skill 은 같은 목록에서만 새 버전을 받는다 (업로드 · 다른 목록과 이름이 겹치면 NAME_TAKEN).
+   */
+  async ingest(
+    admin: AdminSession,
+    files: BundleFile[],
+    source: SkillBundleSource,
+    req?: AdminRequest,
+  ): Promise<UploadResult> {
     const skillFile = files.find((f) => f.kind === 'skill')!;
     const text = decodeText(skillFile.data);
     if (text === null)
@@ -115,6 +139,16 @@ export class SkillsAdminService {
 
     const result = await this.prisma.withTenant(admin.tenantId, async (tx) => {
       let skill = await tx.skill.findFirst({ where: { name: parsed.name, deletedAt: null } });
+      const listingId = source.kind === 'marketplace' ? source.listingId : null;
+      if (skill && skill.marketplaceListingId !== listingId) {
+        throw new AppError(
+          409,
+          'NAME_TAKEN',
+          skill.marketplaceListingId
+            ? `${parsed.name} 은(는) 마켓플레이스에서 설치한 Skill 입니다 — 새 버전은 마켓플레이스에서 설치하세요`
+            : `같은 이름의 Skill(${parsed.name})이 이미 있습니다`,
+        );
+      }
       const versions = skill
         ? await tx.skillVersion.findMany({ where: { skillId: skill.id } })
         : [];
@@ -134,7 +168,7 @@ export class SkillsAdminService {
         level: t.level,
       }));
       const verification = verifySkill({
-        source: { kind: 'upload', uploadedBy: admin.email },
+        source,
         files,
         contentHash,
         skill: parsed,
@@ -146,7 +180,8 @@ export class SkillsAdminService {
         data: {
           tenantId: admin.tenantId,
           name: parsed.name,
-          source: 'upload',
+          source: source.kind,
+          marketplaceListingId: listingId,
           status: 'pending_review',
         },
       });
@@ -164,6 +199,7 @@ export class SkillsAdminService {
           verificationStatus: status,
           verification: verification as unknown as Prisma.InputJsonValue,
           createdById: admin.userId,
+          signatureVerified: source.kind === 'marketplace',
         },
       });
       // 활성 버전이 없는 Skill 만 상태를 바꾼다 (활성 Skill 은 새 버전을 활성화할 때까지 그대로)
@@ -177,7 +213,7 @@ export class SkillsAdminService {
         tx,
         admin,
         {
-          action: 'skill.upload',
+          action: source.kind === 'upload' ? 'skill.upload' : 'skill.install',
           targetType: 'skill',
           targetId: skill.id,
           metadata: { name: parsed.name, version, contentHash, verification: status },

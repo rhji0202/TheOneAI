@@ -712,6 +712,22 @@ interface WidgetConfigInput {
 - 단가는 테넌트가 등록한다 (provider 계약 단가가 다르고 자주 바뀌므로 플랫폼이 정하지 않는다). 단가 없는 모델은 비용 0 · `priced: false` — 보고서의 `unpricedCalls` 로 드러난다. 단가를 바꾸면 그 뒤 기록부터 적용.
 - 월 한도: 이번 달(UTC) `usage_records` 비용 합계가 한도 이상이면 새 메시지 · 재개를 `402 BUDGET_EXCEEDED` 로 거절한다 (실행 중인 작업은 끝까지 간다). 감사 로그 `billing.prices.update` · `billing.budget.update`.
 
+### 4.9.2 마켓플레이스 (P2 — MCP 및 Skill 공유)
+
+| Method | Path | 권한 | 설명 |
+|---|---|---|---|
+| GET | `/v1/admin/marketplace/listings` | Viewer | `?kind=skill\|mcp&q` 게시된 항목 (+ 내가 게시한 철회 항목). `mine` · `installed` 표시 |
+| GET | `/v1/admin/marketplace/listings/:id` | Viewer | 버전별 `signatureValid`(지금 플랫폼 키로 확인), 최신 manifest (Skill 파일 · allowed-tools / MCP 엔드포인트 · Tool) |
+| POST | `/v1/admin/marketplace/skills` | Admin | `{ skillId, versionId?, title?, description? }` 검증 통과한 버전 게시 (기본 활성 버전) |
+| POST | `/v1/admin/marketplace/mcp-servers` | Admin | `{ serverId, title?, description? }` 연결된 서버의 연결 정보 · 켜진 Tool 목록을 템플릿으로 게시 (비밀값 · 허용 호스트 · 사설망 설정 제외) |
+| POST | `/v1/admin/marketplace/listings/:id/install` | Admin | `{ version? }` — Skill: 서명 · 파일 해시 확인 후 검토 대기 버전으로 복사, MCP: 등록 마법사 템플릿 반환 |
+| POST | `/v1/admin/marketplace/listings/:id/withdraw` | Admin | 게시한 테넌트만. 목록 · 설치에서 빠지고 설치본은 그대로 |
+
+- 목록은 테넌트 간 공유(`marketplace_listings` · `marketplace_versions`, RLS 없음) — 새 버전 · 철회는 게시한 테넌트만, 같은 이름은 다른 테넌트가 게시할 수 없다(`NAME_TAKEN`).
+- 서명: 플랫폼 Ed25519 키(`MARKETPLACE_SIGNING_KEY_REF`, Secret 저장소)로 `{ kind, name, version, contentHash, manifest }` 정규화 JSON 을 서명한다. Skill 파일은 `marketplace/blobs/<sha256>` 에 내용 주소로 복사(이미 있는 파일도 해시가 다르면 다시 씀).
+- Skill 설치: 서명 확인 → 모든 파일 해시 · 번들 해시 확인(하나라도 다르면 `422 MARKETPLACE_SIGNATURE_INVALID`) → 업로드와 같은 경로(SKILL.md · 신뢰 검증 6항목, `source` 는 마켓플레이스, `signature` 는 통과)로 `source: marketplace` Skill 의 검토 대기 버전. 활성화 · Agent 허용은 기존 Skill 관리에서. 설치한 Skill 은 같은 목록에서만 새 버전을 받는다(업로드로 섞을 수 없음 · 다시 게시할 수 없음).
+- MCP 설치는 서버를 만들지 않는다 — 연결 테스트 · Tool 검증 · API Key 입력은 설치하는 테넌트가 기존 등록 절차로.
+
 ### 4.10 감사 로그
 
 | Method | Path | 설명 |
@@ -781,6 +797,7 @@ interface WidgetConfigInput {
 | `AGENT_NOT_PUBLISHED` | 503 | 배포된 Agent 버전 없음 | 위젯 “준비 중” 표시 |
 | `RATE_LIMITED` | 429 | 요청 제한 | 재시도 안내 |
 | `BUDGET_EXCEEDED` | 402 | 이번 달 사용 한도 도달 | 운영자에게 문의 안내 |
+| `MARKETPLACE_SIGNATURE_INVALID` | 422 | 마켓플레이스 서명 · 파일 해시 불일치 | 설치 중단 |
 | `SERVICE_UNAVAILABLE` | 503 | 작업 큐 등 내부 의존성 장애 (작업은 `failed · QUEUE_UNAVAILABLE`) | 잠시 후 재시도 |
 
 ---

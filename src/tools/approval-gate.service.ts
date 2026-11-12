@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { canonicalJson } from '../common/canonical-json.js';
 import { Injectable } from '@nestjs/common';
 import type { RunContext } from '../agent-runtime/run-context.js';
 import { uuidv7 } from '../common/uuid.js';
@@ -131,18 +132,6 @@ export class ApprovalGateService {
 /** 인자 해시 — 키 순서와 무관하게 같은 값이면 같은 해시. 승인 후 인자가 바뀌면 다시 묻는다. */
 export function argsHash(value: unknown): string {
   return createHash('sha256').update(canonicalJson(value)).digest('hex');
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  if (isRecord(value)) {
-    return `{${Object.keys(value)
-      .sort()
-      .filter((k) => value[k] !== undefined)
-      .map((k) => `${JSON.stringify(k)}:${canonicalJson(value[k])}`)
-      .join(',')}}`;
-  }
-  return JSON.stringify(value ?? null);
 }
 
 /** 위험도 — 등급 기준, 조건 규칙(금액 · 대상 등)에 걸렸으면 high */

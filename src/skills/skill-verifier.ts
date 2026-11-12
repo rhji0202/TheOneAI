@@ -16,8 +16,20 @@ export interface VerificationCheck {
   findings?: string[];
 }
 
+/** 번들 출처 — 마켓플레이스는 설치 전에 플랫폼 서명 · 파일 해시를 확인했다 */
+export type SkillBundleSource =
+  | { kind: 'upload'; uploadedBy: string }
+  | {
+      kind: 'marketplace';
+      listingId: string;
+      listing: string;
+      version: string;
+      publisher: string;
+      keyId: string;
+    };
+
 export interface VerifyInput {
-  source: { kind: 'upload'; uploadedBy: string };
+  source: SkillBundleSource;
   files: BundleFile[];
   contentHash: string;
   skill: ParsedSkill;
@@ -34,18 +46,27 @@ export function verifySkill(input: VerifyInput): VerificationCheck[] {
     {
       check: 'source',
       status: 'passed',
-      detail: `콘솔 업로드 (${input.source.uploadedBy})`,
+      detail:
+        input.source.kind === 'upload'
+          ? `콘솔 업로드 (${input.source.uploadedBy})`
+          : `마켓플레이스 ${input.source.listing} ${input.source.version} (게시: ${input.source.publisher})`,
     },
     {
       check: 'hash',
       status: 'passed',
       detail: `sha256:${input.contentHash} · 파일 ${input.files.length}개 · ${formatBytes(input.files.reduce((n, f) => n + f.size, 0))}`,
     },
-    {
-      check: 'signature',
-      status: 'skipped',
-      detail: '업로드 번들은 서명이 없습니다 (서명 검증은 Git · 마켓플레이스 출처에서)',
-    },
+    input.source.kind === 'marketplace'
+      ? {
+          check: 'signature',
+          status: 'passed',
+          detail: `플랫폼 서명 확인 (키 ${input.source.keyId}) · 모든 파일 해시 일치`,
+        }
+      : {
+          check: 'signature',
+          status: 'skipped',
+          detail: '업로드 번들은 서명이 없습니다 (서명 검증은 Git · 마켓플레이스 출처에서)',
+        },
     checkScripts(input.files),
     checkInstructions(input.files),
     checkToolScope(input.skill.allowedTools, input.knownTools),
