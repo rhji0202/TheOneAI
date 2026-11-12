@@ -231,7 +231,8 @@ interface TaskDetail extends Omit<TaskSummary, 'pendingApproval'> {
   pendingApproval: ApprovalView | null;          // 대기 중이면 승인 카드 전체 데이터
   result: {
     messageId: string;
-    verification: Array<{ label: string; passed: boolean }>; // W-04 "결과 검증"
+    correctionMessageId?: string; // Reflection — 검증에서 나온 오류를 바로잡은 후속 메시지 (있을 때)
+    verification: Array<{ label: string; passed: boolean }>; // W-04 "결과 검증" (정정했으면 정정 후 검증)
     summary: { steps: number; toolCalls: number; retries: number; replans: number; durationMs: number };
     artifacts: ArtifactView[];
   } | null;
@@ -783,8 +784,18 @@ agent.worker (queue: agent-tasks)
                               읽기 등급 호출이 여러 개면 parallelTools.max 만큼 동시에 (같은 parallelGroup)
        Observe → Evaluate(pass / replan / fail) → task_steps checkpoint 저장 → step.completed
        cancel_requested_at · pause_requested_at 확인 (단계 사이 + AbortSignal 로 Tool 호출 중단)
-  6. 최종 응답 생성(message.delta …) → Evaluator 검증 → task.completed
-  7. memory-ingest 잡 등록 (Reflection → Episodic · Procedural 기억)
+  6. 최종 응답 생성(message.delta …) → Evaluator 검증 → (구체적인 오류가 있으면) 정정 메시지 · 다시 검증 → task.completed
+  7. memory-ingest 잡 등록 (Reflection → Episodic · Procedural 기억 — 실패 · 거부된 Tool 호출 · 재계획 사유 · 검증 오류를 처리 요령의 근거로)
+
+Context Compression (구현):
+  - 대화: 최근 대화 창(메시지 12개 · 1만2천 자)은 그대로, 창 밖으로 밀려난 메시지는 대화별 누적 요약(conversations.summary)에 합친다
+          (Context 단계, Evaluator 모델, 한 번에 40개씩 · 최대 3번, 민감정보 가림 · 지시문 의심이면 저장 안 함). 요약은 시스템 프롬프트에 데이터로
+  - 작업 노트: 1만2천 자를 넘으면 최근 2개만 남기고 앞 단계 노트를 하나로 줄인다 (context.compress_notes 단계 — 작업 단계 · 평가 · 답변 전)
+  - 작업 단계의 Tool 결과: 합계 1만6천 자를 넘으면 마지막 호출 묶음보다 앞선 결과를 앞부분 600자만 (모델 호출 없음)
+Reflection (구현):
+  - 재계획 입력에 이 작업에서 실패 · 거부 · 시간 초과된 Tool 호출 목록(Problems so far) — 같은 시도를 반복하지 않게
+  - 답변 검증(verify)이 구체적인 오류(issues)를 돌려주면 executor.correct 단계가 정정 메시지를 한 번 스트리밍 → evaluator.verify_correction
+    (실행 정책 selfCorrection, 기본 켜짐)
 
 승인 결정 / 재개 / 복구 → 같은 큐에 { mode: 'resume', fromStepId? } 로 다시 넣는다.
 ```

@@ -26,6 +26,7 @@ const verifySchema = z.object({
     .min(1)
     .max(6),
   summary: z.string().max(500).default(''),
+  issues: z.array(z.string().trim().min(1).max(300)).max(5).default([]),
 });
 
 export interface Assessment {
@@ -38,6 +39,8 @@ export interface Verification {
   verdict: 'pass' | 'fail' | 'unknown';
   checks: Array<{ label: string; passed: boolean }>;
   summary: string;
+  /** 사용자에게 바로잡아 알려야 할 구체적인 오류 (Reflection — 정정 메시지) */
+  issues: string[];
   usage: LlmUsage;
 }
 
@@ -103,6 +106,7 @@ export class EvaluatorService {
         verdict: 'unknown',
         checks: [{ label: '자동 검증을 완료하지 못함', passed: false }],
         summary: '',
+        issues: [],
         usage: result.usage,
       };
     }

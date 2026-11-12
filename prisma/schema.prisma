@@ -605,14 +605,19 @@ model AgentVersionSkill {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model Conversation {
-  id            String    @id @default(uuid(7)) @db.Uuid
-  tenantId      String    @map("tenant_id") @db.Uuid
-  agentId       String    @map("agent_id") @db.Uuid
-  endUserId     String    @map("end_user_id") @db.Uuid
-  title         String?
-  lastMessageAt DateTime? @map("last_message_at") @db.Timestamptz(3)
-  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id               String    @id @default(uuid(7)) @db.Uuid
+  tenantId         String    @map("tenant_id") @db.Uuid
+  agentId          String    @map("agent_id") @db.Uuid
+  endUserId        String    @map("end_user_id") @db.Uuid
+  title            String?
+  lastMessageAt    DateTime? @map("last_message_at") @db.Timestamptz(3)
+  /// 최근 대화 창 밖으로 밀려난 메시지의 누적 요약 (Context Compression)
+  summary          String?
+  /// 요약에 반영한 마지막 메시지 (이 id 이하는 요약에 들어 있다)
+  summaryThroughId String?   @map("summary_through_id") @db.Uuid
+  summaryUpdatedAt DateTime? @map("summary_updated_at") @db.Timestamptz(3)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   agent    Agent     @relation(fields: [agentId], references: [id])

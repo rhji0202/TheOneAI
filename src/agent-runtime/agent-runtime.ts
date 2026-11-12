@@ -12,6 +12,8 @@ export interface AgentRuntime {
 export interface RunResult {
   messageId: string | null;
   verification: Array<{ label: string; passed: boolean }>;
+  /** Reflection — 검증에서 나온 오류를 바로잡은 후속 메시지 */
+  correctionMessageId?: string;
 }
 
 export const AGENT_RUNTIME = Symbol('AGENT_RUNTIME');

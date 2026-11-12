@@ -25,9 +25,16 @@ import {
 } from '../tools/tool-registry.service.js';
 import { type AgentRuntime, RuntimeError, type RunResult } from './agent-runtime.js';
 import { type AgentContext, ContextBuilder } from './context-builder.js';
+import { ContextCompressor, NOTES_COMPRESS_CHARS } from './context-compressor.js';
 import { ExecutorService, type PendingWork } from './executor.service.js';
-import { ModelRouterFactory } from './model-router.js';
-import type { PlanView, PromptSkill, PromptTool, WorkNote } from './prompts.js';
+import { type ModelRouter, ModelRouterFactory } from './model-router.js';
+import {
+  type PlanView,
+  type PromptSkill,
+  type PromptTool,
+  renderNotes,
+  type WorkNote,
+} from './prompts.js';
 import type { RunContext } from './run-context.js';
 
 /**
@@ -49,6 +56,7 @@ export class AgentLoopRuntime implements AgentRuntime {
     private readonly permissions: ToolPermissionService,
     private readonly availability: ToolAvailabilityService,
     private readonly skills: SkillRuntimeService,
+    private readonly compressor: ContextCompressor,
   ) {}
 
   async run(ctx: RunContext): Promise<RunResult> {
@@ -58,7 +66,14 @@ export class AgentLoopRuntime implements AgentRuntime {
     // 1) Context — 지침 · 대화 · 사용할 수 있는 Tool
     const { context, toolset, policies, offered, promptTools, skills, promptSkills } =
       await ctx.step({ type: 'context', name: 'context.build' }, async () => {
-        const built = await this.contextBuilder.build(ctx.task);
+        const {
+          context: built,
+          compression,
+          usage,
+        } = await this.contextBuilder.build(ctx.task, {
+          router,
+          signal,
+        });
         const tools = await this.registry.loadToolset(
           ctx.task.tenantId,
           ctx.task.registryVersionId,
@@ -104,9 +119,16 @@ export class AgentLoopRuntime implements AgentRuntime {
             skills: allowedSkills,
             promptSkills: skillsForPrompt,
           },
-          summary: `최근 대화 ${built.history.length}개 · Tool ${usable.length}개`,
+          summary: `최근 대화 ${built.history.length}개${compression ? ` · 이전 대화 ${compression.messages}개 요약` : ''} · Tool ${usable.length}개`,
+          usage: stepUsage(usage),
           output: {
             historyMessages: built.history.length,
+            conversationSummary: built.conversationSummary
+              ? {
+                  chars: built.conversationSummary.length,
+                  ...(compression ? { mergedMessages: compression.messages } : {}),
+                }
+              : null,
             tenantPromptChars: built.tenantPrompt.length,
             registryVersionId: ctx.task.registryVersionId,
             tools: prompt.map((t) => ({ name: t.llmName, requiresApproval: t.requiresApproval })),
@@ -182,6 +204,7 @@ export class AgentLoopRuntime implements AgentRuntime {
         // 재개: checkpoint 까지 끝난 단계는 다시 하지 않는다 (같은 계획일 때만)
         if (revision === 0 && planIndex < startIndex) continue;
         await applySteers();
+        notes = await this.compressNotes(ctx, router, context, notes);
         const pinned =
           step.kind === 'skill' ? skills.find((k) => k.name === step.skill) : undefined;
         // 승인 대기 뒤 재개: 이 단계에서 멈췄던 대화부터 이어 간다
@@ -264,6 +287,7 @@ export class AgentLoopRuntime implements AgentRuntime {
       }
 
       if (!plan.steps.some((s) => s.kind !== 'respond')) break;
+      notes = await this.compressNotes(ctx, router, context, notes);
 
       const assessment = await ctx.step(
         {
@@ -288,12 +312,14 @@ export class AgentLoopRuntime implements AgentRuntime {
       plan = await ctx.step(
         { type: 'plan', name: 'planner.revise', input: { model: router.describe('planner') } },
         async () => {
+          // Reflection — 이 작업에서 실패 · 거부된 Tool 호출을 재계획에 알려 같은 시도를 반복하지 않게 한다
+          const problems = await this.problemsSoFar(ctx);
           const result = await this.planner.plan(
             router,
             context,
             promptTools,
             promptSkills,
-            { previous: plan, notes, feedback: assessment.reason },
+            { previous: plan, notes, feedback: assessment.reason, problems },
             signal,
           );
           await ctx.setPlan(toPlanSteps(result.plan, toolset, policies, skills), assessment.reason);
@@ -301,7 +327,7 @@ export class AgentLoopRuntime implements AgentRuntime {
           return {
             value: result.plan,
             summary: `계획 수정: ${result.plan.steps.length}단계`,
-            output: { goal: result.plan.goal, fallback: result.fallback },
+            output: { goal: result.plan.goal, fallback: result.fallback, problems },
             usage: stepUsage(result.usage),
           };
         },
@@ -310,7 +336,10 @@ export class AgentLoopRuntime implements AgentRuntime {
 
     // 4) Respond — 최종 답변 스트리밍
     const respondIndex = plan.steps.findIndex((s) => s.kind === 'respond') + 1;
-    if (!sentAnswer) await applySteers();
+    if (!sentAnswer) {
+      await applySteers();
+      notes = await this.compressNotes(ctx, router, context, notes);
+    }
     const answer =
       sentAnswer ??
       (await ctx.step(
@@ -350,25 +379,142 @@ export class AgentLoopRuntime implements AgentRuntime {
       ));
 
     // 5) Verify — 결과 검증 (W-04)
-    const verification = await ctx.step(
+    const verify = (text: string, name = 'evaluator.verify') =>
+      ctx.step(
+        { type: 'evaluate', name, input: { model: router.describe('evaluator') } },
+        async () => {
+          const result = await this.evaluator.verify(router, context, notes, text, signal);
+          return {
+            value: result,
+            summary:
+              result.summary || (result.verdict === 'pass' ? '검증 통과' : '검증 항목 확인 필요'),
+            evaluation: {
+              verdict: result.verdict,
+              checks: result.checks,
+              summary: result.summary,
+              issues: result.issues,
+            },
+            usage: stepUsage(result.usage),
+          };
+        },
+      );
+    const sentCorrection =
+      (ctx.workingMemory.correction as { id: string; text: string } | undefined) ?? null;
+    let verification = sentCorrection ? null : await verify(answer.text);
+
+    // 6) Reflection — 검증에서 구체적인 오류가 나오면 한 번 바로잡는 후속 메시지를 보내고 다시 검증한다
+    let correction = sentCorrection;
+    if (
+      !correction &&
+      verification?.verdict === 'fail' &&
+      verification.issues.length > 0 &&
+      ctx.task.executionPolicy.selfCorrection
+    ) {
+      const issues = verification.issues;
+      correction = await ctx.step(
+        {
+          type: 'respond',
+          name: 'executor.correct',
+          planIndex: respondIndex,
+          trackPlan: false,
+          input: { model: router.describe('executor'), issues },
+        },
+        async () => {
+          let usage: LlmUsage | null = null;
+          const stream = this.executor.correct(router, context, notes, answer.text, issues, signal);
+          async function* texts(): AsyncGenerator<string> {
+            for await (const event of stream) {
+              if (event.type === 'text') yield event.text;
+              else usage = event.response.usage;
+            }
+          }
+          const message = await ctx.streamAssistantMessage(texts());
+          ctx.workingMemory.correction = { id: message.id, text: message.text };
+          return {
+            value: message,
+            summary: '검증에서 나온 오류를 바로잡음',
+            output: { messageId: message.id, chars: message.text.length, issues },
+            usage: usage ? stepUsage(usage) : undefined,
+            checkpoint: true,
+          };
+        },
+      );
+    }
+    if (correction && (!verification || verification.verdict === 'fail')) {
+      verification = await verify(
+        `${answer.text}\n\n[Follow-up correction sent to the user]\n${correction.text}`,
+        'evaluator.verify_correction',
+      );
+    }
+
+    return {
+      messageId: answer.id,
+      verification: verification!.checks,
+      ...(correction ? { correctionMessageId: correction.id } : {}),
+    };
+  }
+
+  /** Context Compression — 작업 노트가 길어지면 앞 단계 노트를 하나로 줄인다 (단계로 기록) */
+  private async compressNotes(
+    ctx: RunContext,
+    router: ModelRouter,
+    context: AgentContext,
+    notes: WorkNote[],
+  ): Promise<WorkNote[]> {
+    const before = renderNotes(notes).length;
+    if (before <= NOTES_COMPRESS_CHARS) return notes;
+    const compressed = await ctx.step(
       {
-        type: 'evaluate',
-        name: 'evaluator.verify',
-        input: { model: router.describe('evaluator') },
+        type: 'context',
+        name: 'context.compress_notes',
+        input: { model: router.describe('evaluator'), notes: notes.length, chars: before },
       },
       async () => {
-        const result = await this.evaluator.verify(router, context, notes, answer.text, signal);
+        const result = await this.compressor.compressNotes(
+          router,
+          context.request,
+          notes,
+          ctx.signal,
+        );
+        const next = result?.value ?? notes;
+        const after = renderNotes(next).length;
         return {
-          value: result,
-          summary:
-            result.summary || (result.verdict === 'pass' ? '검증 통과' : '검증 항목 확인 필요'),
-          evaluation: { verdict: result.verdict, checks: result.checks, summary: result.summary },
-          usage: stepUsage(result.usage),
+          value: next,
+          summary: result
+            ? `작업 노트 ${notes.length}개 → ${next.length}개 (${before}자 → ${after}자)`
+            : '줄이지 못함 — 그대로 진행',
+          output: {
+            before: { notes: notes.length, chars: before },
+            after: { notes: next.length, chars: after },
+          },
+          usage: result ? stepUsage(result.usage) : undefined,
         };
       },
     );
+    ctx.workingMemory.notes = compressed;
+    return compressed;
+  }
 
-    return { messageId: answer.id, verification: verification.checks };
+  /** Reflection — 이 작업에서 실패 · 거부 · 시간 초과된 Tool 호출 (재계획 입력) */
+  private async problemsSoFar(ctx: RunContext): Promise<string[]> {
+    const rows = await ctx.read((tx) =>
+      tx.toolExecution.findMany({
+        where: { taskId: ctx.task.id, status: { in: ['failed', 'timeout', 'denied'] } },
+        orderBy: { startedAt: 'asc' },
+        take: 20,
+        select: {
+          toolName: true,
+          status: true,
+          deniedReason: true,
+          errorCode: true,
+          errorMessage: true,
+        },
+      }),
+    );
+    return rows.map(
+      (r) =>
+        `${r.toolName}: ${r.status === 'denied' ? `refused (${r.deniedReason ?? 'denied'})` : r.status === 'timeout' ? 'timed out' : `failed (${r.errorCode ?? 'error'})`}${r.errorMessage ? ` — ${truncate(r.errorMessage, 200)}` : ''}`,
+    );
   }
 
   /**

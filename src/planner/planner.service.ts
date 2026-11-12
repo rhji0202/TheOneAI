@@ -76,6 +76,8 @@ export interface RevisionInput {
   previous: PlanView;
   notes: WorkNote[];
   feedback: string;
+  /** Reflection — 이 작업에서 실패 · 거부된 Tool 호출 */
+  problems?: string[];
 }
 
 /** Plan — 계획 생성 · 수정. 출력이 형식에 맞지 않으면 한 번 고쳐 달라고 하고, 그래도 안 되면 기본 계획. */
@@ -98,7 +100,12 @@ export class PlannerService {
     const messages: LlmMessage[] = [
       {
         role: 'system',
-        content: systemPrompt(context.tenantPrompt, plannerRole(tools, skills), context.memories),
+        content: systemPrompt(
+          context.tenantPrompt,
+          plannerRole(tools, skills),
+          context.memories,
+          context.conversationSummary,
+        ),
       },
       ...context.history,
       { role: 'user', content: this.userMessage(context, revision) },
@@ -145,6 +152,11 @@ export class PlannerService {
       `Previous plan:\n${renderPlan(revision.previous)}`,
       `Working notes so far:\n${renderNotes(revision.notes)}`,
       `Evaluator feedback:\n${revision.feedback}`,
+      ...(revision.problems?.length
+        ? [
+            `Problems so far (tool calls in this task that failed or were refused — do not plan the same call again unless something changed):\n${revision.problems.map((p) => `- ${p}`).join('\n')}`,
+          ]
+        : []),
       'Create a revised plan as JSON. Keep useful work from the notes; do not repeat steps that already produced what is needed.',
     ].join('\n\n');
   }

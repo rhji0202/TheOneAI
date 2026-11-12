@@ -12,6 +12,7 @@ import type { ResolvedTool, Toolset } from '../tools/tool-registry.service.js';
 import type { AgentContext } from './context-builder.js';
 import type { ModelRouter } from './model-router.js';
 import {
+  EXECUTOR_CORRECTION_ROLE,
   EXECUTOR_WORK_ROLE,
   MAX_TOOL_ROUNDS,
   type PlanView,
@@ -24,6 +25,7 @@ import {
   type WorkNote,
 } from './prompts.js';
 import { TaskWaitingApprovalError } from './agent-runtime.js';
+import { compactToolResults } from './context-compressor.js';
 import type { RunContext } from './run-context.js';
 
 /**
@@ -93,7 +95,15 @@ export class ExecutorService {
     const messages: LlmMessage[] = input.pending
       ? [...input.pending.messages]
       : [
-          { role: 'system', content: systemPrompt(context.tenantPrompt, role, context.memories) },
+          {
+            role: 'system',
+            content: systemPrompt(
+              context.tenantPrompt,
+              role,
+              context.memories,
+              context.conversationSummary,
+            ),
+          },
           ...context.history,
           {
             role: 'user',
@@ -127,6 +137,8 @@ export class ExecutorService {
       round++;
     }
     for (; round < MAX_TOOL_ROUNDS; round++) {
+      // Context Compression — 오래된 Tool 결과는 앞부분만 (모델은 이미 보고 판단했다)
+      compactToolResults(messages);
       const res = await router.complete(
         'executor',
         { messages, tools: definitions.length > 0 ? definitions : undefined },
@@ -222,11 +234,48 @@ export class ExecutorService {
       {
         role: 'system',
         content:
-          systemPrompt(context.tenantPrompt, respondRole(tools), context.memories) +
-          (guidance.length ? `\n\n${guidance.join('\n\n')}` : ''),
+          systemPrompt(
+            context.tenantPrompt,
+            respondRole(tools),
+            context.memories,
+            context.conversationSummary,
+          ) + (guidance.length ? `\n\n${guidance.join('\n\n')}` : ''),
       },
       ...context.history,
       { role: 'user', content: context.request },
+    ];
+    return router.stream('executor', { messages }, signal);
+  }
+
+  /** Reflection — 검증에서 나온 오류를 바로잡는 짧은 후속 메시지 (스트리밍) */
+  correct(
+    router: ModelRouter,
+    context: AgentContext,
+    notes: WorkNote[],
+    answer: string,
+    issues: string[],
+    signal: AbortSignal,
+  ): AsyncGenerator<LlmStreamEvent> {
+    const messages: LlmMessage[] = [
+      {
+        role: 'system',
+        content: systemPrompt(
+          context.tenantPrompt,
+          EXECUTOR_CORRECTION_ROLE,
+          '',
+          context.conversationSummary,
+        ),
+      },
+      {
+        role: 'user',
+        content: [
+          `User request:\n${context.request}`,
+          `Working notes (not visible to the user):\n${renderNotes(notes)}`,
+          `Your previous answer:\n${answer}`,
+          `Problems found:\n${issues.map((i) => `- ${i}`).join('\n')}`,
+          'Write the correction message now.',
+        ].join('\n\n'),
+      },
     ];
     return router.stream('executor', { messages }, signal);
   }

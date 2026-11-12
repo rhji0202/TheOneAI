@@ -325,6 +325,9 @@ export class TaskExecutionService {
       return this.events.append(tx, tenantId, taskId, 'task.completed', {
         result: {
           messageId: result.messageId,
+          ...(result.correctionMessageId
+            ? { correctionMessageId: result.correctionMessageId }
+            : {}),
           verification: result.verification,
           summary: {
             steps: task.completedSteps,

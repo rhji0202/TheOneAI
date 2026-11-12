@@ -14,6 +14,8 @@ export const executionPolicySchema = z.object({
     })
     .prefault({}),
   replanLimit: z.number().int().min(0).max(10).default(3),
+  /** Reflection — 답변 검증에서 구체적인 오류가 나오면 한 번 바로잡는 후속 메시지를 보낸다 */
+  selfCorrection: z.boolean().default(true),
   parallelTools: z
     .object({
       enabled: z.boolean().default(true),

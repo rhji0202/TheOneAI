@@ -6,6 +6,7 @@ import { PlannerService } from '../planner/planner.service.js';
 import { AgentLoopRuntime } from './agent-loop.runtime.js';
 import { AGENT_RUNTIME, type AgentRuntime } from './agent-runtime.js';
 import { ContextBuilder } from './context-builder.js';
+import { ContextCompressor } from './context-compressor.js';
 import { ExecutorService } from './executor.service.js';
 import { ModelRouterFactory } from './model-router.js';
 import { PlaceholderAgentRuntime } from './placeholder-agent-runtime.js';
@@ -14,6 +15,7 @@ import { PlaceholderAgentRuntime } from './placeholder-agent-runtime.js';
   imports: [LlmModule],
   providers: [
     ModelRouterFactory,
+    ContextCompressor,
     ContextBuilder,
     PlannerService,
     ExecutorService,

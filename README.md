@@ -133,6 +133,8 @@ Tool 은 [test/tools.e2e-spec.ts](test/tools.e2e-spec.ts) 가 확인한다: tool
 
 승인은 [test/approvals.e2e-spec.ts](test/approvals.e2e-spec.ts) 가 확인한다: 승인 필요 Tool 호출 → 승인 요청(카드 데이터 · 계획 카드 · 단계 상태 · checkpoint) → `waiting_approval`(Worker 해제), 승인 → 모델을 다시 부르지 않고 같은 호출 · 같은 인자로 실행 → 완료(once 승인 사용 처리), 다른 사용자 결정 불가, 거절 → 실행 안 함 · 사유를 모델에게 데이터로, task 범위 승인 → 같은 Tool 의 다음 호출은 묻지 않음, 한 응답의 읽기 + 쓰기 → 읽기는 한 번만 실행, 중지 → 승인 취소, 만료 → `paused` → 재개 시 새 승인 · 만료 직후 결정은 410, 조건 규칙(require_operator) → 사용자 승인 후에도 운영자 대기 · 규칙 승인은 task 범위 불가 · 콘솔 목록 · Viewer 거부 · 사유 필수 · 운영자 승인 → 실행 · 이력 · 감사 로그, 운영자 전용 승인(FORBIDDEN_APPROVER) · 운영자 거절, 정책 강화는 대기 중인 작업에도 즉시 · 완화는 새 작업부터, 등급 정책 교체(기본값 · task 범위 불가 등급) · 규칙 검증 · 수정 · 삭제. [test/worker-boot.e2e-spec.ts](test/worker-boot.e2e-spec.ts) 는 Worker 프로세스(WorkerModule 만)의 의존성을 확인한다.
 
+Reflection · Context Compression 은 [test/reflection.e2e-spec.ts](test/reflection.e2e-spec.ts) 가 확인한다: 긴 대화 → 창 밖 메시지 8개 요약 · 저장 · 계획 · 작업 · 답변 프롬프트에 포함, 다음 작업은 새로 밀려난 2개만 이전 요약에 합침, 짧은 대화는 요약 안 함, 작업 노트가 길면 앞 단계 노트 압축(단계 기록 · 토큰) · 답변은 줄인 노트 사용, 재계획에 거부된 Tool 호출 전달, 작업의 실패 · 재계획 사유가 기억 추출로, 검증 오류 → 정정 메시지(두 번째 assistant 메시지) → 다시 검증, `selfCorrection` 끄면 정정 안 함.
+
 ## 구현 현황
 
 | 범위 | 상태 |
@@ -150,6 +152,8 @@ Tool 은 [test/tools.e2e-spec.ts](test/tools.e2e-spec.ts) 가 확인한다: tool
 | 비용 계산 (`tasks.cost_amount`) | 다음 단계 — 모델별 단가표 필요. 토큰 수는 기록 중 |
 | 재개 · 복구: checkpoint 재개(계획 · 노트 · 다음 단계 · 보낸 답변) · 처음부터 다시 · 일시정지 · 실행 중 추가 지시(steer) · agent-recovery(heartbeat 끊김 → 마지막 checkpoint 부터, 한도 3회) · Worker 종료 시 넘기기 · 소유권 확인 · 콘솔 작업 목록 · 트레이스 · 단계 상세 · 일시정지 · 중지 · 재개 | 완료 |
 | 승인 (W-03 · C-07): 승인 필요 Tool → 승인 요청 · `waiting_approval`(Worker 해제) → 결정 후 같은 호출부터 재개(진행 중 대화 checkpoint), once · task 범위, user · operator · user_and_operator, 인자 해시 · 사용 처리, 거절 사유 → 모델, 만료(`approval-expiry`) → paused, 중지 시 취소, 위젯 결정 API · 콘솔 목록 · 이력 · 대리 결정, 등급 정책 · 조건 규칙 관리(감사 로그), 정책 강화는 즉시 · 완화는 새 작업부터 | 완료 |
+| Context Compression: 최근 대화 창 밖 메시지 → 대화별 누적 요약(증분, 시스템 프롬프트에 데이터로), 작업 노트 압축(`context.compress_notes`), 작업 단계의 오래된 Tool 결과 축약 | 완료 |
+| Reflection: 재계획에 실패 · 거부된 Tool 호출 목록, 답변 검증 오류 → 정정 메시지 한 번 · 다시 검증(`selfCorrection`), 작업의 실패 · 재계획 · 검증 오류 → 처리 요령 기억의 근거 | 완료 |
 | 업로드 · 산출물 다운로드 | 다음 단계 (명세 §2.6) |
 | Memory (C-08): 작업 완료 → `memory-ingest`(Memory 역할이 사용자 사실 · 선호 / 요약 / 처리 요령 추출, 마스킹 · 지시문 격리 · 중복 병합 · 보존 기간), 임베딩(`local` 해시 · OpenAI · Gemini), Context 구성(사용자 프로필 + pgvector 유사도, 사용자 격리), 콘솔 검색(의미 · 키워드) · 격리 해제 · 수정(재임베딩) · 고정 · 삭제 · 사용자 데이터 삭제 | 완료 — 운영 임베딩은 키가 없어 `local` 로만 확인 |
 | `metrics-rollup` · `retention` 주기 잡 | 다음 단계 (명세 §6) — `agent-recovery` · `mcp-sync` · `memory-ingest` · `approval-expiry` 는 완료 |
@@ -232,6 +236,8 @@ Memory 연결 후 (2026-11-12, 임베딩 `local`, Memory 역할 = evaluator `dee
 
 처음 실행에서 Worker 가 뜨지 않았다(`ApprovalsService` 가 콘솔 모듈의 `AuditService` 에 의존 — e2e 는 API + Worker 모듈을 함께 띄워 드러나지 않음) → 감사 로그를 `AuditModule` 로 분리하고 WorkerModule 만 띄우는 e2e 를 추가했다.
 
+Context Compression 연결 후 (2026-11-12): 같은 대화에 이전 메시지 16개(주문 A-1003 문의 · 짧은 답변 선호로 시작해 반품 · 교환 · 포인트 · 쿠폰 · 멤버십 · 포장 질문, 메시지마다 부연 설명이 길다)를 넣고 “처음에 말씀드린 주문, 지금 배송 상태 어떻게 돼요?”를 물었다. 최근 창(12개)에 들지 않은 첫 4개가 요약(198자: “지난주 주문 A-1003 관련 문의, 답변은 짧게 받는 것을 선호”, 반품 규정 안내 등)으로 합쳐졌고, Agent 는 요약에서 주문 번호를 찾아 `demo-shop.lookup_order {"orderId":"A-1003"}` 를 호출해 “A-1003(노트북 파우치)은 배송 완료 상태입니다.” 로 짧게 답했다(12.3s). 주문 번호는 최근 창 밖의 첫 메시지에만 있어서, 요약이 없으면 Agent 가 알 수 없는 정보다.
+
 ## 개발 순서 (기획안 12장)
 
 1. NestJS 프로젝트 · DB 기반 ✅
@@ -244,5 +250,5 @@ Memory 연결 후 (2026-11-12, 임베딩 `local`, Memory 역할 = evaluator `dee
 8. Checkpoint · Recovery ✅ (checkpoint 재개 · 처음부터 · 일시정지 · 추가 지시 · Worker 유실 복구 · 복구 한도)
 9. Memory ✅ (memory-ingest 추출 · 마스킹 · 격리 · 병합, 임베딩, 사용자 프로필 + 유사도 검색, 콘솔 관리 · 사용자 데이터 삭제)
 10. Permission · Approval ✅ (승인 대기 → 결정 → 같은 호출부터 재개, once · task 범위, 운영자 승인 · 규칙, 만료, 정책 관리 · 적용 시점)
-11. Reflection · Context Compression ← 다음
-12. Marketplace · Billing (P2)
+11. Reflection · Context Compression ✅ (대화 요약 · 노트 압축 · Tool 결과 축약, 재계획 반성 · 정정 메시지 · 실패 교훈 기억)
+12. Marketplace · Billing (P2) ← 다음

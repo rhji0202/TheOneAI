@@ -79,10 +79,28 @@ export class MemoryIngestService {
             select: { content: true },
           })
         : null;
-      const reply = await tx.message.findFirst({
+      const replies = await tx.message.findMany({
         where: { taskId, role: 'assistant' },
-        orderBy: { id: 'desc' },
+        orderBy: { id: 'asc' },
         select: { content: true },
+      });
+      // Reflection — 이 작업에서 잘못된 것 (처리 요령 기억의 근거)
+      const failures = await tx.toolExecution.findMany({
+        where: { taskId, status: { in: ['failed', 'timeout', 'denied'] } },
+        orderBy: { startedAt: 'asc' },
+        take: 10,
+        select: { toolName: true, status: true, deniedReason: true, errorMessage: true },
+      });
+      const replans = await tx.taskEvent.findMany({
+        where: { taskId, type: 'plan.revised' },
+        orderBy: { id: 'asc' },
+        take: 5,
+        select: { payload: true },
+      });
+      const checks = await tx.taskStep.findMany({
+        where: { taskId, type: 'evaluate', name: { startsWith: 'evaluator.verify' } },
+        orderBy: { seq: 'asc' },
+        select: { evaluation: true },
       });
       const checkpoint = task.lastCheckpointStepId
         ? await tx.taskStep.findUnique({
@@ -97,12 +115,34 @@ export class MemoryIngestService {
         policy: version.memoryPolicy,
         endUser,
         request: textOf(trigger?.content),
-        answer: textOf(reply?.content),
+        // 정정 메시지가 있으면 답변 뒤에 이어 붙인다
+        answer: replies
+          .map((r) => textOf(r.content))
+          .filter(Boolean)
+          .join('\n\n[Follow-up correction]\n'),
+        lessons: [
+          ...failures.map(
+            (f) =>
+              `Tool ${f.toolName} ${f.status === 'denied' ? `was refused (${f.deniedReason ?? 'denied'})` : f.status === 'timeout' ? 'timed out' : 'failed'}${f.errorMessage ? `: ${f.errorMessage.slice(0, 160)}` : ''}`,
+          ),
+          ...replans.flatMap((e) => {
+            const reason = (e.payload as { reason?: unknown } | null)?.reason;
+            return typeof reason === 'string' && reason ? [`The plan was revised: ${reason}`] : [];
+          }),
+          ...checks.flatMap((c) => {
+            const issues = (c.evaluation as { issues?: unknown } | null)?.issues;
+            return Array.isArray(issues)
+              ? issues
+                  .filter((i): i is string => typeof i === 'string')
+                  .map((i) => `Answer check found: ${i}`)
+              : [];
+          }),
+        ],
         notes: Array.isArray(memory?.notes) ? memory.notes : [],
       };
     });
     if (!loaded) return { saved: 0, updated: 0, quarantined: 0, skipped: 'not_completed' };
-    const { task, notes, endUser, request, answer } = loaded;
+    const { task, notes, endUser, request, answer, lessons } = loaded;
     const policy = memoryPolicySchema.parse(loaded.policy ?? {});
     if (!policy.enabled) return { saved: 0, updated: 0, quarantined: 0, skipped: 'disabled' };
 
@@ -125,6 +165,11 @@ export class MemoryIngestService {
               `User request:\n${request}`,
               `Working notes:\n${truncate(renderNotes(notes), 4_000)}`,
               `Final answer sent to the user:\n${truncate(answer, 3_000)}`,
+              ...(lessons.length
+                ? [
+                    `What went wrong or was corrected during the task (use for procedural lessons):\n${lessons.map((l) => `- ${l}`).join('\n')}`,
+                  ]
+                : []),
             ].join('\n\n'),
           },
         ],

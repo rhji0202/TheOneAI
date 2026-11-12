@@ -32,6 +32,11 @@ import type { AddressInfo } from 'node:net';
  *   [느린분석]   작업 단계 응답이 1.5초 걸린다 (일시정지 · 추가 지시)
  *   [느린답변]   답변 스트림이 조각마다 250ms (Worker 유실 시뮬레이션)
  *   [두번실패]   답변이 작업(#태그)마다 처음 두 번 500 → 재시도 후에도 실패 → 재개하면 성공
+ * Reflection · Context Compression
+ *   [긴메모]     reason 4단계, 단계마다 약 5천 자 메모 → 노트 압축(# Role: Compressor / Mode: notes)
+ *   [반성]       reason 단계에서 없는 Tool 호출(거부) → assess 가 한 번 replan → 재계획 요청에 “Problems so far”
+ *   [검증실패]   답변 검증이 구체적인 오류(issues)로 fail → 정정 메시지(# Role: Executor (correction)) → 다시 검증 pass
+ *   대화 요약(# Role: Compressor / Mode: conversation) 은 합친 메시지 수를 요약에 적는다
  * 기억 추출 (# Role: Memory / Mode: extract)
  *   [기억]       semantic(user) · episodic(user) · procedural(agent) 3개
  *   [주입기억]   지시문처럼 보이는 내용 → 격리
@@ -109,7 +114,8 @@ function scripted(text: string, round: number, toolsOffered: boolean): Call[] | 
       ['builtin__current_time', { timezone: 'Asia/Seoul' }],
     ];
   }
-  if (text.includes('[무단]')) return [['shell__exec', { cmd: 'cat /etc/passwd' }]];
+  if (text.includes('[무단]') || text.includes('[반성]'))
+    return [['shell__exec', { cmd: 'cat /etc/passwd' }]];
   if (text.includes('[승인필요]'))
     return [['test__send_note', { to: 'ops@example.com', text: '안녕하세요' }]];
   if (text.includes('[규칙차단]')) return [['builtin__calculate', { expression: '666+1' }]];
@@ -245,6 +251,32 @@ export async function startFakeLlm(options: { chunkDelayMs?: number } = {}): Pro
             }),
           );
         }
+        if (allText.includes('[긴메모]')) {
+          return reply(
+            JSON.stringify({
+              goal: '긴 분석',
+              steps: [
+                ...['자료 정리', '비교 분석', '위험 검토', '결론 정리'].map((title) => ({
+                  title,
+                  kind: 'reason',
+                  instructions: '',
+                })),
+                { title: '답변 작성', kind: 'respond', instructions: '' },
+              ],
+            }),
+          );
+        }
+        if (allText.includes('[반성]')) {
+          return reply(
+            JSON.stringify({
+              goal: '파일 확인',
+              steps: [
+                { title: '파일 확인', kind: 'reason', instructions: '' },
+                { title: '답변 작성', kind: 'respond', instructions: '' },
+              ],
+            }),
+          );
+        }
         if (
           allText.includes('[분석]') ||
           allText.includes('[느린분석]') ||
@@ -313,6 +345,11 @@ export async function startFakeLlm(options: { chunkDelayMs?: number } = {}): Pro
         }
         const results = body.messages.filter((m) => m.role === 'tool').map((m) => m.content);
         const stepTitle = /Current step \d+: ([^\n]+)/.exec(allText)?.[1] ?? '';
+        if (allText.includes('[긴메모]')) {
+          return reply(
+            `분석 메모: ${stepTitle} — 핵심 수치 42. ${'세부 근거를 정리한 문장입니다. '.repeat(280)}`,
+          );
+        }
         if (allText.includes('[느린분석]')) {
           setTimeout(() => {
             if (!res.destroyed) reply(`분석 메모: ${stepTitle} 완료`);
@@ -324,6 +361,21 @@ export async function startFakeLlm(options: { chunkDelayMs?: number } = {}): Pro
             ? `도구 메모: ${stepTitle} — ${results.join(' | ')}`
             : `분석 메모: ${stepTitle} 완료`,
         );
+      }
+
+      if (role === 'Compressor' && mode === 'conversation') {
+        const older = system
+          ? (lastUser.split('Older messages to merge (oldest first):\n')[1] ?? '')
+          : '';
+        const count = older.split('\n\n').filter((m) => /^(User|Agent): /.test(m)).length;
+        const continued = !lastUser.includes('Previous summary:\n(none)');
+        return reply(
+          `- ${continued ? '(이전 요약에 이어) ' : ''}이전 대화 메시지 ${count}개 요약: 사용자는 요금제 A를 골랐고 배송지는 부산이다`,
+        );
+      }
+
+      if (role === 'Compressor' && mode === 'notes') {
+        return reply('앞 단계 요약: 자료 정리 · 비교 분석 · 위험 검토 완료, 핵심 수치 42');
       }
 
       if (role === 'Memory' && mode === 'extract') {
@@ -376,7 +428,9 @@ export async function startFakeLlm(options: { chunkDelayMs?: number } = {}): Pro
       }
 
       if (role === 'Evaluator' && mode === 'assess') {
-        const replan = allText.includes('[재계획]') && !allText.includes('### Note 2');
+        const replan =
+          (allText.includes('[재계획]') || allText.includes('[반성]')) &&
+          !allText.includes('### Note 2');
         return reply(
           JSON.stringify(
             replan
@@ -387,6 +441,22 @@ export async function startFakeLlm(options: { chunkDelayMs?: number } = {}): Pro
       }
 
       if (role === 'Evaluator' && mode === 'verify') {
+        if (
+          allText.includes('[검증실패]') &&
+          !allText.includes('[Follow-up correction sent to the user]')
+        ) {
+          return reply(
+            JSON.stringify({
+              verdict: 'fail',
+              checks: [
+                { label: '요청에 답함', passed: true },
+                { label: '노트와 일치', passed: false },
+              ],
+              summary: '환불 기한이 노트와 다릅니다',
+              issues: ['환불 기한을 14일이라고 했지만 노트에는 7일이다'],
+            }),
+          );
+        }
         return reply(
           JSON.stringify({
             verdict: 'pass',
@@ -397,6 +467,21 @@ export async function startFakeLlm(options: { chunkDelayMs?: number } = {}): Pro
             summary: '요청에 맞게 답했습니다',
           }),
         );
+      }
+
+      if (role === 'Executor (correction)') {
+        const text = '정정합니다: 환불 기한은 14일이 아니라 7일입니다.';
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        for (const piece of text.match(/\S+\s*/g) ?? [text]) {
+          res.write(
+            `data: ${JSON.stringify({ model: body.model, choices: [{ delta: { content: piece } }] })}\n\n`,
+          );
+        }
+        res.write(
+          `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: USAGE })}\n\n`,
+        );
+        res.end('data: [DONE]\n\n');
+        return;
       }
 
       if (role.startsWith('Executor (respond')) {
