@@ -355,13 +355,15 @@ export function ChatView({
     }
   };
 
+  // 답변을 보낸 뒤에도 서버가 검증하는 동안은 running 이다 — 그때 대기 문구를 다시 띄우지 않는다
+  const answered = after.some((m) => m.role === 'assistant');
   const waiting = !taskId
     ? null
     : run.status === 'queued' && !run.plan
       ? '요청을 받았어요. 곧 시작해요…'
       : run.status === 'running' && !run.plan
         ? '어떻게 진행할지 계획하고 있어요…'
-        : run.status === 'running' && isSimplePlan(run.plan) && !run.stream
+        : run.status === 'running' && isSimplePlan(run.plan) && !run.stream && !answered
           ? '답변을 준비하고 있어요…'
           : null;
 
