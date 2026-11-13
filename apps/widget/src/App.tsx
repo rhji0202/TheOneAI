@@ -1,7 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  ChevronLeftIcon,
+  ListIcon,
+  MessageCircleIcon,
+  MinusIcon,
+  PlusIcon,
+  SparklesIcon,
+  XIcon,
+} from 'lucide-react';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Button } from '@/components/ui/button';
 import { PortalContainerContext } from '@/lib/portal';
+import { cn } from '@/lib/utils';
 import { ApiError, type Bootstrap, type TaskSummary, WidgetApi } from './api';
-import { Back, ChatBubble, Close, ListIcon, Minus, Plus, Spark } from './icons';
 import { ChatView, HomeView, statusLine, TasksView } from './views';
 
 export interface WidgetOptions {
@@ -30,6 +41,17 @@ const DEFAULT_HEADER = {
   progress: null as string | null,
   connection: 'open',
 };
+
+/** 헤더 상태 줄 색 — 키는 작업 상태 (홈은 online) */
+const TONE: Record<string, { text: string; dot: string }> = {
+  online: { text: 'text-emerald-700 dark:text-emerald-400', dot: 'bg-emerald-500' },
+  completed: { text: 'text-muted-foreground', dot: 'bg-emerald-500' },
+  queued: { text: 'text-sky-700 dark:text-sky-300', dot: 'bg-sky-500' },
+  running: { text: 'text-sky-700 dark:text-sky-300', dot: 'animate-pulse bg-sky-500' },
+  waiting_approval: { text: 'text-amber-700 dark:text-amber-300', dot: 'bg-amber-500' },
+  failed: { text: 'text-destructive', dot: 'bg-destructive' },
+};
+const IDLE_TONE = { text: 'text-muted-foreground', dot: 'bg-muted-foreground' };
 
 /** 위젯 앱 — 런처 + 패널(홈 · 대화 · 작업 목록) */
 export function App({
@@ -119,16 +141,9 @@ export function App({
   if (state.status === 'error') {
     return (
       <div className="tw-root" data-position="bottom-right">
-        <div className="launcher-wrap">
-          <button
-            type="button"
-            className="launcher"
-            aria-label="상담 위젯 다시 연결"
-            onClick={() => void boot()}
-          >
-            <ChatBubble />
-          </button>
-        </div>
+        <Launcher label="상담 위젯 다시 연결" onClick={() => void boot()}>
+          <MessageCircleIcon />
+        </Launcher>
       </div>
     );
   }
@@ -146,6 +161,7 @@ export function App({
   };
   const openTask = (t: TaskSummary) =>
     setView({ name: 'chat', conversationId: t.conversationId, taskId: t.id });
+  const tone = view.name === 'chat' ? (TONE[header.status ?? ''] ?? IDLE_TONE) : TONE.online!;
 
   return (
     <PortalContainerContext value={rootEl}>
@@ -160,74 +176,55 @@ export function App({
           <div
             ref={panelRef}
             tabIndex={-1}
-            className="panel"
             role="dialog"
             aria-label={`${b.agent.name} 상담`}
+            className="fixed inset-0 z-[2147483000] flex flex-col overflow-hidden bg-background outline-none min-[481px]:inset-auto min-[481px]:right-5 min-[481px]:bottom-[88px] min-[481px]:h-[min(720px,calc(100vh-112px))] min-[481px]:w-[384px] min-[481px]:rounded-2xl min-[481px]:border min-[481px]:shadow-2xl min-[481px]:in-data-[position=bottom-left]:right-auto min-[481px]:in-data-[position=bottom-left]:left-5"
           >
-            <header className="head">
+            <header className="flex flex-none items-center gap-0.5 border-b py-2 pr-2 pl-3">
               {view.name === 'home' ? (
-                <>
-                  <span className="agent-avatar" aria-hidden="true">
-                    {b.agent.avatarUrl ? <img src={b.agent.avatarUrl} alt="" /> : <Spark />}
-                  </span>
-                  <div className="head-text">
-                    <p className="head-title">{b.agent.name}</p>
-                    <p className="head-sub online">
-                      <span className="dot" />
-                      연결됨
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    className="icon-btn"
-                    aria-label="작업 목록"
-                    onClick={() => setView({ name: 'tasks' })}
-                  >
-                    <ListIcon />
-                  </button>
-                </>
+                <Avatar className="mr-2 size-9" aria-hidden="true">
+                  {b.agent.avatarUrl && <AvatarImage src={b.agent.avatarUrl} alt="" />}
+                  <AvatarFallback className="bg-primary text-primary-foreground">
+                    <SparklesIcon className="size-4.5" />
+                  </AvatarFallback>
+                </Avatar>
               ) : (
-                <>
-                  <button
-                    type="button"
-                    className="icon-btn"
-                    aria-label="홈으로"
-                    onClick={() => setView({ name: 'home' })}
-                  >
-                    <Back />
-                  </button>
-                  <div className="head-text">
-                    <p className="head-title">
-                      {view.name === 'tasks' ? '작업' : header.title || '대화'}
-                    </p>
-                    {view.name === 'chat' && (
-                      <p className={`head-sub st-${header.status ?? 'idle'}`}>
-                        <span className="dot" />
-                        {header.connection === 'reconnecting'
-                          ? '다시 연결하는 중'
-                          : statusLine(header.status, header.progress)}
-                      </p>
-                    )}
-                    {view.name === 'tasks' && <p className="head-sub">최근 30일</p>}
-                  </div>
-                </>
+                <HeaderButton label="홈으로" onClick={() => setView({ name: 'home' })}>
+                  <ChevronLeftIcon />
+                </HeaderButton>
               )}
-              <button
-                type="button"
-                className="icon-btn"
-                aria-label="새 대화"
-                onClick={() => setView({ name: 'home' })}
-              >
-                <Plus />
-              </button>
-              <button
-                type="button"
-                className="icon-btn"
-                aria-label="최소화"
-                onClick={() => setOpen(false)}
-              >
-                <Minus />
-              </button>
+              <div className="min-w-0 flex-1 px-1">
+                <p className="truncate text-[15px] leading-tight font-semibold">
+                  {view.name === 'home'
+                    ? b.agent.name
+                    : view.name === 'tasks'
+                      ? '작업'
+                      : header.title || '대화'}
+                </p>
+                {view.name === 'tasks' ? (
+                  <p className="mt-0.5 text-xs text-muted-foreground">최근 30일</p>
+                ) : (
+                  <p className={cn('mt-0.5 flex items-center gap-1.5 text-xs', tone.text)}>
+                    <span className={cn('size-1.5 shrink-0 rounded-full', tone.dot)} />
+                    {view.name === 'home'
+                      ? '연결됨'
+                      : header.connection === 'reconnecting'
+                        ? '다시 연결하는 중'
+                        : statusLine(header.status, header.progress)}
+                  </p>
+                )}
+              </div>
+              {view.name === 'home' && (
+                <HeaderButton label="작업 목록" onClick={() => setView({ name: 'tasks' })}>
+                  <ListIcon />
+                </HeaderButton>
+              )}
+              <HeaderButton label="새 대화" onClick={() => setView({ name: 'home' })}>
+                <PlusIcon />
+              </HeaderButton>
+              <HeaderButton label="최소화" onClick={() => setOpen(false)}>
+                <MinusIcon />
+              </HeaderButton>
             </header>
             {view.name === 'home' && (
               <HomeView api={api} boot={b} onStart={startChat} onOpenTask={openTask} />
@@ -248,20 +245,76 @@ export function App({
             )}
           </div>
         )}
-        <div className="launcher-wrap">
-          <button
-            type="button"
-            className="launcher"
-            aria-label={open ? '위젯 닫기' : `${b.agent.name} 열기`}
-            aria-expanded={open}
-            onClick={() => setOpen((v) => !v)}
-          >
-            {open ? <Close size={22} /> : <ChatBubble />}
-            {badge > 0 && !open && <span className="launcher-badge">{badge}</span>}
-          </button>
-        </div>
+        <Launcher
+          label={open ? '위젯 닫기' : `${b.agent.name} 열기`}
+          expanded={open}
+          onClick={() => setOpen((v) => !v)}
+          className={cn(open && 'max-[481px]:hidden')}
+        >
+          {open ? <XIcon /> : <MessageCircleIcon />}
+          {badge > 0 && !open && (
+            <span className="absolute -top-0.5 -right-0.5 flex h-5 min-w-5 items-center justify-center rounded-full border-2 border-white bg-red-700 px-1 text-[11px] font-bold text-white">
+              {badge}
+            </span>
+          )}
+        </Launcher>
       </div>
     </PortalContainerContext>
+  );
+}
+
+function Launcher({
+  label,
+  expanded,
+  onClick,
+  className,
+  children,
+}: {
+  label: string;
+  expanded?: boolean;
+  onClick: () => void;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className={cn(
+        'fixed right-5 bottom-5 z-[2147483000] in-data-[position=bottom-left]:right-auto in-data-[position=bottom-left]:left-5',
+        className,
+      )}
+    >
+      <Button
+        className="relative size-14 rounded-full shadow-lg [&_svg:not([class*='size-'])]:size-6"
+        aria-label={label}
+        aria-expanded={expanded}
+        onClick={onClick}
+      >
+        {children}
+      </Button>
+    </div>
+  );
+}
+
+function HeaderButton({
+  label,
+  onClick,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="text-muted-foreground [&_svg:not([class*='size-'])]:size-5"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+    >
+      {children}
+    </Button>
   );
 }
 

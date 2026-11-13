@@ -1,4 +1,63 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
+import {
+  ArrowUpIcon,
+  BanIcon,
+  BracesIcon,
+  CircleAlertIcon,
+  CircleCheckIcon,
+  CircleDotIcon,
+  CircleIcon,
+  CircleMinusIcon,
+  CirclePauseIcon,
+  CircleXIcon,
+  ClockIcon,
+  DownloadIcon,
+  FileIcon,
+  FileTextIcon,
+  type LucideIcon,
+  PaperclipIcon,
+  RouteIcon,
+  ShieldAlertIcon,
+  SquareIcon,
+  WrenchIcon,
+  XIcon,
+} from 'lucide-react';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import {
+  Attachment,
+  AttachmentAction,
+  AttachmentActions,
+  AttachmentContent,
+  AttachmentDescription,
+  AttachmentGroup,
+  AttachmentMedia,
+  AttachmentTitle,
+} from '@/components/ui/attachment';
+import { Badge } from '@/components/ui/badge';
+import { Bubble, BubbleContent } from '@/components/ui/bubble';
+import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupTextarea,
+} from '@/components/ui/input-group';
+import { Item, ItemContent, ItemDescription, ItemMedia, ItemTitle } from '@/components/ui/item';
+import { Label } from '@/components/ui/label';
+import { Message, MessageContent } from '@/components/ui/message';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  Trace,
+  TraceCollapsible,
+  TraceCollapsibleContent,
+  TraceCollapsibleTrigger,
+  TraceDescription,
+  TraceIcon,
+  TraceLine,
+  TraceTitle,
+} from '@/components/ui/trace';
+import { cn } from '@/lib/utils';
 import { formatBytes, formatRemaining } from '../../shared/format';
 import { Markdown } from '../../shared/markdown';
 import { LEVEL, RISK, statusOf } from '../../shared/status';
@@ -8,112 +67,113 @@ import type {
   ContentBlock,
   MessageView,
   PlanStep,
-  TaskResult,
   WidgetApi,
 } from './api';
-import { Alert, Check, Clip, Close, Download, File, Send, Shield } from './icons';
 import type { RunState, ToolChip } from './run';
+
+type TraceStatus = 'running' | 'error' | 'pending';
 
 export function StatusBadge({ status }: { status: string }) {
   const s = statusOf(status);
   return (
-    <span className="badge" style={{ background: s.bg, color: s.fg }}>
+    <Badge style={{ background: s.bg, color: s.fg }} className="font-semibold">
       {s.label}
-    </span>
+    </Badge>
   );
 }
 
-export function Bubble({ message, api }: { message: MessageView; api: WidgetApi }) {
+/** 타이포그래피 플러그인 없이 답변 Markdown 을 꾸민다 */
+const MARKDOWN = cn(
+  'min-w-0 text-sm leading-relaxed wrap-break-word',
+  '[&_p]:mb-2 [&_p:last-child]:mb-0',
+  '[&_:is(h3,h4,h5,h6)]:mt-2.5 [&_:is(h3,h4,h5,h6)]:mb-1.5 [&_:is(h3,h4,h5,h6)]:font-bold',
+  '[&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5',
+  '[&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-px [&_code]:font-mono [&_code]:text-xs',
+  '[&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:bg-muted [&_pre]:p-2.5 [&_pre]:text-xs [&_pre_code]:bg-transparent [&_pre_code]:p-0',
+  '[&_blockquote]:my-1.5 [&_blockquote]:border-l-2 [&_blockquote]:pl-2.5 [&_blockquote]:text-muted-foreground',
+  '[&_a]:text-primary [&_a]:underline [&_a]:underline-offset-4 [&_hr]:my-3',
+  '[&_.md-table]:my-1.5 [&_.md-table]:overflow-x-auto [&_table]:min-w-full [&_table]:border-collapse [&_table]:text-[13px]',
+  '[&_:is(th,td)]:border [&_:is(th,td)]:px-2 [&_:is(th,td)]:py-1 [&_:is(th,td)]:text-left [&_:is(th,td)]:align-top [&_th]:bg-muted [&_th]:font-semibold',
+);
+
+export function ChatMessage({ message }: { message: MessageView }) {
   const text = message.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n');
   const attachments = message.content.filter(
     (b): b is Extract<ContentBlock, { type: 'attachment' }> => b.type === 'attachment',
   );
   if (message.role === 'user') {
     return (
-      <div className="msg msg-user">
-        {text && <p>{text}</p>}
-        {attachments.map((a) => (
-          <span key={a.artifactId} className="attach-chip">
-            <File /> 첨부 파일
-          </span>
-        ))}
-      </div>
+      <Message align="end">
+        <MessageContent>
+          {text && (
+            <Bubble align="end">
+              <BubbleContent className="whitespace-pre-wrap">{text}</BubbleContent>
+            </Bubble>
+          )}
+          {attachments.map((a) => (
+            <Attachment key={a.artifactId} size="xs">
+              <AttachmentMedia>
+                <FileIcon />
+              </AttachmentMedia>
+              <AttachmentContent>
+                <AttachmentTitle>첨부 파일</AttachmentTitle>
+              </AttachmentContent>
+            </Attachment>
+          ))}
+        </MessageContent>
+      </Message>
     );
   }
-  void api;
   return (
-    <div className="msg msg-agent">
-      <span className="avatar" aria-hidden="true">
-        <SparkMini />
-      </span>
-      <Markdown className="md" text={text} />
-    </div>
+    <Message>
+      <MessageContent className="gap-2">
+        <Markdown className={MARKDOWN} text={text} />
+      </MessageContent>
+    </Message>
   );
 }
 
-function SparkMini() {
+export function StreamingMessage({ text }: { text: string }) {
   return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      aria-hidden="true"
-    >
-      <path d="M12 3v4M12 17v4M3 12h4M17 12h4M6.3 6.3l2.8 2.8M14.9 14.9l2.8 2.8M6.3 17.7l2.8-2.8M14.9 9.1l2.8-2.8" />
-    </svg>
+    <Message>
+      <MessageContent className="gap-2">
+        <Markdown className={MARKDOWN} text={text} />
+        <span
+          aria-hidden="true"
+          className="block h-4 w-1.5 animate-pulse rounded-xs bg-primary motion-reduce:animate-none"
+        />
+      </MessageContent>
+    </Message>
   );
 }
 
-export function StreamingBubble({ text }: { text: string }) {
-  return (
-    <div className="msg msg-agent">
-      <span className="avatar" aria-hidden="true">
-        <SparkMini />
-      </span>
-      <div aria-live="polite" className="md">
-        <Markdown text={text} />
-        <span className="cursor" aria-hidden="true" />
-      </div>
-    </div>
-  );
-}
-
-const STEP_ICON: Record<string, { cls: string; label: string }> = {
-  succeeded: { cls: 'step-done', label: '완료' },
-  running: { cls: 'step-running', label: '진행 중' },
-  failed: { cls: 'step-failed', label: '실패' },
-  waiting_approval: { cls: 'step-wait', label: '승인 대기' },
-  skipped: { cls: 'step-skipped', label: '건너뜀' },
-  cancelled: { cls: 'step-skipped', label: '취소' },
-  pending: { cls: 'step-pending', label: '대기' },
+const STEP: Record<
+  string,
+  { icon: LucideIcon; label: string; status?: TraceStatus; tone?: string }
+> = {
+  succeeded: {
+    icon: CircleCheckIcon,
+    label: '완료',
+    tone: 'text-emerald-600 dark:text-emerald-400',
+  },
+  running: { icon: CircleDotIcon, label: '진행 중', status: 'running' },
+  waiting_approval: {
+    icon: ShieldAlertIcon,
+    label: '승인 대기',
+    tone: 'text-amber-600 dark:text-amber-400',
+  },
+  failed: { icon: CircleXIcon, label: '실패', status: 'error' },
+  skipped: { icon: CircleMinusIcon, label: '건너뜀', status: 'pending' },
+  cancelled: { icon: CircleMinusIcon, label: '취소', status: 'pending' },
+  pending: { icon: CircleIcon, label: '대기', status: 'pending' },
 };
-
-function StepMark({ status }: { status: string }) {
-  const icon = STEP_ICON[status] ?? STEP_ICON.pending!;
-  return (
-    <span className={`step-mark ${icon.cls}`} role="img" aria-label={icon.label}>
-      {status === 'succeeded' && <Check />}
-      {status === 'running' && <span className="dot" />}
-      {(status === 'failed' || status === 'waiting_approval') && <Alert size={12} />}
-    </span>
-  );
-}
 
 function stepDetail(step: PlanStep, tools: ToolChip[]): string | null {
   if (step.skill) return `skill: ${step.skill.name} v${step.skill.version}`;
-  if (step.toolName) {
-    const used = tools.filter((t) => t.toolName === step.toolName);
-    const last = used.at(-1);
-    if (!last) return step.toolName;
-    const retry = last.attempt && last.attempt > 1 ? ` · 재시도 ${last.attempt - 1}회` : '';
-    return `${step.toolName}${retry}`;
-  }
-  if (step.kind === 'respond') return null;
-  return null;
+  if (!step.toolName) return null;
+  const last = tools.filter((t) => t.toolName === step.toolName).at(-1);
+  const retry = last?.attempt && last.attempt > 1 ? ` · 재시도 ${last.attempt - 1}회` : '';
+  return `${step.toolName}${retry}`;
 }
 
 /** 답변 단계만 있는 계획(인사 · 간단한 질문) — 실행 계획을 보여 주지 않는다 */
@@ -121,83 +181,162 @@ export function isSimplePlan(plan: RunState['plan']): boolean {
   return Boolean(plan?.steps.every((s) => s.kind === 'respond'));
 }
 
-export function PlanCard({ run }: { run: RunState }) {
+/** Plan — 단계는 처음부터 다 알려져 있다 (plan.created / plan.revised) */
+export function PlanCard({
+  plan,
+  revisions,
+  tools,
+}: {
+  plan: NonNullable<RunState['plan']>;
+  revisions: RunState['revisions'];
+  tools: ToolChip[];
+}) {
   const [showRevision, setShowRevision] = useState(false);
-  if (!run.plan || isSimplePlan(run.plan)) return null;
-  const steps = run.plan.steps;
-  const revised = run.plan.version > 1;
+  const steps = plan.steps;
+  const revised = plan.version > 1;
+  const done = steps.filter((s) => s.status === 'succeeded').length;
+  const status: TraceStatus | undefined = steps.some((s) => s.status === 'failed')
+    ? 'error'
+    : steps.some((s) => s.status === 'running')
+      ? 'running'
+      : undefined;
   return (
-    <section className="card plan" aria-label="실행 계획">
-      <header className="card-head">
-        <h3>실행 계획 · {steps.length}단계</h3>
-        {revised && (
-          <button
-            type="button"
-            className="badge badge-warn badge-button"
-            onClick={() => setShowRevision((v) => !v)}
-            aria-expanded={showRevision}
-          >
-            계획 수정됨 v{run.plan.version}
-          </button>
-        )}
-      </header>
-      {revised && showRevision && (
-        <p className="revision-note">
-          {(run.revisions.at(-1)?.reason || run.plan.revisedReason) ??
-            '결과를 보고 계획을 고쳤어요'}
-        </p>
-      )}
-      <ol className="steps">
-        {steps.map((step) => {
-          const detail = stepDetail(step, run.tools);
-          const current = step.status === 'running' || step.status === 'waiting_approval';
-          return (
-            <li key={step.index} className={current ? 'step current' : 'step'}>
-              <StepMark status={step.status} />
-              <span className="step-body">
-                <span className={step.status === 'pending' ? 'step-title muted' : 'step-title'}>
-                  {step.title}
-                  {step.requiresApproval && step.status === 'pending' && (
-                    <span className="tag tag-warn">승인 필요</span>
-                  )}
-                </span>
-                {detail && (
-                  <code className="step-detail">
-                    {detail}
-                    {step.status === 'running' ? ' · 진행 중' : ''}
-                  </code>
-                )}
-              </span>
-            </li>
-          );
-        })}
-      </ol>
-      {run.tools.length > 0 && (
-        <details className="tool-log">
-          <summary>실행 기록 보기 (Tool {run.tools.length}회)</summary>
-          <ul>
-            {run.tools.map((t) => (
-              <li key={t.executionId}>
-                <span className={`tool-status tool-${t.status}`}>{TOOL_STATUS[t.status]}</span>
-                <code>{t.toolName}</code>
-                {t.preview && <span className="tool-preview">{t.preview}</span>}
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
+    <section aria-label="실행 계획">
+      <Trace>
+        <TraceCollapsible defaultOpen>
+          <div className="flex min-w-0 items-center justify-between gap-2">
+            <TraceCollapsibleTrigger>
+              <TraceLine status={status}>
+                <TraceIcon>
+                  <RouteIcon />
+                </TraceIcon>
+                <TraceTitle>실행 계획 · {steps.length}단계</TraceTitle>
+                <TraceDescription>
+                  {done}/{steps.length} 완료
+                </TraceDescription>
+              </TraceLine>
+            </TraceCollapsibleTrigger>
+            {revised && (
+              <Badge
+                asChild
+                className="border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300"
+              >
+                <button
+                  type="button"
+                  aria-expanded={showRevision}
+                  onClick={() => setShowRevision((v) => !v)}
+                >
+                  계획 수정됨 v{plan.version}
+                </button>
+              </Badge>
+            )}
+          </div>
+          {revised && showRevision && (
+            <p className="mt-2 rounded-md bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-300">
+              {(revisions.at(-1)?.reason || plan.revisedReason) ?? '결과를 보고 계획을 고쳤어요'}
+            </p>
+          )}
+          <TraceCollapsibleContent>
+            <Trace>
+              {steps.map((step) => {
+                const s = STEP[step.status] ?? STEP.pending!;
+                const detail = stepDetail(step, tools);
+                return (
+                  <TraceLine key={step.index} status={s.status}>
+                    <TraceIcon className={s.tone}>
+                      <s.icon />
+                    </TraceIcon>
+                    <TraceTitle
+                      className={cn(
+                        (step.status === 'running' || step.status === 'waiting_approval') &&
+                          'font-medium text-foreground',
+                      )}
+                    >
+                      {step.title}
+                    </TraceTitle>
+                    <span className="sr-only">{s.label}</span>
+                    {step.requiresApproval && step.status === 'pending' && (
+                      <Badge variant="outline" className="h-4 px-1.5 text-[10px]">
+                        승인 필요
+                      </Badge>
+                    )}
+                    {detail && (
+                      <TraceDescription className="min-w-0 shrink truncate font-mono text-xs">
+                        {detail}
+                      </TraceDescription>
+                    )}
+                  </TraceLine>
+                );
+              })}
+            </Trace>
+          </TraceCollapsibleContent>
+        </TraceCollapsible>
+        {tools.length > 0 && <ToolLog tools={tools} />}
+      </Trace>
     </section>
   );
 }
 
-const TOOL_STATUS: Record<ToolChip['status'], string> = {
-  running: '실행 중',
-  succeeded: '성공',
-  failed: '실패',
-  timeout: '시간 초과',
-  denied: '거부됨',
-};
+const TOOL: Record<ToolChip['status'], { icon: LucideIcon; label?: string; status?: TraceStatus }> =
+  {
+    running: { icon: WrenchIcon, label: '실행 중', status: 'running' },
+    succeeded: { icon: WrenchIcon },
+    failed: { icon: CircleXIcon, label: '실패', status: 'error' },
+    timeout: { icon: ClockIcon, label: '시간 초과', status: 'error' },
+    denied: { icon: BanIcon, label: '거부됨' },
+  };
 
+/** Tool — 실행 기록. 실행 중인 Tool 이 있으면 저절로 펼친다 */
+function ToolLog({ tools }: { tools: ToolChip[] }) {
+  const [open, setOpen] = useState<boolean>();
+  const running = tools.some((t) => t.status === 'running');
+  return (
+    <TraceCollapsible open={open ?? running} onOpenChange={setOpen}>
+      <TraceCollapsibleTrigger>
+        <TraceLine status={running ? 'running' : undefined}>
+          <TraceIcon>
+            <WrenchIcon />
+          </TraceIcon>
+          <TraceTitle>실행 기록</TraceTitle>
+          <TraceDescription>Tool {tools.length}회</TraceDescription>
+        </TraceLine>
+      </TraceCollapsibleTrigger>
+      <TraceCollapsibleContent>
+        <Trace>
+          {tools.map((t) => (
+            <ToolLine key={t.executionId} tool={t} />
+          ))}
+        </Trace>
+      </TraceCollapsibleContent>
+    </TraceCollapsible>
+  );
+}
+
+function ToolLine({ tool }: { tool: ToolChip }) {
+  const s = TOOL[tool.status];
+  const line = (
+    <TraceLine status={s.status}>
+      <TraceIcon>
+        <s.icon />
+      </TraceIcon>
+      <TraceTitle>
+        {s.label && `${s.label} · `}
+        <span className="font-mono text-xs">{tool.toolName}</span>
+      </TraceTitle>
+    </TraceLine>
+  );
+  if (!tool.preview || tool.status === 'running') return line;
+  return (
+    <TraceCollapsible>
+      <TraceCollapsibleTrigger>{line}</TraceCollapsibleTrigger>
+      <TraceCollapsibleContent>
+        <p className="font-mono text-xs break-all whitespace-pre-wrap">{tool.preview}</p>
+      </TraceCollapsibleContent>
+    </TraceCollapsible>
+  );
+}
+
+/** Confirmation — 승인 요청 */
 export function ApprovalCard({
   approval,
   api,
@@ -208,7 +347,7 @@ export function ApprovalCard({
   onDecided: (approval: ApprovalView | null) => void;
 }) {
   const titleId = useId();
-  const ref = useRef<HTMLElement>(null);
+  const ref = useRef<HTMLDivElement>(null);
   const [scopeTask, setScopeTask] = useState(false);
   const [comment, setComment] = useState('');
   const [busy, setBusy] = useState(false);
@@ -242,207 +381,220 @@ export function ApprovalCard({
   };
 
   return (
-    <section
+    <Item
       ref={ref}
       tabIndex={-1}
       role="alertdialog"
       aria-labelledby={titleId}
-      className="card approval"
+      aria-describedby={`${titleId}-summary`}
+      variant="outline"
+      size="sm"
+      className="items-start bg-card shadow-xs"
     >
-      <header className="card-head">
-        <h3 id={titleId}>
-          <Shield /> 승인이 필요한 작업
-        </h3>
-        <span className="badge" style={{ background: risk.bg, color: risk.fg }}>
-          위험도 {risk.label}
-        </span>
-      </header>
-      <p className="approval-summary">{approval.summary}</p>
-      <p className="approval-tool">
-        <code>
-          {approval.toolSource === 'mcp' ? 'MCP · ' : ''}
-          {approval.toolName}
-        </code>
-        <span className="muted">
-          {' '}
-          · {LEVEL[approval.permissionLevel] ?? approval.permissionLevel}
-        </span>
-      </p>
-      {approval.args.length > 0 && (
-        <dl className="args">
-          {approval.args.map((a) => (
-            <div key={a.label}>
-              <dt>{a.label}</dt>
-              <dd>{a.value}</dd>
-            </div>
-          ))}
-        </dl>
-      )}
-      <details className="raw">
-        <summary>실행 인자 원문 보기 (JSON)</summary>
-        <pre>{JSON.stringify(approval.rawArgs, null, 2)}</pre>
-      </details>
-      {waitingOperator ? (
-        <p className="notice">
-          {approval.requiredApprover === 'operator'
-            ? '이 작업은 운영자가 확인해요. 승인되면 이어서 진행돼요.'
-            : '확인해 주셨어요. 운영자 확인을 기다리고 있어요.'}
+      <ItemMedia
+        variant="icon"
+        className="size-8 rounded-md bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300"
+      >
+        <ShieldAlertIcon />
+      </ItemMedia>
+      <ItemContent className="min-w-0">
+        <ItemTitle>
+          <span id={titleId}>승인이 필요한 작업</span>
+          <Badge style={{ background: risk.bg, color: risk.fg }} className="font-semibold">
+            위험도 {risk.label}
+          </Badge>
+        </ItemTitle>
+        <ItemDescription id={`${titleId}-summary`} className="line-clamp-none text-foreground">
+          {approval.summary}
+        </ItemDescription>
+      </ItemContent>
+      <div className="flex min-w-0 basis-full flex-col gap-3">
+        <p className="text-xs text-muted-foreground">
+          <code className="font-mono text-foreground">
+            {approval.toolSource === 'mcp' ? 'MCP · ' : ''}
+            {approval.toolName}
+          </code>
+          {' · '}
+          {LEVEL[approval.permissionLevel] ?? approval.permissionLevel}
         </p>
-      ) : (
-        <>
-          {approval.allowTaskScope && (
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={scopeTask}
-                onChange={(e) => setScopeTask(e.target.checked)}
-              />
-              이 작업 동안 같은 작업은 다시 묻지 않기
-            </label>
-          )}
-          <label className="sr-only" htmlFor={`${titleId}-comment`}>
-            수정 요청 입력
-          </label>
-          <textarea
-            id={`${titleId}-comment`}
-            className="comment"
-            rows={2}
-            placeholder="바꿔야 할 점이 있으면 적어 주세요 (거절과 함께 전달돼요)"
-            value={comment}
-            onChange={(e) => setComment(e.target.value)}
-          />
-          {error && (
-            <p className="error" role="alert">
-              {error}
-            </p>
-          )}
-          <div className="actions">
-            <button
-              type="button"
-              className="btn"
-              disabled={busy}
-              onClick={() => void decide('reject')}
-            >
-              {comment.trim() ? '수정 요청' : '거절'}
-            </button>
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={busy}
-              onClick={() => void decide('approve')}
-            >
-              승인하고 계속
-            </button>
-          </div>
-        </>
-      )}
-      <p className="expires">
-        {formatRemaining(approval.expiresAt)} · 응답이 없으면 작업이 일시정지돼요
-      </p>
-    </section>
+        {approval.args.length > 0 && (
+          <dl className="grid grid-cols-[minmax(0,auto)_minmax(0,1fr)] gap-x-4 gap-y-1.5 rounded-lg border bg-muted/40 px-3 py-2 text-xs">
+            {approval.args.map((a) => (
+              <div key={a.label} className="contents">
+                <dt className="text-muted-foreground">{a.label}</dt>
+                <dd className="break-all">{a.value}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+        <Trace>
+          <TraceCollapsible>
+            <TraceCollapsibleTrigger>
+              <TraceLine>
+                <TraceIcon>
+                  <BracesIcon />
+                </TraceIcon>
+                <TraceTitle className="text-xs">실행 인자 원문 보기 (JSON)</TraceTitle>
+              </TraceLine>
+            </TraceCollapsibleTrigger>
+            <TraceCollapsibleContent>
+              <pre className="max-h-48 overflow-auto rounded-md bg-muted p-2 font-mono text-[11px] text-foreground">
+                {JSON.stringify(approval.rawArgs, null, 2)}
+              </pre>
+            </TraceCollapsibleContent>
+          </TraceCollapsible>
+        </Trace>
+        {waitingOperator ? (
+          <p className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
+            {approval.requiredApprover === 'operator'
+              ? '이 작업은 운영자가 확인해요. 승인되면 이어서 진행돼요.'
+              : '확인해 주셨어요. 운영자 확인을 기다리고 있어요.'}
+          </p>
+        ) : (
+          <>
+            {approval.allowTaskScope && (
+              <Label className="font-normal">
+                <Checkbox
+                  checked={scopeTask}
+                  onCheckedChange={(checked) => setScopeTask(checked === true)}
+                />
+                이 작업 동안 같은 작업은 다시 묻지 않기
+              </Label>
+            )}
+            <Textarea
+              aria-label="수정 요청 입력"
+              rows={2}
+              className="min-h-14"
+              placeholder="바꿔야 할 점이 있으면 적어 주세요 (거절과 함께 전달돼요)"
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+            />
+            {error && (
+              <p className="text-xs text-destructive" role="alert">
+                {error}
+              </p>
+            )}
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                className="flex-1"
+                disabled={busy}
+                onClick={() => void decide('reject')}
+              >
+                {comment.trim() ? '수정 요청' : '거절'}
+              </Button>
+              <Button className="flex-1" disabled={busy} onClick={() => void decide('approve')}>
+                승인하고 계속
+              </Button>
+            </div>
+          </>
+        )}
+        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <ClockIcon className="size-3.5" aria-hidden="true" />
+          {formatRemaining(approval.expiresAt)} · 응답이 없으면 작업이 일시정지돼요
+        </p>
+      </div>
+    </Item>
   );
 }
 
-export function ResultCard({ result, api }: { result: TaskResult; api: WidgetApi }) {
-  if (result.artifacts.length === 0) return null;
-  return (
-    <section className="card result" aria-label="결과">
-      <Artifacts api={api} artifacts={result.artifacts} />
-    </section>
-  );
-}
-
-function Artifacts({ api, artifacts }: { api: WidgetApi; artifacts: ArtifactView[] }) {
+/** 완료 뒤 산출물 — Attachment */
+export function Artifacts({ artifacts, api }: { artifacts: ArtifactView[]; api: WidgetApi }) {
   const [error, setError] = useState<string | null>(null);
   return (
-    <div className="artifacts">
-      <p className="section-label">산출물 {artifacts.length}</p>
-      <ul>
-        {artifacts.map((a) => (
-          <li key={a.id}>
-            <span className="file-kind">{(a.fileName.split('.').pop() ?? '').toUpperCase()}</span>
-            <span className="file-meta">
-              <span className="file-name">{a.fileName}</span>
-              <span className="muted">{formatBytes(a.sizeBytes)}</span>
-            </span>
-            <button
-              type="button"
-              className="icon-btn"
+    <section aria-label="결과" className="flex flex-col gap-2">
+      <p className="text-xs font-medium text-muted-foreground">산출물 {artifacts.length}</p>
+      {artifacts.map((a) => (
+        <Attachment key={a.id} className="w-full">
+          <AttachmentMedia>
+            <FileTextIcon />
+          </AttachmentMedia>
+          <AttachmentContent>
+            <AttachmentTitle>{a.fileName}</AttachmentTitle>
+            <AttachmentDescription>
+              {(a.fileName.split('.').pop() ?? '').toUpperCase()} · {formatBytes(a.sizeBytes)}
+            </AttachmentDescription>
+          </AttachmentContent>
+          <AttachmentActions>
+            <AttachmentAction
+              size="icon-sm"
               aria-label={`${a.fileName} 내려받기`}
               onClick={() => api.download(a).catch((e: Error) => setError(e.message))}
             >
-              <Download />
-            </button>
-          </li>
-        ))}
-      </ul>
-      {error && <p className="error">{error}</p>}
-    </div>
+              <DownloadIcon />
+            </AttachmentAction>
+          </AttachmentActions>
+        </Attachment>
+      ))}
+      {error && <p className="text-xs text-destructive">{error}</p>}
+    </section>
+  );
+}
+
+export function PausedCard({ reason, onResume }: { reason: string | null; onResume: () => void }) {
+  return (
+    <Alert role="status">
+      <CirclePauseIcon />
+      <AlertTitle>
+        {reason === 'approval_expired'
+          ? '승인 시간이 지나 일시정지됐어요'
+          : '작업이 일시정지됐어요'}
+      </AlertTitle>
+      <AlertDescription>지금까지의 결과는 저장돼 있어요. 이어서 진행할 수 있어요.</AlertDescription>
+      <div className="col-start-2 mt-2.5">
+        <Button size="sm" onClick={onResume}>
+          이어서 진행
+        </Button>
+      </div>
+    </Alert>
   );
 }
 
 export function FailureCard({
   failure,
-  status,
-  reason,
   onResume,
 }: {
-  failure: RunState['failure'];
-  status: string;
-  reason: string | null;
+  failure: NonNullable<RunState['failure']>;
   onResume: (mode: 'checkpoint' | 'restart') => void;
 }) {
-  if (status === 'paused') {
-    return (
-      <section className="card failure">
-        <p className="failure-title">
-          {reason === 'approval_expired'
-            ? '승인 시간이 지나 일시정지됐어요'
-            : '작업이 일시정지됐어요'}
-        </p>
-        <p className="muted">지금까지의 결과는 저장돼 있어요. 이어서 진행할 수 있어요.</p>
-        <div className="actions">
-          <button type="button" className="btn btn-primary" onClick={() => onResume('checkpoint')}>
-            이어서 진행
-          </button>
-        </div>
-      </section>
-    );
-  }
-  if (!failure) return null;
   return (
-    <section className="card failure" role="alert">
-      <p className="failure-title">작업을 끝내지 못했어요</p>
-      <p>{failure.message}</p>
-      <div className="actions">
+    <Alert variant="destructive">
+      <CircleAlertIcon />
+      <AlertTitle>작업을 끝내지 못했어요</AlertTitle>
+      <AlertDescription>{failure.message}</AlertDescription>
+      <div className="col-start-2 mt-2.5 flex flex-wrap gap-2">
         {failure.resumable && (
-          <button type="button" className="btn btn-primary" onClick={() => onResume('checkpoint')}>
+          <Button size="sm" onClick={() => onResume('checkpoint')}>
             멈춘 단계부터 재개
-          </button>
+          </Button>
         )}
-        <button type="button" className="btn" onClick={() => onResume('restart')}>
+        <Button
+          size="sm"
+          variant="outline"
+          className="text-foreground"
+          onClick={() => onResume('restart')}
+        >
           처음부터
-        </button>
+        </Button>
       </div>
-    </section>
+    </Alert>
   );
 }
 
-export interface Attachment {
+interface PendingFile {
   id: string;
   name: string;
   size: number;
-  status: 'uploading' | 'ready' | 'error';
+  status: 'uploading' | 'done' | 'error';
   error?: string;
 }
 
-/** 입력창 — Enter 전송, Shift+Enter 줄바꿈. 첨부는 올리기를 마친 것만 보낸다 */
+/** Prompt Input — Enter 전송, Shift+Enter 줄바꿈. 첨부는 올리기를 마친 것만 보낸다 */
 export function Composer({
   api,
   value,
   onChange,
   onSubmit,
-  disabled,
   placeholder,
   allowAttachments,
   accept,
@@ -453,25 +605,15 @@ export function Composer({
   value: string;
   onChange: (v: string) => void;
   onSubmit: (text: string, attachments: string[]) => Promise<void> | void;
-  disabled?: boolean;
   placeholder: string;
   allowAttachments: boolean;
   accept: string[];
   maxMb: number;
   stopButton?: { onStop: () => void; busy?: boolean };
 }) {
-  const inputId = useId();
   const fileRef = useRef<HTMLInputElement>(null);
-  const [files, setFiles] = useState<Attachment[]>([]);
+  const [files, setFiles] = useState<PendingFile[]>([]);
   const [sending, setSending] = useState(false);
-  const textRef = useRef<HTMLTextAreaElement>(null);
-
-  useEffect(() => {
-    const el = textRef.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
-  }, [value]);
 
   const pick = async (list: FileList | null) => {
     for (const file of Array.from(list ?? [])) {
@@ -493,7 +635,7 @@ export function Composer({
       try {
         const uploaded = await api.upload(file);
         setFiles((f) =>
-          f.map((x) => (x.id === temp ? { ...x, id: uploaded.id, status: 'ready' } : x)),
+          f.map((x) => (x.id === temp ? { ...x, id: uploaded.id, status: 'done' } : x)),
         );
       } catch (err) {
         setFiles((f) =>
@@ -512,10 +654,9 @@ export function Composer({
     if (fileRef.current) fileRef.current.value = '';
   };
 
-  const ready = files.filter((f) => f.status === 'ready');
+  const ready = files.filter((f) => f.status === 'done');
   const uploading = files.some((f) => f.status === 'uploading');
-  const canSend =
-    !disabled && !sending && !uploading && (value.trim().length > 0 || ready.length > 0);
+  const canSend = !sending && !uploading && (value.trim().length > 0 || ready.length > 0);
   const submit = async () => {
     if (!canSend) return;
     setSending(true);
@@ -537,99 +678,100 @@ export function Composer({
   };
 
   return (
-    <div className="composer">
-      {files.length > 0 && (
-        <ul className="pending-files">
-          {files.map((f) => (
-            <li key={f.id} className={f.status === 'error' ? 'file-error' : ''}>
-              <File />
-              <span className="file-name">{f.name}</span>
-              <span className="muted">
-                {f.status === 'uploading'
-                  ? '올리는 중…'
-                  : f.status === 'error'
-                    ? f.error
-                    : formatBytes(f.size)}
-              </span>
-              <button
-                type="button"
-                className="icon-btn sm"
-                aria-label={`${f.name} 빼기`}
-                onClick={() => setFiles((list) => list.filter((x) => x.id !== f.id))}
-              >
-                <Close size={14} />
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-      <label htmlFor={inputId} className="sr-only">
-        {stopButton ? '추가 지시 입력' : '메시지 입력'}
-      </label>
-      <div className="composer-box">
-        {allowAttachments && !stopButton && (
-          <>
-            <button
-              type="button"
-              className="icon-btn"
-              aria-label="파일 첨부"
-              onClick={() => fileRef.current?.click()}
-            >
-              <Clip />
-            </button>
-            <input
-              ref={fileRef}
-              type="file"
-              hidden
-              multiple
-              accept={accept.join(',')}
-              onChange={(e) => void pick(e.target.files)}
-            />
-          </>
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        void submit();
+      }}
+    >
+      <InputGroup className="min-w-0 rounded-xl bg-background">
+        {files.length > 0 && (
+          <InputGroupAddon align="block-start">
+            <AttachmentGroup className="w-full">
+              {files.map((f) => (
+                <Attachment key={f.id} size="sm" state={f.status}>
+                  <AttachmentMedia>
+                    <FileIcon />
+                  </AttachmentMedia>
+                  <AttachmentContent>
+                    <AttachmentTitle>{f.name}</AttachmentTitle>
+                    <AttachmentDescription>
+                      {f.status === 'uploading'
+                        ? '올리는 중…'
+                        : f.status === 'error'
+                          ? f.error
+                          : formatBytes(f.size)}
+                    </AttachmentDescription>
+                  </AttachmentContent>
+                  <AttachmentActions>
+                    <AttachmentAction
+                      aria-label={`${f.name} 빼기`}
+                      onClick={() => setFiles((list) => list.filter((x) => x.id !== f.id))}
+                    >
+                      <XIcon />
+                    </AttachmentAction>
+                  </AttachmentActions>
+                </Attachment>
+              ))}
+            </AttachmentGroup>
+          </InputGroupAddon>
         )}
-        <textarea
-          ref={textRef}
-          id={inputId}
+        <InputGroupTextarea
+          aria-label={stopButton ? '추가 지시 입력' : '메시지 입력'}
+          className="max-h-36 min-h-12 px-3 pt-3"
           rows={1}
           placeholder={placeholder}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={onKey}
         />
-        {stopButton ? (
-          value.trim() ? (
-            <button
-              type="button"
-              className="send-btn"
-              aria-label="추가 지시 보내기"
-              disabled={!canSend}
-              onClick={() => void submit()}
+        <InputGroupAddon align="block-end">
+          {allowAttachments && !stopButton && (
+            <InputGroupButton
+              size="icon-sm"
+              variant="outline"
+              className="rounded-full"
+              aria-label="파일 첨부"
+              onClick={() => fileRef.current?.click()}
             >
-              <Send />
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="btn stop-btn"
+              <PaperclipIcon />
+            </InputGroupButton>
+          )}
+          {stopButton && !value.trim() ? (
+            <InputGroupButton
+              size="sm"
+              variant="secondary"
+              className="ml-auto h-8 rounded-full px-3"
               disabled={stopButton.busy}
               onClick={stopButton.onStop}
             >
-              <span className="stop-square" aria-hidden="true" />
+              <SquareIcon className="size-3 fill-current" />
               중지
-            </button>
-          )
-        ) : (
-          <button
-            type="button"
-            className="send-btn"
-            aria-label="보내기"
-            disabled={!canSend}
-            onClick={() => void submit()}
-          >
-            <Send />
-          </button>
-        )}
-      </div>
-    </div>
+            </InputGroupButton>
+          ) : (
+            <InputGroupButton
+              type="submit"
+              size="icon-sm"
+              variant="default"
+              className="ml-auto rounded-full"
+              aria-label={stopButton ? '추가 지시 보내기' : '보내기'}
+              disabled={!canSend}
+            >
+              <ArrowUpIcon />
+            </InputGroupButton>
+          )}
+        </InputGroupAddon>
+      </InputGroup>
+      {allowAttachments && (
+        <input
+          ref={fileRef}
+          type="file"
+          hidden
+          multiple
+          accept={accept.join(',')}
+          onChange={(e) => void pick(e.target.files)}
+        />
+      )}
+    </form>
   );
 }

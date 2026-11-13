@@ -1,17 +1,18 @@
-@layer theme, base, legacy, components, utilities;
-
 @import 'tailwindcss';
 @import 'tw-animate-css';
 @import 'shadcn/tailwind.css';
-@import './widget.css' layer(legacy);
 
 @source '../../shared';
 
 @custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
 
+/* 테마 변수 --radius-md 는 :host 에서 계산되므로 --radius 도 :host 에 둔다 */
+:host {
+  --radius: 0.75rem;
+}
+
 /* 위젯 루트에 토큰을 둔다 — 브랜드 색은 테넌트 설정이 --brand / --on-brand 로 넣는다 */
 .tw-root {
-  --radius: 0.75rem;
   --background: #ffffff;
   --foreground: #16181d;
   --card: #ffffff;
@@ -90,5 +91,9 @@
   }
   .tw-root[data-theme='dark'] {
     color-scheme: dark;
+  }
+  .tw-root button:not(:disabled),
+  .tw-root [role='button']:not(:disabled) {
+    cursor: pointer;
   }
 }
