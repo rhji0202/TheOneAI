@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { z } from 'zod';
 import { AppError } from '../common/errors/app-error.js';
+import { APP_CONFIG, type AppConfig } from '../config/app-config.js';
 import { uuidv7 } from '../common/uuid.js';
 import type { Artifact } from '../generated/prisma/client.js';
 import { PrismaService } from '../infrastructure/database/prisma.service.js';
@@ -10,6 +11,7 @@ import { ObjectStorage } from '../infrastructure/storage/object-storage.js';
 import { behaviorSchema } from '../widget/widget-bootstrap.service.js';
 import type { WidgetSession } from '../widget/widget-session.js';
 import { type ArtifactView, toArtifactView } from './artifact-views.js';
+import { DocumentUnreadableError, documentKind, extractDocument } from './document-extract.js';
 
 /** 업로드를 시작한 뒤 내용을 올려야 하는 기한 */
 const UPLOAD_WINDOW_MS = 15 * 60_000;
@@ -47,15 +49,19 @@ export interface CreateUploadResponse {
 /**
  * 파일 업로드 · 산출물 (docs/api-spec.md §2.6, W-01 · W-04).
  *  - 업로드: 메타데이터로 시작(형식 · 크기는 위젯 behavior.attachments) → 내용 PUT(크기 · sha256 확인) → 메시지에 첨부
- *  - 첨부의 텍스트(CSV · JSON · 텍스트)는 작업 Context 에 데이터로 들어간다 (ContextBuilder)
+ *  - 첨부는 작업 Context 에 데이터로 들어간다 (ContextBuilder) — 텍스트 · CSV · JSON 은 그대로,
+ *    XLSX · DOCX · PPTX · PDF 는 추출한 텍스트로, 이미지와 스캔한 PDF 페이지는 이미지 입력으로
  *  - 산출물: Agent 가 builtin.create_file 로 만든 파일. 위젯 사용자 본인만 내려받는다
  * 저장소는 ObjectStorage(개발: 디렉터리, 운영: S3). S3 연동 시 uploadUrl 을 presigned URL 로 바꾼다.
  */
 @Injectable()
 export class ArtifactsService {
+  private readonly logger = new Logger(ArtifactsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: ObjectStorage,
+    @Inject(APP_CONFIG) private readonly config: AppConfig,
   ) {}
 
   async createUpload(
@@ -196,7 +202,7 @@ export class ArtifactsService {
     return toArtifactView(created);
   }
 
-  /** 첨부 파일 → Context 에 넣을 텍스트 (텍스트 형식만 내용, 나머지는 이름 · 형식) */
+  /** 첨부 파일 → Context 에 넣을 텍스트와 이미지 (읽을 수 없는 형식은 이름 · 형식만) */
   async attachmentContext(
     tenantId: string,
     messageId: string,
@@ -211,22 +217,46 @@ export class ArtifactsService {
     const images: LlmImage[] = [];
     for (const a of rows) {
       const head = `File "${a.fileName}" (${a.mimeType}, ${Number(a.sizeBytes)} bytes)`;
-      if (IMAGE_TYPES.test(a.mimeType)) {
-        const data = await this.storage.get(a.storageKey);
-        if (data) {
-          images.push({ mimeType: a.mimeType, data: data.toString('base64') });
-          parts.push(`${head}: attached as image ${images.length} (look at the image input).`);
-          continue;
-        }
-      }
-      if (!TEXT_TYPES.test(a.mimeType)) {
+      const kind = documentKind(a.mimeType, a.fileName);
+      const isImage = IMAGE_TYPES.test(a.mimeType);
+      const data =
+        isImage || kind || TEXT_TYPES.test(a.mimeType)
+          ? await this.storage.get(a.storageKey)
+          : null;
+      if (!data) {
         parts.push(
-          `${head}: content not readable in this version (only text, CSV, JSON and PNG/JPEG/WebP/GIF images are).`,
+          `${head}: content not readable (supported: text, CSV, JSON, XLSX, DOCX, PPTX, PDF and PNG/JPEG/WebP/GIF images).`,
         );
         continue;
       }
-      const data = await this.storage.get(a.storageKey);
-      const text = data ? data.toString('utf8') : '';
+      if (isImage) {
+        images.push({ mimeType: a.mimeType, data: data.toString('base64') });
+        parts.push(`${head}: attached as image ${images.length} (look at the image input).`);
+        continue;
+      }
+      let text = data.toString('utf8');
+      if (kind) {
+        try {
+          const doc = await extractDocument(kind, data, this.config.documents);
+          text = doc.text;
+          if (doc.images.length) {
+            const first = images.length + 1;
+            images.push(
+              ...doc.images.map(({ mimeType, data: page }) => ({ mimeType, data: page })),
+            );
+            const numbers = first === images.length ? `${first}` : `${first}-${images.length}`;
+            text = `Pages ${doc.images.map((i) => i.page).join(', ')} have no text layer (scanned); they are attached as image ${numbers} (look at the image input).\n\n${text}`;
+          }
+        } catch (err) {
+          if (!(err instanceof DocumentUnreadableError)) {
+            this.logger.warn(`문서 추출 실패 (${a.id}): ${String(err)}`);
+          }
+          const reason =
+            err instanceof DocumentUnreadableError ? err.message : 'the server could not read it';
+          parts.push(`${head}: could not be read (${reason}).`);
+          continue;
+        }
+      }
       const clipped =
         text.length > ATTACHMENT_TEXT_CHARS
           ? `${text.slice(0, ATTACHMENT_TEXT_CHARS)}\n…(truncated)`

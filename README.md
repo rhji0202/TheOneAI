@@ -26,7 +26,7 @@
 
 ## 로컬 실행
 
-필요: Node.js 22+, **npm 11+** (npm 10 은 이 의존성 트리에서 설치 오류가 난다), Docker.
+필요: Node.js 22+, **npm 11+** (npm 10 은 이 의존성 트리에서 설치 오류가 난다), Docker. 문서 첨부(XLSX · DOCX · PPTX · PDF)를 읽으려면 Worker 에 Python 3 과 poppler(`pdftotext` · `pdftoppm`, Debian/Ubuntu `poppler-utils`)가 있어야 한다 (`.env` 의 `PYTHON_BIN` · `POPPLER_PATH`).
 
 ```bash
 cp .env.example .env            # DEV_SECRETS 의 <DEEPSEEK_API_KEY> 를 실제 키로 바꾼다 (.env 는 커밋하지 않음)
@@ -211,7 +211,7 @@ Reflection · Context Compression 은 [test/reflection.e2e-spec.ts](test/reflect
 | 승인 (W-03 · C-07): 승인 필요 Tool → 승인 요청 · `waiting_approval`(Worker 해제) → 결정 후 같은 호출부터 재개(진행 중 대화 checkpoint), once · task 범위, user · operator · user_and_operator, 인자 해시 · 사용 처리, 거절 사유 → 모델, 만료(`approval-expiry`) → paused, 중지 시 취소, 위젯 결정 API · 콘솔 목록 · 이력 · 대리 결정, 등급 정책 · 조건 규칙 관리(감사 로그), 정책 강화는 즉시 · 완화는 새 작업부터 | 완료 |
 | Context Compression: 최근 대화 창 밖 메시지 → 대화별 누적 요약(증분, 시스템 프롬프트에 데이터로), 작업 노트 압축(`context.compress_notes`), 작업 단계의 오래된 Tool 결과 축약 | 완료 |
 | Reflection: 재계획에 실패 · 거부된 Tool 호출 목록, 답변 검증 오류 → 정정 메시지 한 번 · 다시 검증(`selfCorrection`), 작업의 실패 · 재계획 · 검증 오류 → 처리 요령 기억의 근거 | 완료 |
-| 업로드 · 산출물 (명세 §2.6): 업로드 등록 → 내용 PUT(크기 · sha256 확인) → 메시지 첨부 → 텍스트 · CSV · JSON 첨부는 작업 Context 에 데이터로, `builtin.create_file` 산출물(md · txt · csv · json), 작업 산출물 목록 · 다운로드(위젯 · 콘솔) | 완료 — S3 presigned URL 은 운영 저장소 단계 |
+| 업로드 · 산출물 (명세 §2.6): 업로드 등록 → 내용 PUT(크기 · sha256 확인) → 메시지 첨부 → 텍스트 · CSV · JSON 첨부는 작업 Context 에 데이터로, XLSX · DOCX · PPTX · PDF 는 Python 표준 라이브러리 스크립트(`src/artifacts/extract_text.py`, PDF 는 poppler)로 뽑은 텍스트로, 이미지 · 스캔한 PDF 페이지는 모델 이미지 입력으로, `builtin.create_file` 산출물(md · txt · csv · json), 작업 산출물 목록 · 다운로드(위젯 · 콘솔) | 완료 — S3 presigned URL 은 운영 저장소 단계 |
 | Memory (C-08): 작업 완료 → `memory-ingest`(Memory 역할이 사용자 사실 · 선호 / 요약 / 처리 요령 추출, 마스킹 · 지시문 격리 · 중복 병합 · 보존 기간), 임베딩(`local` 해시 · OpenAI · Gemini), Context 구성(사용자 프로필 + pgvector 유사도, 사용자 격리), 콘솔 검색(의미 · 키워드) · 격리 해제 · 수정(재임베딩) · 고정 · 삭제 · 사용자 데이터 삭제 | 완료 — 운영 임베딩은 키가 없어 `local` 로만 확인 |
 | Billing: 모델 호출 사용량(역할 · 실제 응답 모델별, 기억 추출 포함) → `usage_records` · 작업 비용(테넌트 단가), 사용량 보고(일별 · 모델별 · 용도별 · 단가 없는 호출), 월 한도(`BUDGET_EXCEEDED`), 단가 · 한도 관리(감사 로그) | 완료 — 단가는 테넌트가 등록 (플랫폼 기본 단가 없음) |
 | 대시보드 지표 (C-01): `metrics-rollup`(일별 집계 SQL 함수) · `GET /admin/metrics`(기간 KPI · 직전 기간 비교 · 목표 · 최근 실패 · 피드백), 결과 피드백 API | 완료 — 평가셋 성공률은 평가셋 실행(C-03) 단계 |

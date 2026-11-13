@@ -61,6 +61,12 @@ const envSchema = z.object({
   LLM_IDLE_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(600_000).default(60_000),
   LLM_MAX_RETRIES: z.coerce.number().int().min(0).max(5).default(2),
   PLACEHOLDER_STREAM_DELAY_MS: z.coerce.number().int().min(0).max(5_000).default(40),
+  /** 문서 첨부(XLSX · DOCX · PPTX · PDF) 추출 — Python 실행 파일과 poppler 폴더 (비우면 PATH 에서 찾는다) */
+  PYTHON_BIN: z.preprocess(
+    emptyToUndefined,
+    z.string().default(process.platform === 'win32' ? 'python' : 'python3'),
+  ),
+  POPPLER_PATH: z.preprocess(emptyToUndefined, z.string().optional()),
 });
 
 export interface AppConfig {
@@ -70,6 +76,7 @@ export interface AppConfig {
   redisUrl: string;
   secrets: { backend: 'local'; devSecrets: Record<string, string>; localFile: string | null };
   storage: { backend: 'local'; dir: string };
+  documents: { python: string; popplerPath: string | null };
   widgetSession: { privateKeyPem: string | undefined; ttlSec: number };
   adminSession: { privateKeyPem: string | undefined; ttlSec: number };
   mcp: {
@@ -157,6 +164,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
       ttlSec: env.WIDGET_SESSION_TTL_SEC,
     },
     storage: { backend: env.STORAGE_BACKEND, dir: env.OBJECT_STORAGE_DIR },
+    documents: { python: env.PYTHON_BIN, popplerPath: env.POPPLER_PATH ?? null },
     adminSession: {
       privateKeyPem: env.ADMIN_SESSION_PRIVATE_KEY?.replace(/\\n/g, '\n'),
       ttlSec: env.ADMIN_SESSION_TTL_SEC,

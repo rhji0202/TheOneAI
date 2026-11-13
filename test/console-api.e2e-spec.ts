@@ -10,6 +10,9 @@ import {
   startTestApp,
   type TestContext,
 } from './helpers.js';
+import { buildXlsx } from './document-fixtures.js';
+
+const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 let ctx: TestContext;
 let token: string;
@@ -239,7 +242,7 @@ describe('위젯 설정 (C-09)', () => {
         theme: { brandColor: '#0F766E', position: 'bottom-left' },
         behavior: {
           noticeText: 'AI 상담원이 답해요',
-          attachments: { types: ['text/csv', 'text/plain', 'image/*'], maxMb: 5 },
+          attachments: { types: ['text/csv', 'text/plain', 'image/*', XLSX_MIME], maxMb: 5 },
         },
       },
       adminToken,
@@ -444,6 +447,36 @@ describe('첨부 · 산출물 (W-01 · W-04)', () => {
       mimeType: 'image/png',
       sizeBytes: png.length,
     });
+  });
+
+  it('엑셀(xlsx) 첨부는 시트별 CSV 로 Context 에 데이터로', async () => {
+    const xlsx = await buildXlsx({
+      재고: [
+        ['품목', '수량', '입고일'],
+        ['볼트 M8', 1200, { date: '2026-11-12' }],
+      ],
+    });
+    const ok = await upload(xlsx, {
+      fileName: '재고_상세내역.xlsx',
+      mimeType: XLSX_MIME,
+      sizeBytes: xlsx.length,
+      sha256: createHash('sha256').update(xlsx).digest('hex'),
+    });
+    expect(ok.put?.status).toBe(200);
+
+    const run = await send('', [
+      { type: 'text', text: '[분석] 재고 정리해 줘 #xlsx' },
+      { type: 'attachment', artifactId: ok.created.body.artifactId },
+    ]);
+    expect(run.events!.at(-1)!.event).toBe('task.completed');
+    const planner = ctx.llm.requests.find(
+      (r) => r.role === 'Planner' && JSON.stringify(r.body).includes('#xlsx'),
+    )!;
+    const userMessage = planner.body.messages.at(-1)!.content!;
+    expect(userMessage).toContain(`File "재고_상세내역.xlsx" (${XLSX_MIME}`);
+    expect(userMessage).toContain(
+      'Sheet "재고" (2 rows)\n품목,수량,입고일\n볼트 M8,1200,2026-11-12',
+    );
   });
 
   it('Agent 가 만든 파일은 작업 산출물 — task.completed · 목록 · 내려받기 · 콘솔 트레이스', async () => {
