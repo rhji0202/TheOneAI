@@ -3,7 +3,21 @@
  * 설정은 bootstrap 이 매번 읽으므로 저장하면 바로 고객사 페이지의 위젯에 반영된다.
  * API: GET /v1/admin/widget-configs · PATCH /:id (Admin) · POST /:id/rotate-secret (Owner)
  */
-import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import {
+  ArrowUpIcon,
+  CheckIcon,
+  MessageCircleIcon,
+  MinusIcon,
+  MoonIcon,
+  PaperclipIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  SparklesIcon,
+  SunIcon,
+  Trash2Icon,
+  XIcon,
+} from 'lucide-react';
+import { type ReactNode, useEffect, useId, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { ApiError } from '../api';
 import { useApi, useAuth } from '../auth';
@@ -28,6 +42,15 @@ import {
   useToast,
 } from '../ui';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { Toggle as ToggleChip } from '@/components/ui/toggle';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { cn } from '@/lib/utils';
 
 /* ───────────── API 타입 (src/widget/admin/widget-configs-admin.service.ts) ───────────── */
 
@@ -102,6 +125,8 @@ const toForm = (w: WidgetConfig): Form => ({
 });
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
+const LINK = 'text-primary underline-offset-4 hover:underline';
 
 const FIELD_LABEL: Record<string, string> = {
   name: '이름',
@@ -341,7 +366,7 @@ export function WidgetSettingsPage() {
   const welcome = (agent.data?.published ?? agent.data?.draft)?.welcomeMessage ?? '';
 
   return (
-    <div className="ws-page">
+    <TooltipProvider>
       <PageHeader
         title="위젯 설치 · 테마"
         description="고객사 페이지에 로더 한 줄을 넣으면 위젯이 열립니다. 저장한 설정은 위젯을 새로 열 때 바로 반영돼요."
@@ -362,8 +387,8 @@ export function WidgetSettingsPage() {
         }
         actions={
           configs.data.length > 1 ? (
-            <select
-              className="input ws-select"
+            <NativeSelect
+              containerClassName="w-auto min-w-[200px]"
               aria-label="위젯 선택"
               value={widget.id}
               onChange={(e) => {
@@ -376,11 +401,11 @@ export function WidgetSettingsPage() {
               }}
             >
               {configs.data.map((w) => (
-                <option key={w.id} value={w.id}>
+                <NativeSelectOption key={w.id} value={w.id}>
                   {w.name}
-                </option>
+                </NativeSelectOption>
               ))}
-            </select>
+            </NativeSelect>
           ) : undefined
         }
       />
@@ -395,13 +420,12 @@ export function WidgetSettingsPage() {
       )}
       {issues.general && <Notice tone="error">{issues.general}</Notice>}
 
-      <div className="ws-layout">
-        <fieldset className="ws-main" disabled={!canEdit}>
+      <div className="grid grid-cols-1 items-start gap-5 min-[1180px]:grid-cols-[minmax(0,1fr)_380px]">
+        <fieldset className="min-w-0" disabled={!canEdit}>
           <Card title="기본">
-            <div className="ws-grid-2">
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-x-4 gap-y-0">
               <Field label="이름" required error={issues.name} hint="콘솔에서만 보이는 이름">
-                <input
-                  className="input"
+                <Input
                   maxLength={100}
                   value={form.name}
                   onChange={(e) => update({ name: e.target.value })}
@@ -412,13 +436,15 @@ export function WidgetSettingsPage() {
                 error={issues.agentId}
                 hint={
                   <>
-                    인사말 · 추천 작업은 <Link to={`/agents/${form.agentId}`}>Agent 설정</Link>의
-                    환영 문구와 허용된 Skill 에서 만들어져요
+                    인사말 · 추천 작업은{' '}
+                    <Link to={`/agents/${form.agentId}`} className={LINK}>
+                      Agent 설정
+                    </Link>
+                    의 환영 문구와 허용된 Skill 에서 만들어져요
                   </>
                 }
               >
-                <select
-                  className="input"
+                <NativeSelect
                   value={form.agentId}
                   onChange={(e) => update({ agentId: e.target.value })}
                 >
@@ -427,16 +453,16 @@ export function WidgetSettingsPage() {
                       { id: widget.agentId, name: widget.agentName, publishedVersion: null },
                     ]
                   ).map((a) => (
-                    <option
+                    <NativeSelectOption
                       key={a.id}
                       value={a.id}
                       disabled={a.publishedVersion === null && a.id !== widget.agentId}
                     >
                       {a.name}
                       {a.publishedVersion !== null ? ` (v${a.publishedVersion})` : ' (배포 안 됨)'}
-                    </option>
+                    </NativeSelectOption>
                   ))}
-                </select>
+                </NativeSelect>
               </Field>
             </div>
             <Toggle
@@ -471,7 +497,10 @@ export function WidgetSettingsPage() {
           <BehaviorCard behavior={form.behavior} onChange={setBehavior} issues={issues} />
         </fieldset>
 
-        <aside className="ws-side" aria-label="미리보기">
+        <aside
+          className="min-w-0 sm:max-[1180px]:order-first min-[1180px]:sticky min-[1180px]:top-[72px]"
+          aria-label="미리보기"
+        >
           <WidgetPreview
             theme={form.theme}
             behavior={form.behavior}
@@ -482,12 +511,16 @@ export function WidgetSettingsPage() {
       </div>
 
       {canEdit && dirty && (
-        <div className="cfg-save-bar" role="region" aria-label="저장">
-          <span className="cfg-save-bar-text">
-            <span className="cfg-dirty-dot" aria-hidden="true" />
+        <div
+          className="sticky bottom-4 z-15 mt-2 flex flex-wrap items-center gap-2.5 rounded-xl border bg-card py-2.5 pr-3 pl-4 shadow-lg"
+          role="region"
+          aria-label="저장"
+        >
+          <span className="inline-flex min-w-[180px] flex-1 items-center gap-2 text-sm font-medium">
+            <span className="size-2 shrink-0 rounded-full bg-amber-500" aria-hidden="true" />
             저장하지 않은 변경 · {changed.map((k) => FIELD_LABEL[k]).join(', ')}
           </span>
-          {save.error && <span className="cfg-save-bar-error">{save.error.message}</span>}
+          {save.error && <span className="text-sm text-destructive">{save.error.message}</span>}
           <Button
             variant="ghost"
             onClick={() => {
@@ -508,12 +541,12 @@ export function WidgetSettingsPage() {
         open={rotateOpen}
         title="Widget Secret 을 재발급할까요?"
         body={
-          <div className="cfg-modal-text">
+          <div className="mb-3 space-y-1.5 text-sm leading-relaxed">
             <p>
               새 Secret 을 만들면 지금 Secret 은 <b>24시간 동안만</b> 함께 허용돼요.
             </p>
             <p>그 안에 고객사 서버의 환경 변수(예: THEONEAI_WIDGET_SECRET)를 새 값으로 바꾸세요.</p>
-            <p className="muted">
+            <p className="text-muted-foreground">
               새 값은 재발급 직후 한 번만 보여 드려요. Secret 이 노출됐다면 바로 재발급하세요.
             </p>
           </div>
@@ -526,7 +559,7 @@ export function WidgetSettingsPage() {
         onClose={() => setRotateOpen(false)}
       />
       <SecretModal result={newSecret} onClose={() => setNewSecret(null)} />
-    </div>
+    </TooltipProvider>
   );
 }
 
@@ -562,29 +595,30 @@ ${tag}`;
       title="설치 코드"
       description="고객사 페이지의 </body> 바로 앞에 붙여 넣으세요. 위젯은 Shadow DOM 안에 그려져 페이지 CSS 와 섞이지 않아요."
     >
-      <ol className="ws-steps">
+      <ol className="mb-3 list-decimal space-y-1 pl-5 text-sm leading-relaxed text-muted-foreground">
         <li>
-          <b>허용 도메인</b>에 위젯을 넣을 사이트 주소를 등록합니다.
+          <b className="text-foreground">허용 도메인</b>에 위젯을 넣을 사이트 주소를 등록합니다.
         </li>
         <li>아래 코드를 페이지에 붙여 넣습니다.</li>
         {identityMode === 'signed_token' && (
           <li>
-            고객사 서버에 <b>identity token 발급 API</b>를 만듭니다 (아래 사용자 연동).
+            고객사 서버에 <b className="text-foreground">identity token 발급 API</b>를 만듭니다
+            (아래 사용자 연동).
           </li>
         )}
       </ol>
       <CodeBlock code={identityMode === 'signed_token' ? signed : tag} label="HTML" />
-      <div className="ws-key-row">
-        <span className="muted">공개 키</span>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <span className="text-sm text-muted-foreground">공개 키</span>
         <Mono>{widget.publicKey}</Mono>
         <CopyButton text={widget.publicKey} />
-        <span className="field-hint">
+        <span className="text-xs text-muted-foreground">
           페이지에 노출돼도 괜찮아요 — 허용 도메인
           {identityMode === 'signed_token' ? ' · 서명 토큰' : ''}으로 보호돼요.
         </span>
       </div>
       {identityMode === 'signed_token' && (
-        <p className="field-hint ws-after">
+        <p className="mt-2.5 text-xs text-muted-foreground">
           로그인 · 로그아웃 뒤에는 <Mono>{'window.TheOneAI.identify({ token })'}</Mono> 또는{' '}
           <Mono>window.TheOneAI.destroy()</Mono> 를 부르세요.
         </p>
@@ -594,6 +628,19 @@ ${tag}`;
 }
 
 /* ───────────── 사용자 연동 ───────────── */
+
+const IDENTITY_MODES: [IdentityMode, string, string][] = [
+  [
+    'signed_token',
+    '로그인 사용자 연동 (권장)',
+    '고객사 서버가 서명한 identity token 으로 사용자를 확인해요. 로그인하지 않은 방문자에게는 위젯이 보이지 않아요.',
+  ],
+  [
+    'anonymous',
+    '익명',
+    '로그인 없이 브라우저마다 익명 ID 를 만들어요. 기기 · 브라우저가 바뀌면 다른 사용자로 봐요.',
+  ],
+];
 
 function IdentityCard({
   widget,
@@ -626,22 +673,29 @@ app.get('/api/theoneai-token', requireLogin, async (req, res) => {
     .sign(widgetSecret);
   res.set('Cache-Control', 'no-store').type('text/plain').send(token);
 });`;
+  const id = useId();
   return (
     <Card title="사용자 연동" description="위젯 사용자를 어떻게 구분할지 정합니다.">
-      <div className="ws-mode-grid" role="radiogroup" aria-label="사용자 연동 방식">
-        <ModeOption
-          checked={mode === 'signed_token'}
-          onSelect={() => onChange('signed_token')}
-          title="로그인 사용자 연동 (권장)"
-          description="고객사 서버가 서명한 identity token 으로 사용자를 확인해요. 로그인하지 않은 방문자에게는 위젯이 보이지 않아요."
-        />
-        <ModeOption
-          checked={mode === 'anonymous'}
-          onSelect={() => onChange('anonymous')}
-          title="익명"
-          description="로그인 없이 브라우저마다 익명 ID 를 만들어요. 기기 · 브라우저가 바뀌면 다른 사용자로 봐요."
-        />
-      </div>
+      <RadioGroup
+        className="mb-3 grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-2.5"
+        aria-label="사용자 연동 방식"
+        value={mode}
+        onValueChange={(v) => onChange(v as IdentityMode)}
+      >
+        {IDENTITY_MODES.map(([value, title, description]) => (
+          <Label
+            key={value}
+            htmlFor={`${id}-${value}`}
+            className="cursor-pointer items-start gap-2.5 rounded-lg border px-3.5 py-3 leading-normal font-normal has-[[data-state=checked]]:border-primary has-[[data-state=checked]]:bg-primary/5 dark:has-[[data-state=checked]]:bg-primary/10"
+          >
+            <RadioGroupItem id={`${id}-${value}`} value={value} className="mt-0.5" />
+            <span>
+              <span className="block font-semibold">{title}</span>
+              <span className="mt-0.5 block text-xs text-muted-foreground">{description}</span>
+            </span>
+          </Label>
+        ))}
+      </RadioGroup>
       {mode !== baseMode && (
         <Notice tone="warn">
           {mode === 'anonymous'
@@ -651,7 +705,7 @@ app.get('/api/theoneai-token', requireLogin, async (req, res) => {
       )}
       {mode === 'signed_token' && (
         <>
-          <ul className="ws-rules">
+          <ul className="mt-1 mb-3 list-disc space-y-0.5 pl-5 text-sm leading-relaxed text-muted-foreground">
             <li>
               HS256 으로 서명하고 <Mono>aud</Mono> = 공개 키, <Mono>sub</Mono> · <Mono>iat</Mono> ·{' '}
               <Mono>exp</Mono> 를 넣어요. 수명은 10분 이하.
@@ -668,15 +722,15 @@ app.get('/api/theoneai-token', requireLogin, async (req, res) => {
           <CodeBlock code={server} label="고객사 서버 예시 — identity token 발급" />
         </>
       )}
-      <div className="ws-secret">
-        <div>
-          <p className="ws-secret-title">Widget Secret</p>
-          <p className="field-hint">
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-4 border-t pt-3.5">
+        <div className="min-w-60 flex-1">
+          <p className="font-semibold">Widget Secret</p>
+          <p className="text-xs text-muted-foreground">
             Secret 저장소에만 보관돼 콘솔에서도 다시 볼 수 없어요. 잃어버렸거나 노출됐다면
             재발급하세요.
           </p>
           {widget.previousSecretExpiresAt && (
-            <p className="ws-secret-grace">
+            <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
               이전 Secret 도 <Time iso={widget.previousSecretExpiresAt} absolute /> 까지 함께
               허용돼요.
             </p>
@@ -684,41 +738,21 @@ app.get('/api/theoneai-token', requireLogin, async (req, res) => {
         </div>
         {canRotate ? (
           <Button variant="destructive" onClick={onRotate}>
+            <RefreshCwIcon aria-hidden="true" />
             Secret 재발급
           </Button>
         ) : (
-          <span className="field-hint">재발급은 Owner 만 할 수 있어요</span>
+          <span className="text-xs text-muted-foreground">재발급은 Owner 만 할 수 있어요</span>
         )}
       </div>
     </Card>
   );
 }
 
-function ModeOption({
-  checked,
-  onSelect,
-  title,
-  description,
-}: {
-  checked: boolean;
-  onSelect: () => void;
-  title: string;
-  description: string;
-}) {
-  return (
-    <label className={checked ? 'ws-mode checked' : 'ws-mode'}>
-      <input type="radio" name="identity-mode" checked={checked} onChange={onSelect} />
-      <span>
-        <span className="ws-mode-title">{title}</span>
-        <span className="ws-mode-desc">{description}</span>
-      </span>
-    </label>
-  );
-}
-
 function SecretModal({ result, onClose }: { result: RotateResult | null; onClose: () => void }) {
   const [saved, setSaved] = useState(false);
   useEffect(() => setSaved(false), [result]);
+  const savedId = useId();
   return (
     <Modal
       open={!!result}
@@ -735,14 +769,16 @@ function SecretModal({ result, onClose }: { result: RotateResult | null; onClose
       </Notice>
       {result && <CodeBlock code={result.secret} label="THEONEAI_WIDGET_SECRET" />}
       {result && (
-        <p className="field-hint ws-after">
+        <p className="mt-2.5 text-xs text-muted-foreground">
           이전 Secret 은 <Time iso={result.previousSecretExpiresAt} absolute /> 까지 함께 허용돼요.
         </p>
       )}
-      <label className="check ws-after">
-        <input type="checkbox" checked={saved} onChange={(e) => setSaved(e.target.checked)} />
-        안전한 곳에 저장했어요
-      </label>
+      <div className="mt-2.5 flex items-center gap-2">
+        <Checkbox id={savedId} checked={saved} onCheckedChange={(v) => setSaved(v === true)} />
+        <Label htmlFor={savedId} className="font-normal">
+          안전한 곳에 저장했어요
+        </Label>
+      </div>
     </Modal>
   );
 }
@@ -778,55 +814,106 @@ function OriginsCard({
         <Notice tone="warn">허용 도메인이 없으면 어떤 사이트에서도 위젯이 열리지 않아요.</Notice>
       )}
       {serverError && <Notice tone="error">{serverError}</Notice>}
-      <ul className="ws-origins" aria-label="허용 도메인 목록">
+      <ul className="mb-3 divide-y rounded-lg border empty:hidden" aria-label="허용 도메인 목록">
         {origins.map((o) => (
-          <li key={o}>
+          <li key={o} className="flex flex-wrap items-center gap-2 py-1.5 pr-1.5 pl-3">
             <Mono>{o}</Mono>
             {originNotes(o).map((n) => (
               <Badge key={n.label} tone={n.tone}>
                 {n.label}
               </Badge>
             ))}
-            <span className="spacer" />
-            <Button
-              size="sm"
-              variant="ghost"
-              aria-label={`${o} 삭제`}
-              onClick={() => onChange(origins.filter((x) => x !== o))}
-            >
-              삭제
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  className="ml-auto text-muted-foreground hover:text-destructive"
+                  aria-label={`${o} 삭제`}
+                  onClick={() => onChange(origins.filter((x) => x !== o))}
+                >
+                  <Trash2Icon aria-hidden="true" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>삭제</TooltipContent>
+            </Tooltip>
           </li>
         ))}
       </ul>
-      <div className="ws-origin-add">
-        <Field
-          label="도메인 추가"
-          error={error}
-          hint="예: https://shop.example.com · 서브도메인 전체는 https://*.example.com (한 단계만)"
-        >
-          <input
-            className="input cfg-mono-input"
-            value={draft}
-            placeholder="https://"
-            aria-invalid={!!error || undefined}
-            onChange={(e) => {
-              setDraft(e.target.value);
-              setError(null);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                add();
-              }
-            }}
-          />
-        </Field>
-        <Button variant="outline" onClick={add} disabled={!draft.trim()}>
+      <AddInput
+        group="새 허용 도메인"
+        label="도메인 추가"
+        hint="예: https://shop.example.com · 서브도메인 전체는 https://*.example.com (한 단계만)"
+        error={error}
+        value={draft}
+        placeholder="https://"
+        onChange={(v) => {
+          setDraft(v);
+          setError(null);
+        }}
+        onAdd={add}
+      />
+    </Card>
+  );
+}
+
+function AddInput({
+  group,
+  label,
+  hint,
+  error,
+  value,
+  placeholder,
+  onChange,
+  onAdd,
+}: {
+  /** 그룹 접근성 이름 — label 과 겹치면 getByLabel(label) 이 입력칸 하나로 좁혀지지 않는다 */
+  group: string;
+  label: string;
+  hint?: ReactNode;
+  error: string | null;
+  value: string;
+  placeholder: string;
+  onChange: (value: string) => void;
+  onAdd: () => void;
+}) {
+  const id = useId();
+  const note = error ?? hint;
+  return (
+    <div role="group" aria-label={group} className="mb-4 flex min-w-0 flex-col gap-1.5">
+      <Label htmlFor={id} className="text-muted-foreground">
+        {label}
+      </Label>
+      <div className="flex gap-2">
+        <Input
+          id={id}
+          className="font-mono"
+          value={value}
+          placeholder={placeholder}
+          aria-invalid={!!error || undefined}
+          aria-describedby={note ? `${id}-note` : undefined}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              onAdd();
+            }
+          }}
+        />
+        <Button variant="outline" onClick={onAdd} disabled={!value.trim()}>
+          <PlusIcon aria-hidden="true" />
           추가
         </Button>
       </div>
-    </Card>
+      {note && (
+        <span
+          id={`${id}-note`}
+          className={cn('text-xs', error ? 'text-destructive' : 'text-muted-foreground')}
+        >
+          {note}
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -848,22 +935,23 @@ function ThemeCard({
   const dark = valid ? contrast(theme.brandColor, DARK_TEXT) : 0;
   const onBrand = onBrandOf(theme.brandColor);
   const textRatio = onBrand === '#FFFFFF' ? white : dark;
+  const positionId = useId();
   return (
     <Card title="테마" description="브랜드 색은 런처 · 내 메시지 · 버튼에 쓰여요.">
       <Field
         label="브랜드 색"
         error={error ?? (HEX.test(hex) ? undefined : '#RRGGBB 형식으로 입력하세요')}
       >
-        <span className="ws-color-row">
-          <input
+        <span className="flex flex-wrap items-center gap-2.5">
+          <Input
             type="color"
-            className="ws-color"
+            className="h-9 w-11 cursor-pointer p-0.5"
             aria-label="브랜드 색 고르기"
             value={valid ? theme.brandColor.toLowerCase() : '#4f46e5'}
             onChange={(e) => onChange({ brandColor: e.target.value.toUpperCase() })}
           />
-          <input
-            className="input cfg-mono-input ws-hex"
+          <Input
+            className="w-[110px] font-mono uppercase"
             value={hex}
             maxLength={7}
             onChange={(e) => {
@@ -872,30 +960,39 @@ function ThemeCard({
               if (HEX.test(v)) onChange({ brandColor: v.toUpperCase() });
             }}
           />
-          <span className="ws-swatches" role="group" aria-label="추천 색">
+          <span className="inline-flex flex-wrap gap-1.5" role="group" aria-label="추천 색">
             {SWATCHES.map((c) => (
-              <button
-                key={c}
-                type="button"
-                className={c === theme.brandColor.toUpperCase() ? 'ws-swatch active' : 'ws-swatch'}
-                style={{ background: c }}
-                aria-label={c}
-                title={c}
-                onClick={() => onChange({ brandColor: c })}
-              />
+              <Tooltip key={c}>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    className={cn(
+                      'size-6 cursor-pointer rounded-full border-2 border-background ring-1 ring-border outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50',
+                      c === theme.brandColor.toUpperCase() && 'ring-2 ring-foreground',
+                    )}
+                    style={{ background: c }}
+                    aria-label={c}
+                    onClick={() => onChange({ brandColor: c })}
+                  />
+                </TooltipTrigger>
+                <TooltipContent className="font-mono">{c}</TooltipContent>
+              </Tooltip>
             ))}
           </span>
         </span>
       </Field>
       {valid && (
-        <div className="ws-contrast" aria-live="polite">
+        <div
+          className="mb-3.5 flex items-center gap-3.5 rounded-lg border bg-muted/50 p-3"
+          aria-live="polite"
+        >
           <span
-            className="ws-contrast-sample"
+            className="shrink-0 rounded-[14px_14px_4px_14px] px-3.5 py-2.5 font-semibold"
             style={{ background: theme.brandColor, color: onBrand }}
           >
             가나다 Aa
           </span>
-          <div className="ws-contrast-text">
+          <div className="space-y-1 text-sm leading-relaxed">
             {white >= 4.5 ? (
               <p>
                 <Badge tone="success">통과</Badge> 흰 글자 대비 {white.toFixed(1)}:1 (기준 4.5:1)
@@ -911,45 +1008,48 @@ function ThemeCard({
                 {dark.toFixed(1)}:1 — 어느 쪽도 4.5:1 에 못 미쳐요. 더 진하거나 밝은 색을 고르세요.
               </p>
             )}
-            <p className="field-hint">
+            <p className="text-xs text-muted-foreground">
               흰 배경 위 런처 · 테두리 대비 {white.toFixed(1)}:1{' '}
               {white >= 3 ? '(3:1 이상 — 충분)' : '(3:1 미만 — 흰 페이지에서 잘 안 보일 수 있어요)'}
             </p>
           </div>
         </div>
       )}
-      <div className="ws-grid-2">
-        <div className="field">
-          <span className="field-label">위치</span>
-          <div className="ws-segment" role="radiogroup" aria-label="위치">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-x-4 gap-y-0">
+        <div className="mb-4 flex flex-col gap-1.5">
+          <span id={positionId} className="text-sm leading-none font-medium text-muted-foreground">
+            위치
+          </span>
+          <RadioGroup
+            className="flex h-9 flex-wrap items-center gap-x-5"
+            aria-labelledby={positionId}
+            value={theme.position}
+            onValueChange={(v) => onChange({ position: v as Position })}
+          >
             {(
               [
                 ['bottom-right', '오른쪽 아래'],
                 ['bottom-left', '왼쪽 아래'],
               ] as [Position, string][]
             ).map(([v, label]) => (
-              <label key={v} className={theme.position === v ? 'active' : undefined}>
-                <input
-                  type="radio"
-                  name="ws-position"
-                  checked={theme.position === v}
-                  onChange={() => onChange({ position: v })}
-                />
-                {label}
-              </label>
+              <div key={v} className="flex items-center gap-2">
+                <RadioGroupItem id={`${positionId}-${v}`} value={v} />
+                <Label htmlFor={`${positionId}-${v}`} className="font-normal">
+                  {label}
+                </Label>
+              </div>
             ))}
-          </div>
+          </RadioGroup>
         </div>
         <Field label="다크 모드" hint="시스템 설정 따름: 방문자 OS 의 라이트 · 다크를 따라가요">
-          <select
-            className="input"
+          <NativeSelect
             value={theme.darkMode}
             onChange={(e) => onChange({ darkMode: e.target.value as DarkMode })}
           >
-            <option value="system">시스템 설정 따름</option>
-            <option value="light">항상 라이트</option>
-            <option value="dark">항상 다크</option>
-          </select>
+            <NativeSelectOption value="system">시스템 설정 따름</NativeSelectOption>
+            <NativeSelectOption value="light">항상 라이트</NativeSelectOption>
+            <NativeSelectOption value="dark">항상 다크</NativeSelectOption>
+          </NativeSelect>
         </Field>
       </div>
     </Card>
@@ -984,7 +1084,7 @@ function BehaviorCard({
   };
   return (
     <Card title="동작">
-      <div className="ws-toggles">
+      <div className="mb-3.5 flex flex-col gap-1.5">
         <Toggle
           checked={behavior.autoOpen}
           onChange={(autoOpen) => onChange({ autoOpen })}
@@ -1001,8 +1101,7 @@ function BehaviorCard({
         hint={`입력창 아래에 늘 보여요 · ${behavior.noticeText.trim().length}/200`}
         error={issues['behavior.noticeText']}
       >
-        <input
-          className="input"
+        <Input
           maxLength={200}
           value={behavior.noticeText}
           onChange={(e) => onChange({ noticeText: e.target.value })}
@@ -1013,88 +1112,97 @@ function BehaviorCard({
         hint="준비 중 — 지금 위젯 문구는 한국어로 보이고, 값은 저장만 돼요"
         error={issues['behavior.language']}
       >
-        <select
-          className="input ws-narrow"
+        <NativeSelect
+          containerClassName="max-w-80"
           value={behavior.language}
           onChange={(e) => onChange({ language: e.target.value })}
         >
           {LANGUAGES.map(([v, label]) => (
-            <option key={v} value={v}>
+            <NativeSelectOption key={v} value={v}>
               {label}
-            </option>
+            </NativeSelectOption>
           ))}
           {!LANGUAGES.some(([v]) => v === behavior.language) && (
-            <option value={behavior.language}>{behavior.language}</option>
+            <NativeSelectOption value={behavior.language}>{behavior.language}</NativeSelectOption>
           )}
-        </select>
+        </NativeSelect>
       </Field>
 
-      <div className="ws-attach">
-        <div className="ws-attach-head">
-          <p className="field-label">첨부 파일</p>
+      <div className="border-t pt-3.5">
+        <div className="flex items-center gap-2">
+          <p className="text-sm font-medium text-muted-foreground">첨부 파일</p>
           {types.length === 0 ? (
             <Badge>꺼짐</Badge>
           ) : (
             <Badge tone="info">{types.length}개 형식 허용</Badge>
           )}
         </div>
-        <p className="field-hint">
+        <p className="mt-1 text-xs text-muted-foreground">
           고른 형식만 업로드할 수 있어요. 아무것도 고르지 않으면 첨부 버튼이 사라져요. 텍스트 · CSV
           · JSON 은 작업 내용에 데이터로 들어가요.
         </p>
-        <div className="ws-chips" role="group" aria-label="허용 형식">
-          {ATTACHMENT_PRESETS.map(([t, label]) => (
-            <label key={t} className={types.includes(t) ? 'ws-chip on' : 'ws-chip'} title={t}>
-              <input
-                type="checkbox"
-                checked={types.includes(t)}
-                onChange={(e) =>
-                  setTypes(e.target.checked ? [...types, t] : types.filter((x) => x !== t))
+        <div className="mt-2.5 mb-3 flex flex-wrap gap-1.5" role="group" aria-label="허용 형식">
+          {ATTACHMENT_PRESETS.map(([t, label]) => {
+            const on = types.includes(t);
+            return (
+              <ToggleChip
+                key={t}
+                size="sm"
+                variant="outline"
+                className="rounded-full data-[state=on]:border-primary data-[state=on]:bg-primary/10 data-[state=on]:text-primary"
+                title={t}
+                pressed={on}
+                onPressedChange={(next) =>
+                  setTypes(next ? [...types, t] : types.filter((x) => x !== t))
                 }
-              />
-              {label}
-            </label>
-          ))}
+              >
+                {on && <CheckIcon aria-hidden="true" />}
+                {label}
+              </ToggleChip>
+            );
+          })}
           {types
             .filter((t) => !presetIds.has(t))
             .map((t) => (
-              <span key={t} className="ws-chip on">
-                <Mono>{t}</Mono>
-                <button
-                  type="button"
-                  aria-label={`${t} 빼기`}
-                  onClick={() => setTypes(types.filter((x) => x !== t))}
-                >
-                  ×
-                </button>
+              <span
+                key={t}
+                className="inline-flex h-8 items-center gap-1 rounded-full border border-primary bg-primary/10 pr-1 pl-3 text-primary"
+              >
+                <code className="font-mono text-xs">{t}</code>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      className="rounded-full hover:bg-primary/15 hover:text-primary"
+                      aria-label={`${t} 빼기`}
+                      onClick={() => setTypes(types.filter((x) => x !== t))}
+                    >
+                      <XIcon aria-hidden="true" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>빼기</TooltipContent>
+                </Tooltip>
               </span>
             ))}
         </div>
-        <div className="ws-attach-row">
-          <Field label="다른 형식 추가" error={customError}>
-            <input
-              className="input cfg-mono-input"
-              placeholder="application/zip"
-              value={custom}
-              onChange={(e) => {
-                setCustom(e.target.value);
-                setCustomError(null);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  addCustom();
-                }
-              }}
-            />
-          </Field>
-          <Button variant="outline" onClick={addCustom} disabled={!custom.trim()}>
-            추가
-          </Button>
+        <div className="grid items-start gap-x-4 gap-y-0 sm:grid-cols-[minmax(0,1fr)_auto]">
+          <AddInput
+            group="새 첨부 형식"
+            label="다른 형식 추가"
+            error={customError}
+            value={custom}
+            placeholder="application/zip"
+            onChange={(v) => {
+              setCustom(v);
+              setCustomError(null);
+            }}
+            onAdd={addCustom}
+          />
           <Field label="파일 최대 크기" error={issues['behavior.attachments']}>
-            <span className="cfg-num-unit">
-              <input
-                className="input cfg-num-input ws-mb"
+            <span className="flex items-center gap-2">
+              <Input
+                className="w-24 tabular-nums"
                 type="number"
                 min={1}
                 max={50}
@@ -1106,7 +1214,7 @@ function BehaviorCard({
                   })
                 }
               />
-              <span className="cfg-unit">MB (1 ~ 50)</span>
+              <span className="text-sm whitespace-nowrap text-muted-foreground">MB (1 ~ 50)</span>
             </span>
           </Field>
         </div>
@@ -1116,6 +1224,34 @@ function BehaviorCard({
 }
 
 /* ───────────── 미리보기 ───────────── */
+
+/** 위젯(apps/widget/src/widget.css) 과 같은 색 — 콘솔이 아니라 위젯의 다크 모드 설정을 따른다 */
+const WP_TOKENS = {
+  light: {
+    '--wp-bg': '#ffffff',
+    '--wp-bg-soft': '#fafafb',
+    '--wp-line': '#e3e5e8',
+    '--wp-line-soft': '#eef0f2',
+    '--wp-text': '#16181d',
+    '--wp-text-2': '#3f4451',
+    '--wp-text-3': '#5b6170',
+    '--wp-input-line': '#c9cdd3',
+    '--wp-page': '#eef0f4',
+    '--wp-page-line': '#dfe2e8',
+  },
+  dark: {
+    '--wp-bg': '#17191f',
+    '--wp-bg-soft': '#1c1f26',
+    '--wp-line': '#30343d',
+    '--wp-line-soft': '#292c34',
+    '--wp-text': '#eef0f3',
+    '--wp-text-2': '#c7cbd3',
+    '--wp-text-3': '#9aa1ad',
+    '--wp-input-line': '#3d424d',
+    '--wp-page': '#0d0f13',
+    '--wp-page-line': '#22252c',
+  },
+};
 
 function WidgetPreview({
   theme,
@@ -1140,53 +1276,71 @@ function WidgetPreview({
   const brand = HEX.test(theme.brandColor) ? theme.brandColor : '#4F46E5';
   const onBrand = onBrandOf(brand);
   const greeting = welcome.trim() || '안녕하세요,\n무엇을 도와드릴까요?';
+  const mode = dark ? 'dark' : 'light';
+  const vars: Record<string, string> = {
+    ...WP_TOKENS[mode],
+    '--wp-brand': brand,
+    '--wp-on-brand': onBrand,
+  };
+  const side = theme.position === 'bottom-left' ? 'left-3.5' : 'right-3.5';
   return (
-    <section className="card ws-preview-card">
-      <div className="card-head">
-        <div>
-          <h2 className="card-title">미리보기</h2>
-          <p className="card-desc">저장 전 모습이에요</p>
-        </div>
-        {theme.darkMode === 'system' && (
-          <div className="ws-segment small" role="radiogroup" aria-label="미리보기 테마">
-            {(['light', 'dark'] as const).map((m) => (
-              <label key={m} className={(dark ? 'dark' : 'light') === m ? 'active' : undefined}>
-                <input
-                  type="radio"
-                  name="ws-preview-mode"
-                  checked={(dark ? 'dark' : 'light') === m}
-                  onChange={() => setOverride(m)}
-                />
-                {m === 'light' ? '라이트' : '다크'}
-              </label>
-            ))}
-          </div>
-        )}
-      </div>
+    <Card
+      title="미리보기"
+      description="저장 전 모습이에요"
+      className="mb-0"
+      flush
+      actions={
+        theme.darkMode === 'system' && (
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            size="sm"
+            aria-label="미리보기 테마"
+            value={mode}
+            onValueChange={(v) => v && setOverride(v as 'light' | 'dark')}
+          >
+            <ToggleGroupItem value="light">
+              <SunIcon aria-hidden="true" />
+              라이트
+            </ToggleGroupItem>
+            <ToggleGroupItem value="dark">
+              <MoonIcon aria-hidden="true" />
+              다크
+            </ToggleGroupItem>
+          </ToggleGroup>
+        )
+      }
+    >
       <div
-        className="wp-stage"
-        data-theme={dark ? 'dark' : 'light'}
-        data-position={theme.position}
-        style={{ ['--wp-brand' as string]: brand, ['--wp-on-brand' as string]: onBrand }}
+        className="relative mx-4 mt-3 h-[560px] overflow-hidden rounded-lg bg-(--wp-page) text-[13px] leading-[1.55] text-(--wp-text) max-sm:h-[520px]"
+        style={vars}
         aria-hidden="true"
       >
-        <div className="wp-panel">
-          <div className="wp-head">
-            <span className="wp-avatar">
-              <SparkIcon />
+        <div className="absolute top-6 left-5 h-2.5 w-[45%] bg-(--wp-page-line)" />
+        <div className="absolute top-11 left-5 h-2 w-[60%] bg-(--wp-page-line)" />
+        <div className="absolute top-[60px] left-5 h-2 w-[52%] bg-(--wp-page-line)" />
+        <div
+          className={cn(
+            'absolute bottom-[78px] flex h-[440px] w-[300px] flex-col overflow-hidden rounded-[14px] border border-(--wp-line) bg-(--wp-bg) shadow-[0_12px_32px_rgba(22,24,29,0.16)]',
+            side,
+          )}
+        >
+          <div className="flex items-center gap-1.5 border-b border-(--wp-line-soft) py-[9px] pr-2 pl-2.5">
+            <span className="grid size-[30px] flex-none place-items-center rounded-full bg-(--wp-brand) text-(--wp-on-brand)">
+              <SparklesIcon className="size-4" />
             </span>
-            <div className="wp-head-text">
-              <p className="wp-title">{agentName || 'Agent'}</p>
-              <p className="wp-sub">
-                <span className="wp-dot" />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[13.5px] font-bold">{agentName || 'Agent'}</p>
+              <p className="flex items-center gap-[5px] text-[11.5px] text-(--wp-text-3)">
+                <span className="size-1.5 rounded-full bg-green-600" />
                 연결됨
               </p>
             </div>
-            <span className="wp-icon">＋</span>
-            <span className="wp-icon">−</span>
+            <PlusIcon className="mx-[5px] size-4 text-(--wp-text-2)" />
+            <MinusIcon className="mx-[5px] size-4 text-(--wp-text-2)" />
           </div>
-          <div className="wp-body">
-            <h3 className="wp-greeting">
+          <div className="flex flex-1 flex-col gap-3 overflow-hidden bg-(--wp-bg-soft) px-3 py-4">
+            <h3 className="mb-1 text-[17px] leading-[1.4] font-bold break-keep">
               {greeting.split('\n').map((line, i) => (
                 <span key={i}>
                   {i > 0 && <br />}
@@ -1194,40 +1348,51 @@ function WidgetPreview({
                 </span>
               ))}
             </h3>
-            <div className="wp-msg-user">3월 매출 리포트 만들어줘</div>
-            <div className="wp-msg-agent">
-              <span className="wp-avatar small">
-                <SparkIcon />
+            <div className="max-w-[82%] self-end rounded-[14px_14px_4px_14px] bg-(--wp-brand) px-3 py-2 text-(--wp-on-brand)">
+              3월 매출 리포트 만들어줘
+            </div>
+            <div className="flex items-start gap-2">
+              <span className="grid size-6 flex-none place-items-center rounded-full bg-(--wp-brand) text-(--wp-on-brand)">
+                <SparklesIcon className="size-[13px]" />
               </span>
               <p>
                 네, 3월 주문 데이터를 확인해서 리포트를 만들게요. 실행 계획을 먼저 보여 드릴게요.
               </p>
             </div>
           </div>
-          <div className="wp-composer">
-            <div className="wp-input">
-              {behavior.attachments.types.length > 0 && <span className="wp-clip">⌇</span>}
-              <span className="wp-placeholder">무엇이든 요청하세요…</span>
-              <span className="wp-send">↑</span>
+          <div className="border-t border-(--wp-line-soft) bg-(--wp-bg) px-2.5 pt-2 pb-1.5">
+            <div className="flex items-center gap-1.5 rounded-xl border border-(--wp-input-line) py-[5px] pr-[5px] pl-2.5">
+              {behavior.attachments.types.length > 0 && (
+                <PaperclipIcon className="size-4 text-(--wp-text-3)" />
+              )}
+              <span className="flex-1 text-(--wp-text-3)">무엇이든 요청하세요…</span>
+              <span className="grid size-[30px] place-items-center rounded-[9px] bg-(--wp-brand) text-(--wp-on-brand) opacity-55">
+                <ArrowUpIcon className="size-4" />
+              </span>
             </div>
-            <p className="wp-foot">
+            <p className="mt-[5px] min-h-[15px] text-center text-[10.5px] text-(--wp-text-3)">
               {behavior.noticeText.trim()}
               {behavior.noticeText.trim() && behavior.showPoweredBy && ' · '}
               {behavior.showPoweredBy && 'Powered by TheOneAI'}
             </p>
           </div>
         </div>
-        <div className="wp-launcher">
-          <ChatIcon />
+        <div
+          className={cn(
+            'absolute bottom-3.5 grid size-[52px] place-items-center rounded-full bg-(--wp-brand) text-(--wp-on-brand) shadow-[0_6px_16px_rgba(22,24,29,0.25)]',
+            side,
+          )}
+        >
+          <MessageCircleIcon className="size-6" />
         </div>
       </div>
-      <p className="ws-preview-note field-hint">
+      <p className="px-4 pt-2.5 pb-3.5 text-xs text-muted-foreground">
         {behavior.autoOpen
           ? '페이지를 열면 패널이 자동으로 열려요.'
           : '방문자가 런처를 누르면 패널이 열려요.'}{' '}
         폭 480px 이하 화면에서는 전체 화면으로 열려요.
       </p>
-    </section>
+    </Card>
   );
 }
 
@@ -1242,29 +1407,4 @@ function useSystemDark(): boolean {
     return () => mq?.removeEventListener('change', on);
   }, []);
   return dark;
-}
-
-function SparkIcon(): ReactNode {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 2l2.2 6.3L20 10l-5.8 1.7L12 18l-2.2-6.3L4 10l5.8-1.7z" />
-    </svg>
-  );
-}
-
-function ChatIcon(): ReactNode {
-  return (
-    <svg
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M21 12a8 8 0 01-11.6 7.1L4 20l1-4.6A8 8 0 1121 12z" />
-    </svg>
-  );
 }

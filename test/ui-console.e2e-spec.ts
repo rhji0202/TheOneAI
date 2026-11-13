@@ -222,7 +222,9 @@ describe('위젯 설치 · 테마 (C-09)', () => {
 
     const input = page.getByLabel('도메인 추가');
     await input.fill('https://a.example.com/x');
-    const add = page.locator('.ws-origin-add').getByRole('button', { name: '추가', exact: true });
+    const add = page
+      .getByRole('group', { name: '새 허용 도메인' })
+      .getByRole('button', { name: '추가', exact: true });
     await add.click();
     expect(await page.getByText(/경로/).count()).toBeGreaterThan(0);
     await input.fill('https://a.example.com');

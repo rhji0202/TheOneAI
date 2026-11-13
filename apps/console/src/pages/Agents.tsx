@@ -3,6 +3,7 @@
  * 배포된 버전은 바뀌지 않는다: 초안(배포 버전 복사본)을 고쳐 저장하고, 배포하면 새 작업부터 그 버전을 쓴다.
  * API: GET/PATCH/DELETE /v1/admin/agents/:id(/draft) · POST publish · versions · restore · GET /v1/admin/providers
  */
+import { CircleAlertIcon, HistoryIcon, RocketIcon, RotateCcwIcon, Trash2Icon } from 'lucide-react';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { formatDuration, formatNumber } from '../../../shared/format';
@@ -25,10 +26,19 @@ import {
   Time,
   Toggle,
   useAction,
+  TONE_CLASS,
   useQuery,
   useToast,
 } from '../ui';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
+import { Textarea } from '@/components/ui/textarea';
+import { cn } from '@/lib/utils';
+
+const LINK = 'text-primary underline-offset-4 hover:underline';
 
 /* ───────────── API 타입 (src/agents/admin/agents-admin.service.ts) ───────────── */
 
@@ -139,8 +149,8 @@ export function AgentsPage() {
         const executor = (a.draft ?? a.published)?.models.find((m) => m.role === 'executor');
         return (
           <div>
-            <p className="cell-title">{a.name}</p>
-            <p className="cell-sub">
+            <p className="font-medium">{a.name}</p>
+            <p className="text-xs text-muted-foreground">
               {executor ? `${executor.providerName} · ${executor.model}` : '실행 모델 없음'}
             </p>
           </div>
@@ -164,7 +174,7 @@ export function AgentsPage() {
         a.draft ? (
           <Badge tone="warning">v{a.draft.version} · 배포 안 된 변경</Badge>
         ) : (
-          <span className="muted">없음</span>
+          <span className="text-muted-foreground">없음</span>
         ),
     },
     {
@@ -176,7 +186,7 @@ export function AgentsPage() {
         const mcp = v.mcpServers.filter((s) => s.enabled).length;
         const skills = v.skills.filter((s) => s.enabled).length;
         return (
-          <span className="muted">
+          <span className="text-muted-foreground">
             MCP {mcp} · Skill {skills}
           </span>
         );
@@ -837,7 +847,7 @@ export function AgentDetailPage() {
   ];
 
   return (
-    <div className="agent-page">
+    <div>
       <PageHeader
         back={{ to: '/agents', label: 'Agent 목록' }}
         title={agent.name}
@@ -863,10 +873,12 @@ export function AgentDetailPage() {
         actions={
           <>
             <Button variant="outline" onClick={() => setVersionsOpen(true)}>
+              <HistoryIcon aria-hidden="true" />
               버전 기록
             </Button>
             {canEdit && agent.draft && (
               <Button variant="ghost" onClick={() => setDiscardOpen(true)}>
+                <Trash2Icon aria-hidden="true" />
                 초안 버리기
               </Button>
             )}
@@ -885,6 +897,7 @@ export function AgentDetailPage() {
                   setPublishOpen(true);
                 }}
               >
+                <RocketIcon aria-hidden="true" />
                 배포
               </Button>
             )}
@@ -898,14 +911,23 @@ export function AgentDetailPage() {
         </Notice>
       )}
       {agent.draft && pendingSections.length > 0 && (
-        <div className="agent-pending" role="status">
-          <span className="agent-pending-label">배포하면 바뀌는 항목</span>
+        <div
+          className="mb-4 flex flex-wrap items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200"
+          role="status"
+        >
+          <span className="mr-1 font-semibold">배포하면 바뀌는 항목</span>
           {pendingSections.map((s) => (
-            <button key={s} type="button" className="agent-chip" onClick={() => setTab(s)}>
+            <Button
+              key={s}
+              size="xs"
+              variant="outline"
+              className="rounded-full border-current bg-transparent text-inherit hover:bg-amber-100 dark:border-current dark:bg-transparent dark:hover:bg-amber-900"
+              onClick={() => setTab(s)}
+            >
               {SECTION_LABEL[s]}
-            </button>
+            </Button>
           ))}
-          {agent.draft.changeNote && <span className="muted">· {agent.draft.changeNote}</span>}
+          {agent.draft.changeNote && <span className="opacity-85">· {agent.draft.changeNote}</span>}
         </div>
       )}
       {issues.general && <Notice tone="error">{issues.general}</Notice>}
@@ -917,18 +939,30 @@ export function AgentDetailPage() {
         tabs={(Object.keys(SECTION_LABEL) as Section[]).map((s) => ({
           id: s,
           label: (
-            <span className="agent-tab">
+            <span className="inline-flex items-center gap-1.5">
               {SECTION_LABEL[s]}
               {dirtySections.includes(s) && (
-                <span className="cfg-dirty-dot" aria-label="저장 안 됨" />
+                <span
+                  className="size-2 shrink-0 rounded-full bg-amber-500"
+                  aria-label="저장 안 됨"
+                />
               )}
-              {issueCount(s) > 0 && <span className="cfg-issue-count">{issueCount(s)}</span>}
+              {issueCount(s) > 0 && (
+                <span
+                  className={cn(
+                    'inline-grid h-[18px] min-w-[18px] place-items-center rounded-full px-1.5 text-[11px] font-bold',
+                    TONE_CLASS.danger,
+                  )}
+                >
+                  {issueCount(s)}
+                </span>
+              )}
             </span>
           ),
         }))}
       />
 
-      <fieldset className="agent-fieldset" disabled={!canEdit}>
+      <fieldset className="min-w-0" disabled={!canEdit}>
         {tab === 'basic' && <BasicSection form={form} update={update} issues={issues} />}
         {tab === 'models' && (
           <ModelsSection
@@ -962,7 +996,9 @@ export function AgentDetailPage() {
             footer={
               <Notice tone="info">
                 승인 요청의 만료 시간은 Tool 등급별 정책에서 정해요 —{' '}
-                <Link to="/approvals">승인 · 권한 정책</Link>
+                <Link to="/approvals" className={LINK}>
+                  승인 · 권한 정책
+                </Link>
               </Notice>
             }
           />
@@ -988,12 +1024,16 @@ export function AgentDetailPage() {
       </fieldset>
 
       {canEdit && dirty && (
-        <div className="cfg-save-bar" role="region" aria-label="저장">
-          <span className="cfg-save-bar-text">
-            <span className="cfg-dirty-dot" aria-hidden="true" />
+        <div
+          className="sticky bottom-4 z-15 mt-2 flex flex-wrap items-center gap-2.5 rounded-xl border bg-card py-2.5 pr-3 pl-4 shadow-lg"
+          role="region"
+          aria-label="저장"
+        >
+          <span className="inline-flex min-w-[180px] flex-1 items-center gap-2 text-sm font-medium">
+            <span className="size-2 shrink-0 rounded-full bg-amber-500" aria-hidden="true" />
             저장하지 않은 변경 · {dirtySections.map((s) => SECTION_LABEL[s]).join(', ')}
           </span>
-          {save.error && <span className="cfg-save-bar-error">{save.error.message}</span>}
+          {save.error && <span className="text-sm text-destructive">{save.error.message}</span>}
           <Button
             variant="ghost"
             onClick={() => {
@@ -1023,7 +1063,7 @@ export function AgentDetailPage() {
         open={discardOpen}
         title="초안을 버릴까요?"
         body={
-          <p className="cfg-modal-text">
+          <p className="mb-3 text-sm leading-relaxed">
             초안 v{agent.draft?.version} 의 변경 내용이 모두 사라지고, 배포 중인 v
             {agent.published?.version} 그대로 남습니다.
           </p>
@@ -1073,8 +1113,8 @@ function BasicSection({
           hint={`${formatNumber(form.systemPrompt.length)} / 20,000자`}
           error={issues.systemPrompt}
         >
-          <textarea
-            className="input agent-prompt"
+          <Textarea
+            className="max-h-[70vh] min-h-[280px] leading-relaxed"
             rows={14}
             value={form.systemPrompt}
             onChange={(e) => update((f) => ({ ...f, systemPrompt: e.target.value }))}
@@ -1091,8 +1131,7 @@ function BasicSection({
           hint={`${form.welcomeMessage.trim().length} / 500자`}
           error={issues.welcomeMessage}
         >
-          <textarea
-            className="input"
+          <Textarea
             rows={3}
             value={form.welcomeMessage}
             onChange={(e) => update((f) => ({ ...f, welcomeMessage: e.target.value }))}
@@ -1161,26 +1200,27 @@ function ModelsSection({
             }
           >
             {!m.enabled ? (
-              <p className="muted">실행(executor) 모델 설정을 그대로 씁니다.</p>
+              <p className="text-sm text-muted-foreground">
+                실행(executor) 모델 설정을 그대로 씁니다.
+              </p>
             ) : (
-              <div className="ag-model-grid">
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-x-4 gap-y-0">
                 <Field label="Provider" required error={issues[`${k}.providerId`]}>
-                  <select
-                    className="input"
+                  <NativeSelect
                     value={m.providerId}
                     onChange={(e) => setModel(role, { providerId: e.target.value })}
                   >
-                    <option value="">선택하세요</option>
+                    <NativeSelectOption value="">선택하세요</NativeSelectOption>
                     {providers.map((p) => (
-                      <option key={p.id} value={p.id}>
+                      <NativeSelectOption key={p.id} value={p.id}>
                         {p.name} ({p.kind})
-                      </option>
+                      </NativeSelectOption>
                     ))}
-                  </select>
+                  </NativeSelect>
                 </Field>
                 <Field label="모델" required error={issues[`${k}.model`]}>
-                  <input
-                    className="input cfg-mono-input"
+                  <Input
+                    className="font-mono"
                     list="agent-known-models"
                     value={m.model}
                     onChange={(e) => setModel(role, { model: e.target.value })}
@@ -1215,41 +1255,39 @@ function ModelsSection({
                   />
                 </Field>
                 <Field label="추론 강도" hint="추론을 지원하는 모델에만 적용">
-                  <select
-                    className="input"
+                  <NativeSelect
                     value={m.reasoningEffort}
                     onChange={(e) => setModel(role, { reasoningEffort: e.target.value })}
                   >
                     {REASONING.map(([v, label]) => (
-                      <option key={v} value={v}>
+                      <NativeSelectOption key={v} value={v}>
                         {label}
-                      </option>
+                      </NativeSelectOption>
                     ))}
-                  </select>
+                  </NativeSelect>
                 </Field>
-                <div className="ag-model-fallback">
-                  <p className="ag-model-fallback-title">대체 모델</p>
-                  <p className="field-hint">
+                <div className="col-span-full border-t border-dashed pt-3">
+                  <p className="text-sm font-semibold">대체 모델</p>
+                  <p className="mt-0.5 mb-2.5 text-xs text-muted-foreground">
                     기본 모델이 오류 · 과부하로 응답하지 못하면 이 모델로 다시 시도합니다.
                   </p>
-                  <div className="ag-model-fallback-row">
+                  <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-x-4 gap-y-0">
                     <Field label="대체 Provider" error={issues[`${k}.fallbackProviderId`]}>
-                      <select
-                        className="input"
+                      <NativeSelect
                         value={m.fallbackProviderId}
                         onChange={(e) => setModel(role, { fallbackProviderId: e.target.value })}
                       >
-                        <option value="">사용 안 함</option>
+                        <NativeSelectOption value="">사용 안 함</NativeSelectOption>
                         {providers.map((p) => (
-                          <option key={p.id} value={p.id}>
+                          <NativeSelectOption key={p.id} value={p.id}>
                             {p.name} ({p.kind})
-                          </option>
+                          </NativeSelectOption>
                         ))}
-                      </select>
+                      </NativeSelect>
                     </Field>
                     <Field label="대체 모델" error={issues[`${k}.fallbackModel`]}>
-                      <input
-                        className="input cfg-mono-input"
+                      <Input
+                        className="font-mono"
                         list="agent-known-models"
                         value={m.fallbackModel}
                         disabled={!m.fallbackProviderId && !m.fallbackModel}
@@ -1279,6 +1317,7 @@ function NumberInput({
   step,
   id,
   invalid,
+  className,
 }: {
   value: number | null;
   onChange: (v: number | null) => void;
@@ -1287,11 +1326,12 @@ function NumberInput({
   step?: number;
   id?: string;
   invalid?: boolean;
+  className?: string;
 }) {
   return (
-    <input
+    <Input
       id={id}
-      className="input cfg-num-input"
+      className={cn('tabular-nums', className)}
       type="number"
       inputMode="decimal"
       value={value ?? ''}
@@ -1358,7 +1398,7 @@ function ToolsSection({
     meta: s.activeVersion ? `v${s.activeVersion.version}` : '활성 버전 없음',
   }));
   return (
-    <div className="grid grid-2">
+    <div className="grid items-start gap-x-4 gap-y-0 lg:grid-cols-2">
       <Card
         title="MCP 서버"
         description="켠 서버의 Tool 만 이 Agent 가 계획 · 실행에 씁니다. 연결됨 상태인 서버만 켤 수 있어요."
@@ -1376,7 +1416,10 @@ function ToolsSection({
           loading={!servers && !serversError}
           empty={
             <>
-              연결된 MCP 서버가 없어요. <Link to="/mcp/new">MCP 서버 연결</Link>
+              연결된 MCP 서버가 없어요.{' '}
+              <Link to="/mcp/new" className={LINK}>
+                MCP 서버 연결
+              </Link>
             </>
           }
           onChange={(next) => update((f) => ({ ...f, mcp: next }))}
@@ -1399,7 +1442,10 @@ function ToolsSection({
           loading={!skills && !skillsError}
           empty={
             <>
-              등록된 Skill 이 없어요. <Link to="/skills">Skill 올리기</Link>
+              등록된 Skill 이 없어요.{' '}
+              <Link to="/skills" className={LINK}>
+                Skill 올리기
+              </Link>
             </>
           }
           onChange={(next) => update((f) => ({ ...f, skills: next }))}
@@ -1453,34 +1499,44 @@ function AllowList({
   onChange: (next: Record<string, boolean>) => void;
 }) {
   if (loading) return <Loading />;
-  if (!rows.length) return <div className="table-empty">{empty}</div>;
+  if (!rows.length)
+    return <div className="px-4 py-8 text-center text-sm text-muted-foreground">{empty}</div>;
   return (
-    <ul className="ag-allow-list">
+    <ul className="divide-y">
       {rows.map((r) => {
         const checked = value[r.id] === true;
         const blocked = r.status !== allowStatus && !checked;
         const [label, tone] = statusMap[r.status] ?? [r.status, 'neutral'];
         const error = issues[`${issuePrefix}.${r.id}`];
         return (
-          <li key={r.id} className={blocked ? 'ag-allow-row is-blocked' : 'ag-allow-row'}>
-            <label className="ag-allow-main">
-              <input
-                type="checkbox"
+          <li key={r.id} className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
+            <label
+              className={cn(
+                'flex min-w-0 flex-1 items-start gap-2.5',
+                blocked ? 'cursor-not-allowed' : 'cursor-pointer',
+              )}
+            >
+              <Checkbox
+                className="mt-0.5"
                 checked={checked}
                 disabled={blocked}
-                onChange={(e) => onChange({ ...value, [r.id]: e.target.checked })}
+                onCheckedChange={(v) => onChange({ ...value, [r.id]: v === true })}
               />
-              <span className="ag-allow-text">
-                <span className="ag-allow-name">
+              <span className="flex min-w-0 flex-col">
+                <span className={cn('font-medium', blocked && 'text-muted-foreground')}>
                   {r.name}
-                  {r.id in value && !checked && <span className="muted"> · 꺼짐</span>}
+                  {r.id in value && !checked && (
+                    <span className="font-normal text-muted-foreground"> · 꺼짐</span>
+                  )}
                 </span>
-                {r.sub && <span className="ag-allow-sub">{r.sub}</span>}
-                {error && <span className="field-error">{error}</span>}
+                {r.sub && (
+                  <span className="line-clamp-2 text-xs text-muted-foreground">{r.sub}</span>
+                )}
+                {error && <span className="text-xs text-destructive">{error}</span>}
               </span>
             </label>
-            <span className="ag-allow-meta">
-              {r.meta && <span className="muted">{r.meta}</span>}
+            <span className="flex shrink-0 items-center gap-2 text-xs">
+              {r.meta && <span className="text-muted-foreground">{r.meta}</span>}
               <Badge tone={tone}>{label}</Badge>
             </span>
           </li>
@@ -1515,15 +1571,15 @@ function PolicySection({
         <Card
           key={g.title}
           title={
-            <span className="row">
+            <span className="inline-flex items-center gap-2">
               {g.title}
               {g.muted && <Badge>준비 중</Badge>}
             </span>
           }
           description={g.description}
-          className={g.muted ? 'ag-policy-muted' : undefined}
+          className={g.muted ? '[&_[data-slot=card-content]]:opacity-80' : undefined}
         >
-          <div className="ag-policy-grid">
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] items-start gap-x-5 gap-y-0.5">
             {g.fields.map((f) => (
               <PolicyField
                 key={f.path}
@@ -1555,26 +1611,22 @@ function PolicyField({
 }) {
   if (spec.kind === 'bool') {
     return (
-      <div className="ag-policy-bool">
+      <div className="mb-3.5 flex flex-col gap-0.5">
         <Toggle checked={value === true} onChange={onChange} label={spec.label} />
-        {spec.hint && <p className="field-hint">{spec.hint}</p>}
+        {spec.hint && <p className="pl-[42px] text-xs text-muted-foreground">{spec.hint}</p>}
       </div>
     );
   }
   if (spec.kind === 'select') {
     return (
       <Field label={spec.label} hint={spec.hint} error={error}>
-        <select
-          className="input"
-          value={String(value ?? '')}
-          onChange={(e) => onChange(e.target.value)}
-        >
+        <NativeSelect value={String(value ?? '')} onChange={(e) => onChange(e.target.value)}>
           {spec.options.map(([v, label]) => (
-            <option key={v} value={v}>
+            <NativeSelectOption key={v} value={v}>
               {label}
-            </option>
+            </NativeSelectOption>
           ))}
-        </select>
+        </NativeSelect>
       </Field>
     );
   }
@@ -1584,8 +1636,9 @@ function PolicyField({
       : `${formatNumber(spec.min, 2)} 이상`;
   return (
     <Field label={spec.label} hint={spec.hint?.(value) ?? range} error={error}>
-      <span className="cfg-num-unit">
+      <span className="flex items-center gap-2">
         <NumberInput
+          className="max-w-[180px]"
           value={typeof value === 'number' ? value : null}
           min={spec.min}
           max={spec.max}
@@ -1593,7 +1646,9 @@ function PolicyField({
           invalid={!!error}
           onChange={onChange}
         />
-        {spec.unit && <span className="cfg-unit">{spec.unit}</span>}
+        {spec.unit && (
+          <span className="text-sm whitespace-nowrap text-muted-foreground">{spec.unit}</span>
+        )}
       </span>
     </Field>
   );
@@ -1609,30 +1664,33 @@ function MemoryTypes({
   error?: string;
 }) {
   return (
-    <div className="ag-memory-types" role="group" aria-label="저장할 기억 종류">
-      <p className="field-label">저장할 기억 종류</p>
-      <div className="ag-memory-type-list">
+    <div className="mt-1 border-t border-dashed pt-3" role="group" aria-label="저장할 기억 종류">
+      <p className="text-sm font-medium text-muted-foreground">저장할 기억 종류</p>
+      <div className="mt-2 grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2.5">
         {MEMORY_TYPES.map(([id, label, desc]) => (
-          <label key={id} className="ag-memory-type">
-            <input
-              type="checkbox"
+          <label
+            key={id}
+            className="flex cursor-pointer items-start gap-2.5 rounded-lg border px-3 py-2.5 text-sm has-[[aria-checked=true]]:border-primary has-[[aria-checked=true]]:bg-primary/5 dark:has-[[aria-checked=true]]:bg-primary/10"
+          >
+            <Checkbox
+              className="mt-0.5"
               checked={value.includes(id)}
-              onChange={(e) =>
+              onCheckedChange={(v) =>
                 onChange(
-                  e.target.checked
+                  v === true
                     ? MEMORY_TYPES.map(([t]) => t).filter((t) => t === id || value.includes(t))
                     : value.filter((t) => t !== id),
                 )
               }
             />
             <span>
-              <span className="ag-memory-type-name">{label}</span>
-              <span className="ag-allow-sub">{desc}</span>
+              <span className="block font-semibold">{label}</span>
+              <span className="block text-xs text-muted-foreground">{desc}</span>
             </span>
           </label>
         ))}
       </div>
-      {error && <span className="field-error">{error}</span>}
+      {error && <span className="text-xs text-destructive">{error}</span>}
     </div>
   );
 }
@@ -1680,18 +1738,17 @@ function PublishModal({
         </>
       }
     >
-      <p className="cfg-modal-text">
+      <p className="mb-3 text-sm leading-relaxed">
         배포하면 <b>새로 시작하는 작업</b>부터 v{agent.draft?.version} 을 씁니다. 실행 중인 작업은
         시작할 때의 버전(v{agent.published?.version ?? '—'})을 그대로 유지해요.
       </p>
       {pendingSections.length > 0 && (
-        <p className="cfg-modal-text muted">
+        <p className="mb-3 text-sm leading-relaxed text-muted-foreground">
           바뀌는 항목: {pendingSections.map((s) => SECTION_LABEL[s]).join(' · ')}
         </p>
       )}
       <Field label="변경 메모" hint="버전 기록에 남습니다 (500자 이하)">
-        <textarea
-          className="input"
+        <Textarea
           rows={3}
           maxLength={500}
           value={note}
@@ -1700,16 +1757,17 @@ function PublishModal({
         />
       </Field>
       {serverIssues.length > 0 ? (
-        <div className="notice notice-error" role="alert">
-          <div>
-            <p>배포할 수 없어요.</p>
-            <ul className="cfg-issue-list">
+        <Alert variant="destructive" className="border-destructive/30">
+          <CircleAlertIcon aria-hidden="true" />
+          <AlertTitle>배포할 수 없어요.</AlertTitle>
+          <AlertDescription>
+            <ul className="list-disc pl-5">
               {serverIssues.map((e, i) => (
                 <li key={i}>{e.message}</li>
               ))}
             </ul>
-          </div>
-        </div>
+          </AlertDescription>
+        </Alert>
       ) : (
         <ErrorNotice error={error} />
       )}
@@ -1759,7 +1817,7 @@ function VersionsModal({
       key: 'version',
       header: '버전',
       width: '72px',
-      render: (v) => <span className="ag-version-num">v{v.version}</span>,
+      render: (v) => <span className="font-mono font-semibold">v{v.version}</span>,
     },
     {
       key: 'status',
@@ -1767,7 +1825,7 @@ function VersionsModal({
       render: (v) => {
         const [label, tone] = VERSION_STATUS[v.status];
         return (
-          <span className="row">
+          <span className="flex flex-wrap items-center gap-1.5">
             <Badge tone={tone}>{label}</Badge>
             {v.activeTasks > 0 && <Badge tone="info">실행 중 작업 {v.activeTasks}</Badge>}
           </span>
@@ -1778,7 +1836,9 @@ function VersionsModal({
       key: 'note',
       header: '변경 메모',
       render: (v) => (
-        <span className="ag-version-note">{v.changeNote ?? <span className="muted">—</span>}</span>
+        <span className="block max-w-80 break-words whitespace-normal">
+          {v.changeNote ?? <span className="text-muted-foreground">—</span>}
+        </span>
       ),
     },
     {
@@ -1788,10 +1848,12 @@ function VersionsModal({
         v.publishedAt ? (
           <span>
             <Time iso={v.publishedAt} />
-            {v.publishedBy && <span className="cell-sub"> · {v.publishedBy}</span>}
+            {v.publishedBy && (
+              <span className="text-xs text-muted-foreground"> · {v.publishedBy}</span>
+            )}
           </span>
         ) : (
-          <span className="muted">
+          <span className="text-muted-foreground">
             <Time iso={v.createdAt} /> 생성
           </span>
         ),
@@ -1803,7 +1865,7 @@ function VersionsModal({
       render: (v) =>
         canEdit && v.status !== 'draft' ? (
           <Button variant="outline" size="sm" onClick={() => setTarget(v)}>
-            이 버전으로 초안 만들기
+            <RotateCcwIcon aria-hidden="true" />이 버전으로 초안 만들기
           </Button>
         ) : null,
     },
@@ -1812,11 +1874,11 @@ function VersionsModal({
   return (
     <>
       <Modal open={open && !target} title="버전 기록" onClose={onClose} wide>
-        <p className="cfg-modal-text muted">
+        <p className="mb-3 text-sm leading-relaxed text-muted-foreground">
           이전 버전을 고르면 그 내용으로 초안을 다시 만듭니다. 배포는 초안을 확인한 뒤 따로 해요.
         </p>
         <ErrorNotice error={versions.error} onRetry={versions.reload} />
-        <div className="ag-versions-table">
+        <div className="overflow-hidden rounded-lg border">
           <DataTable
             label="버전 기록"
             columns={columns}
@@ -1830,13 +1892,15 @@ function VersionsModal({
         open={!!target}
         title={`v${target?.version ?? ''} 로 되돌릴까요?`}
         body={
-          <div className="cfg-modal-text">
+          <div className="mb-3 space-y-1.5 text-sm leading-relaxed">
             <p>
               v{target?.version} 의 지침 · 모델 · 허용 목록 · 정책으로 새 초안을 만듭니다.
               {hasDraft && ' 지금 초안은 버려져요.'}
             </p>
-            {dirty && <p className="field-error">저장하지 않은 변경도 사라집니다.</p>}
-            <p className="muted">배포 중인 버전은 그대로이며, 초안을 확인한 뒤 배포하세요.</p>
+            {dirty && <p className="text-destructive">저장하지 않은 변경도 사라집니다.</p>}
+            <p className="text-muted-foreground">
+              배포 중인 버전은 그대로이며, 초안을 확인한 뒤 배포하세요.
+            </p>
           </div>
         }
         confirmLabel="초안 만들기"
