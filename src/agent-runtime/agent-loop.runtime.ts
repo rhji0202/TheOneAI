@@ -33,6 +33,7 @@ import {
   type PromptSkill,
   type PromptTool,
   renderNotes,
+  STEPS_RESERVED_FOR_ANSWER,
   type WorkNote,
 } from './prompts.js';
 import type { RunContext } from './run-context.js';
@@ -203,6 +204,16 @@ export class AgentLoopRuntime implements AgentRuntime {
         const planIndex = i + 1;
         // 재개: checkpoint 까지 끝난 단계는 다시 하지 않는다 (같은 계획일 때만)
         if (revision === 0 && planIndex < startIndex) continue;
+        // 단계 수가 답변할 몫만 남으면 남은 작업은 하지 않고 지금까지의 노트로 답한다 (실패로 끝내지 않는다)
+        if (ctx.stepsLeft <= STEPS_RESERVED_FOR_ANSWER) {
+          notes.push({
+            title: step.title,
+            content:
+              'Not done: the task reached its step limit before this step. Answer from the notes so far and tell the user which part was not done.',
+          });
+          ctx.workingMemory.notes = notes;
+          continue;
+        }
         await applySteers();
         notes = await this.compressNotes(ctx, router, context, notes);
         const pinned =
@@ -233,7 +244,8 @@ export class AgentLoopRuntime implements AgentRuntime {
             const prepared =
               step.kind === 'skill'
                 ? await this.prepareSkill(ctx, pinned, offered, toolset)
-                : { tools: offered, skill: undefined };
+                : // reason 단계는 Tool 없이 하는 분석이다 (계획의 약속을 실행에서 지킨다)
+                  { tools: step.kind === 'reason' ? [] : offered, skill: undefined };
             if ('unavailable' in prepared) {
               // Skill 을 쓸 수 없으면 그 사실을 노트로 남기고 계속 (답변에서 한계를 밝힌다)
               const content = `Skill '${step.skill}' could not be used: ${prepared.unavailable}`;
@@ -306,7 +318,11 @@ export class AgentLoopRuntime implements AgentRuntime {
           };
         },
       );
-      if (assessment.verdict !== 'replan' || revision >= ctx.task.executionPolicy.replanLimit)
+      if (
+        assessment.verdict !== 'replan' ||
+        revision >= ctx.task.executionPolicy.replanLimit ||
+        ctx.stepsLeft <= STEPS_RESERVED_FOR_ANSWER
+      )
         break;
 
       plan = await ctx.step(

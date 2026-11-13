@@ -127,6 +127,11 @@ export class RunContext {
     return this.controller.signal;
   }
 
+  /** 이 작업에서 더 기록할 수 있는 단계 수 (maxSteps 기준, Tool 호출도 한 단계) */
+  get stepsLeft(): number {
+    return this.task.executionPolicy.maxSteps - this.nextSeq + 1;
+  }
+
   /** 계획 생성 · 수정 → plan.created / plan.revised */
   async setPlan(steps: Array<Omit<PlanStep, 'status'>>, revisedReason?: string): Promise<void> {
     const previous = this.plan;

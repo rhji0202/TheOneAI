@@ -14,6 +14,7 @@ import type { ModelRouter } from './model-router.js';
 import {
   EXECUTOR_CORRECTION_ROLE,
   EXECUTOR_WORK_ROLE,
+  MAX_TOOL_CALLS_PER_STEP,
   MAX_TOOL_ROUNDS,
   type PlanView,
   type PromptTool,
@@ -21,12 +22,18 @@ import {
   renderPlan,
   respondRole,
   skillSection,
+  STEPS_RESERVED_FOR_ANSWER,
   systemPrompt,
   type WorkNote,
 } from './prompts.js';
 import { TaskWaitingApprovalError } from './agent-runtime.js';
 import { compactToolResults } from './context-compressor.js';
 import type { RunContext } from './run-context.js';
+
+const CALL_NOT_RUN = JSON.stringify({
+  error: 'not_run',
+  message: 'The tool call limit for this step was reached, so this call was not run.',
+});
 
 /**
  * 승인 대기로 멈춘 작업 단계의 대화 (checkpoint 의 workingMemory.pendingWork).
@@ -122,13 +129,18 @@ export class ExecutorService {
     let usage = emptyUsage();
     let toolCalls = input.pending?.toolCalls ?? 0;
     let round = 0;
+    // 이번 실행의 Tool 호출 예산 — 한 단계가 작업 전체 단계 수를 다 쓰지 않게 답변할 몫을 남긴다
+    const budget = Math.min(MAX_TOOL_CALLS_PER_STEP, ctx.stepsLeft - STEPS_RESERVED_FOR_ANSWER);
+    let spent = 0;
     const run = async (calls: LlmToolCall[], results: Array<string | null>) => {
-      toolCalls += await this.runCalls(
+      const ran = await this.runCalls(
         input,
         scope,
         { messages, calls, results, round, toolCalls },
         () => usage,
       );
+      toolCalls += ran;
+      spent += ran;
     };
     if (input.pending) {
       // 재개: 멈췄던 호출부터 (끝난 호출은 저장된 결과를 그대로 쓴다)
@@ -137,7 +149,7 @@ export class ExecutorService {
       await run(input.pending.calls, [...input.pending.results]);
       round++;
     }
-    for (; round < MAX_TOOL_ROUNDS; round++) {
+    for (; round < MAX_TOOL_ROUNDS && spent < budget; round++) {
       // Context Compression — 오래된 Tool 결과는 앞부분만 (모델은 이미 보고 판단했다)
       compactToolResults(messages);
       const res = await router.complete(
@@ -149,9 +161,11 @@ export class ExecutorService {
       if (res.toolCalls.length === 0) return { content: res.content.trim(), usage, toolCalls };
 
       messages.push({ role: 'assistant', content: res.content || null, toolCalls: res.toolCalls });
+      // 예산을 넘는 호출은 실행하지 않고 그렇게 알려 준다 (호출마다 결과 메시지가 있어야 한다)
+      const allowed = budget - spent;
       await run(
         res.toolCalls,
-        res.toolCalls.map(() => null),
+        res.toolCalls.map((_, i) => (i < allowed ? null : CALL_NOT_RUN)),
       );
     }
 
