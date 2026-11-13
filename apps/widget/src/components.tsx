@@ -19,6 +19,7 @@ import {
   ImageIcon,
   type LucideIcon,
   PaperclipIcon,
+  PresentationIcon,
   RouteIcon,
   ShieldAlertIcon,
   SquareIcon,
@@ -107,7 +108,8 @@ function fileIcon(mimeType: string | undefined, name: string): LucideIcon {
   if (mimeType?.startsWith('image/')) return ImageIcon;
   if (mimeType === 'text/csv' || /\.(csv|tsv|xlsx?)$/i.test(name)) return FileSpreadsheetIcon;
   if (mimeType === 'application/json' || /\.json$/i.test(name)) return FileJsonIcon;
-  if (mimeType?.startsWith('text/') || mimeType === 'application/pdf') return FileTextIcon;
+  if (/\.pptx?$/i.test(name)) return PresentationIcon;
+  if (mimeType?.startsWith('text/') || /\.(pdf|docx?)$/i.test(name)) return FileTextIcon;
   return FileIcon;
 }
 
