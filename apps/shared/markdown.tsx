@@ -76,28 +76,10 @@ function blocks(text: string): ReactNode[] {
       );
       continue;
     }
-    if (/^\s*[-*+]\s+/.test(line) || /^\s*\d+[.)]\s+/.test(line)) {
-      const ordered = /^\s*\d+[.)]\s+/.test(line);
-      const items: string[] = [];
-      const pattern = ordered ? /^\s*\d+[.)]\s+(.*)$/ : /^\s*[-*+]\s+(.*)$/;
-      while (i < lines.length) {
-        const m = pattern.exec(lines[i]!);
-        if (m) {
-          items.push(m[1]!);
-          i++;
-        } else if (/^\s{2,}\S/.test(lines[i]!) && items.length) {
-          items[items.length - 1] += ` ${lines[i]!.trim()}`;
-          i++;
-        } else break;
-      }
-      const List = ordered ? 'ol' : 'ul';
-      out.push(
-        <List key={key++}>
-          {items.map((item, j) => (
-            <li key={j}>{inline(item)}</li>
-          ))}
-        </List>,
-      );
+    if (LIST_ITEM.test(line)) {
+      const parsed = list(lines, i, indentOf(line), key++);
+      out.push(parsed.node);
+      i = parsed.next;
       continue;
     }
     if (/^\s*>/.test(line)) {
@@ -128,6 +110,65 @@ function blocks(text: string): ReactNode[] {
     );
   }
   return out;
+}
+
+const LIST_ITEM = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
+
+function indentOf(line: string): number {
+  return (/^\s*/.exec(line)?.[0] ?? '').replace(/\t/g, '    ').length;
+}
+
+/** 목록 — 들여쓰기(2칸 이상)로 하위 목록을 만든다. 같은 깊이에서 종류(번호/기호)가 바뀌면 끝 */
+function list(
+  lines: string[],
+  start: number,
+  indent: number,
+  key: number,
+): { node: ReactNode; next: number } {
+  const first = LIST_ITEM.exec(lines[start]!)!;
+  const ordered = /\d/.test(first[2]!);
+  const items: { text: string; children: ReactNode[] }[] = [];
+  let i = start;
+  while (i < lines.length) {
+    const line = lines[i]!;
+    if (!line.trim()) {
+      // 빈 줄 다음에도 같은 목록이 이어지면 계속
+      const nextLine = lines[i + 1];
+      if (nextLine !== undefined && LIST_ITEM.test(nextLine) && indentOf(nextLine) >= indent) {
+        i++;
+        continue;
+      }
+      break;
+    }
+    const m = LIST_ITEM.exec(line);
+    const depth = indentOf(line);
+    if (m && depth <= indent + 1 && depth >= indent) {
+      if (/\d/.test(m[2]!) !== ordered) break;
+      items.push({ text: m[3]!, children: [] });
+      i++;
+    } else if (m && depth >= indent + 2 && items.length) {
+      const nested = list(lines, i, depth, items.at(-1)!.children.length);
+      items.at(-1)!.children.push(nested.node);
+      i = nested.next;
+    } else if (!m && depth >= indent + 2 && items.length) {
+      items.at(-1)!.text += ` ${line.trim()}`;
+      i++;
+    } else break;
+  }
+  const List = ordered ? 'ol' : 'ul';
+  return {
+    node: (
+      <List key={key}>
+        {items.map((item, j) => (
+          <li key={j}>
+            {inline(item.text)}
+            {item.children}
+          </li>
+        ))}
+      </List>
+    ),
+    next: i,
+  };
 }
 
 function cells(line: string): string[] {

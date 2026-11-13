@@ -297,6 +297,25 @@ describe('콘솔 작업 조회 (C-02)', () => {
     expect(list.status).toBe(200);
     const recovered = list.body.items.find((t) => t.status === 'completed')!;
     expect(recovered.endUserPseudonym).toEqual(expect.any(String));
+    expect(recovered).toMatchObject({ agentVersion: expect.any(Number), costAmount: 0 });
+
+    // 상태 여러 개 (쉼표) — 대시보드의 진행 중 작업
+    const multi = await api<{ items: Array<{ status: string }> }>(
+      ctx.baseUrl,
+      'GET',
+      '/v1/admin/tasks?status=completed,failed&limit=100',
+      { token: ownerToken },
+    );
+    expect(multi.status).toBe(200);
+    expect(multi.body.items.every((t) => ['completed', 'failed'].includes(t.status))).toBe(true);
+    expect(multi.body.items.length).toBeGreaterThan(0);
+    expect(
+      (
+        await api(ctx.baseUrl, 'GET', '/v1/admin/tasks?status=completed,nope', {
+          token: ownerToken,
+        })
+      ).status,
+    ).toBe(400);
 
     const pauseTask = (await tenantRows((tx) =>
       tx.task.findFirst({ where: { title: { contains: '#pause' } }, select: { id: true } }),

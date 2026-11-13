@@ -248,6 +248,7 @@ describe('대시보드 지표 (C-01 · metrics-rollup)', () => {
         { value: number; previous: number; status: string; target?: number; currency?: string }
       >;
       feedback: { helpful: number; notHelpful: number };
+      daily: Array<{ date: string; tasksTotal: number; cost: number }>;
       recentFailures: Array<{
         taskId: string;
         failedStep: string;
@@ -259,6 +260,17 @@ describe('대시보드 지표 (C-01 · metrics-rollup)', () => {
     expect(res.status).toBe(200);
     expect(res.body.period.from).toBe(res.body.period.to);
     expect(res.body.lastAggregatedAt).toEqual(expect.any(String));
+    // 날짜별 추이 — 기간의 모든 날짜 (빈 날은 0)
+    expect(res.body.daily).toEqual([
+      expect.objectContaining({
+        date: res.body.period.to,
+        tasksTotal: 3,
+        tasksSucceeded: 2,
+        tasksFailed: 1,
+        toolDenied: 0,
+      }),
+    ]);
+    expect(res.body.daily[0]!.cost).toBeGreaterThan(0);
     // 작업 3개(완료 2 · 실패 1) — #bill, #budget-ok, #metric-fail
     expect(res.body.kpis.tasksTotal).toMatchObject({ value: 3, previous: 0 });
     expect(res.body.kpis.taskSuccessRate).toMatchObject({
@@ -291,10 +303,11 @@ describe('대시보드 지표 (C-01 · metrics-rollup)', () => {
       `/metrics?range=7d&agentId=${ctx.tenantB.agentId}`,
     );
     expect(other.body.kpis.tasksTotal.value).toBe(0);
-    const mine = await admin<{ kpis: { tasksTotal: { value: number } } }>(
+    const mine = await admin<{ kpis: { tasksTotal: { value: number } }; daily: unknown[] }>(
       'GET',
       `/metrics?range=30d&agentId=${ctx.tenantA.agentId}`,
     );
     expect(mine.body.kpis.tasksTotal.value).toBe(3);
+    expect(mine.body.daily).toHaveLength(30);
   });
 });

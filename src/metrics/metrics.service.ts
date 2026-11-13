@@ -44,6 +44,8 @@ export interface MetricsResponse {
     avgDurationMs: Kpi;
     tasksTotal: Kpi;
   };
+  /** 기간 안 날짜별 추이 (UTC 날짜, 빈 날은 0) — 대시보드 추이 차트 */
+  daily: DailyPoint[];
   feedback: { helpful: number; notHelpful: number };
   recentFailures: Array<{
     taskId: string;
@@ -54,6 +56,15 @@ export interface MetricsResponse {
     recovery: string;
     at: string;
   }>;
+}
+
+export interface DailyPoint {
+  date: string;
+  tasksTotal: number;
+  tasksSucceeded: number;
+  tasksFailed: number;
+  toolDenied: number;
+  cost: number;
 }
 
 interface Sums {
@@ -163,10 +174,39 @@ export class MetricsService {
           ),
           tasksTotal: kpi(cur.tasks_total, prev.tasks_total, true),
         },
+        daily: await this.daily(tx, from, today, q.agentId),
         feedback: await this.feedback(tx, from, q.agentId),
         recentFailures: await this.recentFailures(tx, from, q.agentId),
       };
     });
+  }
+
+  private async daily(tx: TenantTx, from: Date, to: Date, agentId?: string): Promise<DailyPoint[]> {
+    const agent = agentId ? Prisma.sql`AND agent_id = ${agentId}::uuid` : Prisma.empty;
+    const rows = await tx.$queryRaw<Array<Record<string, unknown>>>`
+      SELECT to_char(date, 'YYYY-MM-DD') AS date,
+             sum(tasks_total)::int AS tasks_total,
+             sum(tasks_succeeded)::int AS tasks_succeeded,
+             sum(tasks_failed)::int AS tasks_failed,
+             sum(tool_denied)::int AS tool_denied,
+             sum(cost_amount)::float8 AS cost
+      FROM metrics_daily
+      WHERE date BETWEEN ${from}::date AND ${to}::date ${agent}
+      GROUP BY date`;
+    const byDate = new Map(rows.map((r) => [String(r.date), r]));
+    const points: DailyPoint[] = [];
+    for (let d = from; d <= to; d = addDays(d, 1)) {
+      const r = byDate.get(isoDate(d));
+      points.push({
+        date: isoDate(d),
+        tasksTotal: Number(r?.tasks_total ?? 0),
+        tasksSucceeded: Number(r?.tasks_succeeded ?? 0),
+        tasksFailed: Number(r?.tasks_failed ?? 0),
+        toolDenied: Number(r?.tool_denied ?? 0),
+        cost: round(Number(r?.cost ?? 0), 6),
+      });
+    }
+    return points;
   }
 
   private async sums(tx: TenantTx, from: Date, to: Date, agentId?: string): Promise<Sums> {

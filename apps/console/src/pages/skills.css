@@ -1,0 +1,355 @@
+/* C-06 Skill — 목록 · 업로드 · 버전 상세 */
+
+.skill-name {
+  font-family: var(--mono);
+  font-weight: 600;
+}
+.skill-cell {
+  max-width: 460px;
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* 업로드 */
+.dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 160px;
+  padding: 20px;
+  border: 2px dashed var(--input-line);
+  border-radius: 12px;
+  background: var(--surface-2);
+  text-align: center;
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+.dropzone:hover,
+.dropzone.drag {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+}
+.dropzone:focus-within {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.dropzone-icon {
+  font-size: 24px;
+  color: var(--brand);
+}
+.upload-error {
+  align-items: flex-start;
+}
+.upload-error-title {
+  font-weight: 600;
+}
+.line-issues {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.line-issues li {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+.line-no {
+  flex-shrink: 0;
+  min-width: 48px;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--danger-fg) 14%, transparent);
+  text-align: center;
+}
+.upload-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 16px;
+}
+
+/* 버전 머리 */
+.version-head-card .card-body {
+  padding: 14px 16px;
+}
+.version-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.version-bar-main {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.version-title {
+  font-weight: 600;
+  font-size: 15px;
+}
+.version-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.version-head-card .notice {
+  margin: 12px 0 0;
+}
+.tool-scope {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* SKILL.md 미리보기 (shared/markdown 출력) */
+.md-doc {
+  line-height: 1.65;
+  word-break: break-word;
+}
+.md-doc > * + * {
+  margin-top: 10px;
+}
+.md-doc h1,
+.md-doc h2,
+.md-doc h3,
+.md-doc h4 {
+  line-height: 1.35;
+  margin-top: 18px;
+}
+.md-doc h1 {
+  font-size: 20px;
+}
+.md-doc h2 {
+  font-size: 17px;
+}
+.md-doc h3 {
+  font-size: 15px;
+}
+.md-doc > :first-child {
+  margin-top: 0;
+}
+.md-doc ul,
+.md-doc ol {
+  padding-left: 22px;
+  margin: 0;
+}
+.md-doc li + li {
+  margin-top: 3px;
+}
+.md-doc code {
+  background: var(--code-bg);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.md-doc pre {
+  background: var(--code-bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  overflow: auto;
+}
+.md-doc pre code {
+  background: none;
+  padding: 0;
+}
+.md-doc blockquote {
+  margin: 0;
+  padding: 4px 12px;
+  border-left: 3px solid var(--line);
+  color: var(--text-2);
+}
+.md-doc hr {
+  border: none;
+  border-top: 1px solid var(--line);
+}
+.md-doc .md-table {
+  overflow-x: auto;
+}
+.md-doc table {
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.md-doc th,
+.md-doc td {
+  border: 1px solid var(--line);
+  padding: 6px 10px;
+  text-align: left;
+}
+.md-doc th {
+  background: var(--surface-2);
+}
+
+/* 파일 */
+.files-grid {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+.files-grid > .card {
+  margin-bottom: 0;
+}
+@media (max-width: 1100px) {
+  .files-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.file-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.file-item {
+  width: 100%;
+  border: none;
+  background: none;
+  text-align: left;
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.file-item:hover {
+  background: var(--surface-3);
+}
+.file-item.active {
+  background: var(--brand-soft);
+}
+.file-path {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  word-break: break-all;
+}
+.file-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+/* 검증 */
+.verify-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.verify-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.verify-item {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.verify-item.failed {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger-bg) 45%, transparent);
+}
+.verify-item.warning {
+  border-color: #f59e0b;
+  background: color-mix(in srgb, var(--warn-bg) 45%, transparent);
+}
+.verify-icon {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  display: inline-grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 13px;
+  background: var(--surface-3);
+  color: var(--text-3);
+}
+.verify-item.passed .verify-icon {
+  background: var(--success-bg);
+  color: var(--success-fg);
+}
+.verify-item.warning .verify-icon {
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+}
+.verify-item.failed .verify-icon {
+  background: var(--danger-bg);
+  color: var(--danger-fg);
+}
+.verify-body {
+  min-width: 0;
+  flex: 1;
+}
+.verify-title {
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.verify-detail {
+  margin-top: 2px;
+  color: var(--text-2);
+  font-size: 13px;
+  word-break: break-word;
+}
+.verify-findings {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
+.verify-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* 비교 */
+.meta-diff {
+  display: grid;
+  gap: 10px;
+}
+.link-btn.mono {
+  background: none;
+  padding: 0;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  word-break: break-all;
+}
+.link-btn.active-file {
+  font-weight: 700;
+  text-decoration: underline;
+}

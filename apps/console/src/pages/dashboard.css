@@ -1,0 +1,242 @@
+/* C-01 대시보드 — dash- 접두사 */
+.dash-kpis {
+  margin-bottom: 8px;
+}
+.dash-target-warn {
+  color: var(--danger-fg);
+  font-weight: 600;
+}
+.dash-footnote {
+  font-size: 12px;
+  color: var(--text-3);
+  margin: 0 0 20px;
+}
+.dash-main {
+  align-items: start;
+}
+.dash-card-foot {
+  padding: 10px 16px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 13px;
+}
+.dash-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.dash-list > li {
+  border-bottom: 1px solid var(--line-soft);
+}
+.dash-list > li:last-child {
+  border-bottom: none;
+}
+.dash-list-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 16px;
+  color: var(--text);
+}
+.dash-list-item:hover {
+  background: var(--surface-2);
+  text-decoration: none;
+}
+.dash-list-title {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dash-fb-value {
+  font-size: 26px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.dash-fb-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-3);
+}
+.dash-fb-bar {
+  display: flex;
+  gap: 2px;
+  height: 8px;
+  margin: 10px 0 8px;
+}
+.dash-fb-bar > span {
+  min-width: 4px;
+}
+.dash-fb-bar > span:first-child {
+  border-radius: 4px 0 0 4px;
+}
+.dash-fb-bar > span:last-child {
+  border-radius: 0 4px 4px 0;
+}
+.dash-fb-bar > span:only-child {
+  border-radius: 4px;
+}
+.dash-fb-good {
+  background: var(--success-fg);
+}
+.dash-fb-bad {
+  background: var(--danger);
+}
+.dash-fb-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.dash-fb-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  vertical-align: -1px;
+  margin-right: 2px;
+}
+.dash-seg {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  border-radius: 9px;
+  background: var(--surface-3);
+}
+.dash-seg-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-weight: 500;
+  min-height: 30px;
+  padding: 0 14px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.dash-seg-btn:hover {
+  color: var(--text);
+}
+.dash-seg-btn.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+
+/* 날짜별 추이 */
+.dash-main,
+.card {
+  --dash-other: #9ca3af;
+}
+.dash-legend {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  gap: 16px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.dash-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.dash-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  margin-right: 4px;
+  vertical-align: -1px;
+}
+.dash-chart {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 8px;
+  height: 200px;
+}
+.dash-yaxis {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  text-align: right;
+  font-size: 11.5px;
+  color: var(--text-3);
+  padding-bottom: 20px;
+  font-variant-numeric: tabular-nums;
+}
+.dash-yaxis span {
+  line-height: 0;
+}
+.dash-plot {
+  position: relative;
+}
+.dash-grid {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--line-soft);
+}
+.dash-grid.base {
+  background: var(--line);
+}
+.dash-bars {
+  position: absolute;
+  inset: 0 0 20px 0;
+  display: flex;
+  align-items: stretch;
+}
+.dash-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  min-width: 0;
+  position: relative;
+}
+.dash-col.hover {
+  background: color-mix(in srgb, var(--brand) 6%, transparent);
+  border-radius: 4px;
+}
+.dash-stack {
+  width: min(28px, 60%);
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 2px;
+}
+.dash-seg-bar {
+  flex-basis: 0;
+  min-height: 2px;
+}
+.dash-stack > .dash-seg-bar:last-child {
+  border-radius: 4px 4px 0 0;
+}
+.dash-xlabel {
+  position: absolute;
+  bottom: -20px;
+  font-size: 11.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+  height: 16px;
+}
+.dash-tip {
+  position: absolute;
+  top: 0;
+  z-index: 2;
+  pointer-events: none;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-lg);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12.5px;
+  min-width: 140px;
+}
+.dash-tip p {
+  margin: 2px 0;
+}
+.dash-tip-title {
+  font-weight: 600;
+}

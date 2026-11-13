@@ -189,6 +189,18 @@ describe('Memory 관리 (C-08)', () => {
       '/memories?status=quarantined',
     );
     expect(quarantined.body.items).toHaveLength(1);
+    // 목록 필터 — 범위 · 종류. 사용자 범위 기억에는 위젯 사용자 가명 (작업 · 승인 화면과 같은 값)
+    const userScoped = await admin<{
+      items: Array<{ scope: string; type: string; endUserPseudonym: string | null }>;
+    }>('GET', '/memories?status=active&scope=user&limit=100');
+    expect(userScoped.body.items.length).toBeGreaterThan(0);
+    expect(userScoped.body.items.every((m) => m.scope === 'user')).toBe(true);
+    expect(userScoped.body.items.every((m) => /^user_/.test(m.endUserPseudonym ?? ''))).toBe(true);
+    const proceduralOnly = await admin<{
+      items: Array<{ scope: string; type: string; endUserPseudonym: string | null }>;
+    }>('GET', '/memories?status=active&type=procedural&limit=100');
+    expect(proceduralOnly.body.items.every((m) => m.type === 'procedural')).toBe(true);
+    expect((await admin('GET', '/memories?status=active&scope=everyone')).status).toBe(400);
     const released = await admin<{ status: string }>(
       'POST',
       `/memories/${quarantined.body.items[0]!.id}/release`,

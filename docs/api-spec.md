@@ -399,7 +399,7 @@ interface MetricsResponse {
 type FailureCause = 'tool_timeout' | 'schema_validation' | 'permission_denied' | 'sandbox_resource' | 'approval_rejected' | 'budget_exceeded' | 'model_error';
 ```
 
-구현 메모: 기간은 UTC 날짜 단위(24h = 오늘, 7d · 30d = 오늘 포함 7 · 30일)이고 같은 길이의 직전 기간과 비교한다(`period: { from, to }` 포함). 목표 — 작업 성공률 0.9, Tool 성공률 0.95, 복구 성공률 0.8, 사람 개입률 0.2 이하, 무단 호출 0. 데이터가 없는 비율은 0 · `ok`. `evalSuccessRate` 는 평가셋 실행(C-03) 전까지 `null`. 응답에 `feedback: { helpful, notHelpful }` 와 `recentFailures[].code`(실패 코드)를 더한다.
+구현 메모: 기간은 UTC 날짜 단위(24h = 오늘, 7d · 30d = 오늘 포함 7 · 30일)이고 같은 길이의 직전 기간과 비교한다(`period: { from, to }` 포함). 목표 — 작업 성공률 0.9, Tool 성공률 0.95, 복구 성공률 0.8, 사람 개입률 0.2 이하, 무단 호출 0. 데이터가 없는 비율은 0 · `ok`. `evalSuccessRate` 는 평가셋 실행(C-03) 전까지 `null`. 응답에 `feedback: { helpful, notHelpful }` 와 `recentFailures[].code`(실패 코드)를 더한다. `daily: Array<{ date, tasksTotal, tasksSucceeded, tasksFailed, toolDenied, cost }>` 는 기간의 모든 UTC 날짜(빈 날은 0) — 대시보드 날짜별 차트. `/v1/admin/stream` 은 아직 없다(콘솔은 진행 중 작업 5초 · 승인 대기 10~30초 주기로 다시 조회).
 
 ### 4.2 작업 (C-02)
 
@@ -413,7 +413,11 @@ type FailureCause = 'tool_timeout' | 'schema_validation' | 'permission_denied' |
 | POST | `/v1/admin/tasks/:id/resume` | `{ fromStepId? }` 생략 시 마지막 checkpoint |
 
 ```ts
-interface AdminTaskRow extends TaskSummary { agentName: string; endUserPseudonym: string; elapsedMs: number; workerId: string | null }
+interface AdminTaskRow extends TaskSummary {
+  agentName: string; agentVersion: number; endUserPseudonym: string; elapsedMs: number; workerId: string | null;
+  recoveryCount: number; costAmount: number; costCurrency: string | null;
+}
+// status 는 하나 또는 쉼표로 여러 개 (예: ?status=queued,running,waiting_approval,paused,recovering)
 
 interface TaskTrace {
   task: AdminTaskRow & {
@@ -443,11 +447,13 @@ interface TaskTrace {
 | GET | `/v1/admin/conversations` | `?agentId&endUserId&cursor` |
 | GET | `/v1/admin/conversations/:id/messages` | 메시지 (C-02 “대화 보기”) |
 
+구현 메모: 대화 보기는 `GET /v1/admin/conversations/:id` 하나로 — `{ id, title, agentName, endUserPseudonym, summary, messages, tasks, attachments }`. `attachments` 는 메시지 첨부의 `artifactId → { fileName, mimeType, sizeBytes }`, 파일은 `GET /v1/admin/artifacts/:id/download`.
+
 ### 4.4 Agent · 모델 (C-03)
 
 | Method | Path | 권한 | 설명 |
 |---|---|---|---|
-| GET | `/v1/admin/agents` | Viewer | 목록 |
+| GET | `/v1/admin/agents` | Viewer | 목록 `[{ id, name, publishedVersion, publishedAt, draftVersion, draftUpdatedAt }]` — draftVersion 이 있으면 배포 안 된 변경 |
 | POST | `/v1/admin/agents` | Admin | 생성 (초안 v1 함께 생성) |
 | GET | `/v1/admin/agents/:id` | Viewer | 배포 버전 + 초안 |
 | PATCH | `/v1/admin/agents/:id/draft` | Admin | 초안 수정 (자동 저장) |
@@ -628,7 +634,7 @@ interface ToolPolicyRuleInput {
 | Method | Path | 권한 | 설명 |
 |---|---|---|---|
 | GET | `/v1/admin/memories/search` | Viewer | `?agentId&q&mode=semantic\|keyword&type&scope&endUserId&limit` |
-| GET | `/v1/admin/memories` | Viewer | `?status=quarantined\|active&cursor` (기본 격리 항목) |
+| GET | `/v1/admin/memories` | Viewer | `?status=quarantined\|active&type&scope&agentId&endUserId&cursor` (기본 격리 항목) |
 | GET | `/v1/admin/memories/:id` | Viewer | 상세 · 출처 |
 | PATCH | `/v1/admin/memories/:id` | Admin | `{ title?, content? }` → 재임베딩 |
 | POST | `/v1/admin/memories/:id/pin` | Admin | `{ pinned }` 만료 제외 |
@@ -650,6 +656,7 @@ interface MemorySearchHit {    // 목록 · 상세도 같은 모양 (score 없�
   quarantineReason?: string | null;
   pinned: boolean;
   endUserId: string | null;     // agent 범위는 null
+  endUserPseudonym: string | null; // 위젯 사용자 가명 — 작업 · 승인 화면과 같은 값
   source: { type: 'user_message' | 'tool_result' | 'external_document' | 'reflection' | 'manual'; taskIds: string[]; conversationId: string | null };
   useCount: number;
   lastUsedAt: string | null;

@@ -99,6 +99,29 @@ open "http://localhost:3000/widget/v1/demo.html?key=wk_pub_demo&token=$ID"
 - SSE 는 `fetch` 스트림으로 받고(세션 토큰을 헤더로), 끊기면 `Last-Event-ID` 로 이어 받는다. 마크다운은 HTML 을 쓰지 않고 React 요소로만 그린다(링크는 http(s) 만).
 - 개발: `npm run dev:widget`(변경 시 다시 빌드). 위젯 소스는 `apps/widget`, 위젯 · 콘솔 공용 코드는 `apps/shared`.
 
+### 콘솔 열어 보기 (C-01 ~ C-09)
+
+```bash
+npm run build:ui                # apps/console → apps/console/dist (API 서버가 /console 로 제공)
+npm run start:dev               # http://localhost:3000/console — 워크스페이스 demo · owner@demo.local
+npm run dev:admin-password      # 시드 Owner 비밀번호를 잊었으면 새로 만들어 출력 (개발용)
+npm run dev:console             # 화면 개발: Vite 개발 서버 http://localhost:5174/console/ (/v1 은 :3000 으로 프록시)
+```
+
+| 화면 | 경로 | 내용 |
+|---|---|---|
+| C-01 대시보드 | `/console/` | 기간 · Agent 별 KPI(목표 · 직전 기간 대비), 날짜별 작업 차트(표 보기), 진행 중 작업(5초), 승인 대기, 최근 실패(원인 · 실패 단계), 피드백 |
+| C-02 작업 | `/console/tasks` · `/tasks/:id` · `/conversations/:id` | 상태 탭 · Agent · 기간 필터, 실행 트레이스(Agent Loop 타임라인 · checkpoint · 단계 상세 · Tool 실행 인자 · 결과), 계획 버전 · 재계획 사유, 결과 검증, 역할별 토큰, 승인 · 산출물, 일시정지 · 중지 · 재개(checkpoint · 처음부터), 대화 보기 |
+| C-03 Agent 설정 | `/console/agents/:id` | 지침 · 환영 문구, 역할별 모델(Provider · 추론 강도 · 대체 모델), MCP · Skill 허용 목록, 실행 · Memory 정책, 초안 저장(바뀐 칸만) → 배포(변경 메모), 버전 기록 · 복원 |
+| C-04 · C-05 MCP 서버 | `/console/mcp` · `/mcp/new` · `/mcp/:id` | 상태 · 헬스 목록, 연결 4단계 마법사(연결 정보 → SSRF · 핸드셰이크 → Tool 탐색 · 보안 검사 → 등록), Tool 등급 · 승인 정책, 변경 검토, Tool Registry 버전 · 비교 |
+| C-06 Skill | `/console/skills` · `/skills/:id` | zip 업로드(줄 번호 오류 · 검증 6항목), SKILL.md 미리보기, 파일, 버전 비교, 활성화 · 비활성화 |
+| C-07 승인 · 권한 | `/console/approvals` | 승인 대기(운영자 대리 결정 · 메모 필수), 처리 이력, 등급별 정책(강화 즉시 · 완화 새 작업부터), 조건 규칙 |
+| C-08 Memory | `/console/memory` | 의미 · 키워드 검색, 활성 · 격리 목록, 출처, 격리 해제 · 수정 · 고정 · 삭제, 사용자 데이터 삭제 |
+| C-09 위젯 설치 | `/console/widget` | 설치 코드, 서명 토큰 연동 예시, 허용 도메인, 테마(대비 검사) · 동작, 미리보기, Secret 재발급(Owner, 한 번만 표시) |
+| 마켓플레이스 · 사용량 | `/console/marketplace` · `/console/billing` | 게시 · 설치 · 철회 / 일별 비용 · 토큰 · 호출 차트, 모델별 · 용도별, 단가 편집, 월 한도 |
+
+콘솔 토큰은 `sessionStorage` 에만 두고(탭을 닫으면 로그아웃), 역할이 모자란 동작은 화면에서 숨기거나 보기 전용으로 보여 준다 — 서버도 같은 역할을 다시 확인한다. 위젯 사용자는 가명(`user_xxxx`)으로만 보인다.
+
 ## LLM 모델 설정
 
 Agent Loop 는 역할마다 다른 모델을 쓴다 (`model_configs`, 화면 C-03 “모델 구성”). OpenAI · DeepSeek · Gemini 는 모두 각 사의 **OpenAI 호환 Chat Completions API** 로 호출하며, provider 별 차이는 [`src/llm/provider-params.ts`](src/llm/provider-params.ts) 에서 맞춘다.
@@ -167,6 +190,8 @@ Reflection · Context Compression 은 [test/reflection.e2e-spec.ts](test/reflect
 
 위젯 화면은 [test/ui-widget.e2e-spec.ts](test/ui-widget.e2e-spec.ts) 가 빌드한 `loader.js` 를 데모 페이지에 넣고 브라우저로 확인한다: 런처 → 홈(인사 · 고지 문구), 요청 → 실행 계획 · 스트리밍 답변 → 결과 검증 · 피드백 저장, 승인 카드(설명 · 인자 · 위험도) → 승인 → 같은 인자로 Tool 실행 → 완료, 실패 카드 → 멈춘 단계부터 재개 → 완료, 작업 목록 탭 → 항목을 누르면 그 대화, 모바일 폭 전체 화면 · 최소화. 콘솔용 API(초안 편집 · 버전 복원 · 위젯 설정 · Secret 교체 · 업로드 · 산출물 · 대화 보기)는 [test/console-api.e2e-spec.ts](test/console-api.e2e-spec.ts).
 
+콘솔 화면은 [test/ui-console.e2e-spec.ts](test/ui-console.e2e-spec.ts) 가 빌드한 콘솔을 브라우저로 확인한다: 로그인(틀린 비밀번호 오류 · 로그인 전에 열려던 화면으로), 대시보드 KPI · 최근 실패, 작업 목록 → 트레이스 → 단계 상세 → 대화 보기, 실패 작업 checkpoint 재개 → 완료, Agent 초안 저장 → 배포 → 새 버전, 위젯 허용 도메인 검사 · 저장, MCP 연결 마법사(가짜 MCP 서버 · 보안 실패 Tool 제외) → 등록, Skill zip 업로드 → 활성화, 승인 대기 → 운영자 대리 승인 → Tool 실행 · 완료, 등급별 정책, Memory · 마켓플레이스 · 사용량 화면, Viewer 는 배포 · 업로드 · 연결 버튼이 없음.
+
 ## 구현 현황
 
 | 범위 | 상태 |
@@ -177,7 +202,7 @@ Reflection · Context Compression 은 [test/reflection.e2e-spec.ts](test/reflect
 | 비동기 실행: BullMQ `agent-tasks`, Worker heartbeat, 단계 · checkpoint 저장, 최대 단계 · 시간 제한, 중지 처리 | 완료 |
 | LLM 연동: OpenAI 호환 클라이언트(OpenAI · DeepSeek · Gemini), 스트리밍 · tool call 파싱 · 재시도 · 대체 모델 · 역할별 추론 강도 | 완료 — DeepSeek 는 실제 API 로 확인, OpenAI · Gemini 는 키가 없어 단위 테스트(요청 형식)까지만 |
 | Agent Loop: Context → Plan → Execute(reason · tool · skill) → Evaluate → 재계획 → Respond(스트리밍) → Verify, 토큰 예산 | 완료 |
-| 콘솔 인증: `POST /v1/admin/auth/login`(scrypt) · `GET /v1/admin/me`, 역할 가드(Owner > Admin > Operator > Viewer, 매 요청 DB 재확인), 감사 로그 | 완료 — refresh 쿠키 회전 · 로그아웃은 콘솔 UI 단계 |
+| 콘솔 인증: `POST /v1/admin/auth/login`(scrypt) · `GET /v1/admin/me`, 역할 가드(Owner > Admin > Operator > Viewer, 매 요청 DB 재확인), 감사 로그 | 완료 — 콘솔은 access token 만(탭 세션), refresh 쿠키 회전은 이후 |
 | MCP (C-04 · C-05): Streamable HTTP 연결(공식 SDK v2 — 2026-07-28 우선, 2025 계열 서버 자동 호환), SSRF 방어(스킴 · 호스트 · DNS 해석 · 연결 시점 IP 검사, 메타데이터 IP 항상 차단), API Key(Secret 저장소), 연결 테스트 · Tool 탐색 · 검증(JSON Schema · 숨은 지시문 · 보이지 않는 문자 · 민감정보 · 제안 등급), 포함 Tool · 등록 → 새 Registry 버전, Tool 정책, 재탐색 변경 감지 → 운영자 승인, `mcp-sync` 주기 잡(장애 → error · 복구, 헬스 p95 · 오류율), 비활성화 · 삭제, Registry 버전 · diff API | 완료 — stdio(Docker Sandbox) 실행형 · OAuth 인증 · 이미지 서명 검증은 Sandbox 단계 |
 | Skill (C-06): zip 업로드(zip-slip · 심볼릭 링크 · 크기 · 파일 수 검사), SKILL.md 파싱(줄 번호 오류), 신뢰 검증 6항목, 버전(내용 해시 · 중복 · 충돌) · 파일 미리보기 · 비교 · 활성화 → 새 Registry 버전 · 비활성화, Agent 허용 목록, 위젯 추천 카드. 실행: 계획에는 metadata 만, `skill` 단계에서 본문 · 파일 목록 로딩, `skill.read_file`, allowed-tools 로 Tool 범위 제한(서버 강제), 저장 파일 해시 재확인 | 완료 — Git 출처 · 서명 · test-runs · 스크립트 실행(Sandbox) · MCP 서버 Skill 은 이후 |
 | Agent MCP 허용 목록: 초안(배포 버전 복사) → 배포, 실행 시 허용 목록 · 서버 상태 · Tool 사용 여부 확인(`not_allowed` · `tool_unavailable`) | 완료 — 초안에서 지침 · 환영 문구 · 역할별 모델 · 실행 · Memory 정책 · MCP · Skill 허용 목록 편집, 버전 목록 · 복원 · 초안 버리기 |
@@ -192,7 +217,7 @@ Reflection · Context Compression 은 [test/reflection.e2e-spec.ts](test/reflect
 | 대시보드 지표 (C-01): `metrics-rollup`(일별 집계 SQL 함수) · `GET /admin/metrics`(기간 KPI · 직전 기간 비교 · 목표 · 최근 실패 · 피드백), 결과 피드백 API | 완료 — 평가셋 성공률은 평가셋 실행(C-03) 단계 |
 | Marketplace (P2): Skill 게시(검증 통과 버전 · 파일 내용 주소 복사 · 플랫폼 Ed25519 서명) · 설치(서명 · 파일 해시 확인 → 업로드와 같은 검증 → 검토 대기 버전) · 새 버전 · 철회 · 이름 충돌, MCP 서버 템플릿 공유(비밀값 제외 · 등록 마법사용) | 완료 — 플랫폼 운영자 검수 · 유료 판매는 범위 밖 |
 | `retention` 주기 잡 | 다음 단계 (명세 §6) — `agent-recovery` · `mcp-sync` · `memory-ingest` · `approval-expiry` · `metrics-rollup` 는 완료 |
-| 콘솔 화면 (C-01 ~ C-09) | 다음 단계 — 화면이 쓰는 Admin API 는 완료 |
+| 콘솔 화면 C-01 ~ C-09 · 마켓플레이스 · 사용량 (`apps/console` → `/console`) | 완료 — 실시간 관리자 SSE(`/admin/stream`) 대신 주기 조회, 평가셋 실행 · 감사 로그 화면 · 멤버 관리 · Agent 생성은 이후 |
 | 요청 제한 · OpenTelemetry · Vault 연동 (`SECRETS_BACKEND=local` 은 개발 전용, production 에서 시작 거부) | 다음 단계 |
 
 ## 코드 구조
@@ -200,6 +225,7 @@ Reflection · Context Compression 은 [test/reflection.e2e-spec.ts](test/reflect
 ```
 apps/
 ├── widget/                        위젯(W-01 ~ W-05) — loader.tsx(Shadow DOM 마운트 · 공개 API) · App · views · components · run(SSE → 실행 상태) · api
+├── console/                       콘솔 SPA — auth(로그인 · 역할) · api(Admin API 클라이언트) · ui(공용 컴포넌트 · 데이터 훅) · Layout · pages/(화면별 · 화면 CSS)
 └── shared/                        위젯 · 콘솔 공용 — 상태 색 · 라벨, 날짜 · 숫자 형식, fetch SSE(Last-Event-ID 재연결), 안전한 마크다운
 src/
 ├── main.ts · worker.ts            API 서버 · Agent Worker 진입점 (별도 프로세스)

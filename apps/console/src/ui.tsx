@@ -3,7 +3,10 @@
  * 페이지는 이 파일의 컴포넌트 + console.css 토큰만 써서 같은 모양을 유지한다.
  */
 import {
+  cloneElement,
   createContext,
+  isValidElement,
+  type ReactElement,
   type ReactNode,
   useCallback,
   useContext,
@@ -446,6 +449,12 @@ export function Loading({ label = '불러오는 중…' }: { label?: string }) {
   );
 }
 
+const LABELABLE = new Set(['input', 'select', 'textarea']);
+
+/**
+ * 폼 칸 — 입력 요소 하나면 label[for] 로 잇고 도움말은 aria-describedby 로 (접근성 이름에 도움말이 섞이지 않게).
+ * 여러 요소 · 컴포넌트면 label 로 감싼다.
+ */
 export function Field({
   label,
   hint,
@@ -459,16 +468,55 @@ export function Field({
   children: ReactNode;
   required?: boolean;
 }) {
+  const id = useId();
+  const noteId = `${id}-note`;
+  const note = error ? (
+    <span id={noteId} className="field-error">
+      {error}
+    </span>
+  ) : hint ? (
+    <span id={noteId} className="field-hint">
+      {hint}
+    </span>
+  ) : null;
+  const labelText = (
+    <>
+      {label}
+      {required && <span className="req"> *</span>}
+    </>
+  );
+  if (
+    isValidElement(children) &&
+    typeof children.type === 'string' &&
+    LABELABLE.has(children.type)
+  ) {
+    const control = children as ReactElement<Record<string, unknown>>;
+    const controlId = (control.props.id as string | undefined) ?? `${id}-control`;
+    const describedBy = [control.props['aria-describedby'], note ? noteId : null]
+      .filter(Boolean)
+      .join(' ');
+    return (
+      <div className="field">
+        <label className="field-label" htmlFor={controlId}>
+          {labelText}
+        </label>
+        {cloneElement(control, {
+          id: controlId,
+          'aria-describedby': describedBy || undefined,
+          ...(error ? { 'aria-invalid': true } : {}),
+        })}
+        {note}
+      </div>
+    );
+  }
   return (
-    <label className="field">
-      <span className="field-label">
-        {label}
-        {required && <span className="req"> *</span>}
-      </span>
-      {children}
-      {hint && !error && <span className="field-hint">{hint}</span>}
-      {error && <span className="field-error">{error}</span>}
-    </label>
+    <div className="field">
+      <label className="field-wrap">
+        <span className="field-label">{labelText}</span>
+        {children}
+      </label>
+      {note}
+    </div>
   );
 }
 

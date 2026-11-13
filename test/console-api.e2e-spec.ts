@@ -144,6 +144,13 @@ describe('Agent 설정 (C-03)', () => {
         .status,
     ).toBe(403);
 
+    // 목록 — 초안이 있으면 배포 안 된 변경
+    const listed = await admin<
+      Array<{ id: string; publishedVersion: number; draftVersion: number | null }>
+    >('GET', '/agents', undefined, viewerToken);
+    const row = listed.body.find((a) => a.id === agentId)!;
+    expect(row.draftVersion).toBe(row.publishedVersion + 1);
+
     const published = await admin<AgentView>('POST', `/agents/${agentId}/publish`, {
       changeNote: '지침 정리',
     });
@@ -193,6 +200,8 @@ describe('Agent 설정 (C-03)', () => {
     expect(restored.body.draft!.systemPrompt).not.toBe('당신은 테스트 쇼핑몰의 상담원입니다.');
     const discarded = await admin<AgentView>('DELETE', `/agents/${agentId}/draft`);
     expect(discarded.body.draft).toBeNull();
+    const after = await admin<Array<{ id: string; draftVersion: number | null }>>('GET', '/agents');
+    expect(after.body.find((a) => a.id === agentId)!.draftVersion).toBeNull();
   });
 });
 
@@ -383,6 +392,14 @@ describe('첨부 · 산출물 (W-01 · W-04)', () => {
       "filename*=UTF-8''%EC%A7%80%EC%97%AD",
     );
     expect(Buffer.from(await download.arrayBuffer()).equals(csv)).toBe(true);
+
+    // 콘솔 대화 보기 — 첨부 파일 이름 · 형식 · 크기
+    const conversation = await admin<{
+      attachments: Record<string, { fileName: string; mimeType: string; sizeBytes: number }>;
+    }>('GET', `/conversations/${run.conversationId}`, undefined, viewerToken);
+    expect(conversation.body.attachments).toEqual({
+      [artifactId]: { fileName: '지역매출.csv', mimeType: 'text/csv', sizeBytes: csv.length },
+    });
   });
 
   it('Agent 가 만든 파일은 작업 산출물 — task.completed · 목록 · 내려받기 · 콘솔 트레이스', async () => {

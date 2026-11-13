@@ -84,6 +84,16 @@ export interface AgentAdminView {
  * Agent 초안 · 배포 (C-03 중 MCP 허용 목록). 배포된 버전은 바꾸지 않는다 —
  * 초안(배포 버전 복사본)을 고쳐 새 버전으로 배포하고, 실행 중 작업은 시작 당시 버전을 유지한다.
  */
+/** 콘솔 Agent 목록 한 줄 — 초안이 있으면 배포 안 된 변경이 있다 */
+export interface AgentListRow {
+  id: string;
+  name: string;
+  publishedVersion: number | null;
+  publishedAt: string | null;
+  draftVersion: number | null;
+  draftUpdatedAt: string | null;
+}
+
 @Injectable()
 export class AgentsAdminService {
   constructor(
@@ -91,20 +101,29 @@ export class AgentsAdminService {
     private readonly audit: AuditService,
   ) {}
 
-  async list(
-    admin: AdminSession,
-  ): Promise<Array<{ id: string; name: string; publishedVersion: number | null }>> {
+  async list(admin: AdminSession): Promise<AgentListRow[]> {
     return this.prisma.withTenant(admin.tenantId, async (tx) => {
       const agents = await tx.agent.findMany({
         where: { archivedAt: null },
-        include: { publishedVersion: { select: { version: true } } },
+        include: { publishedVersion: { select: { version: true, publishedAt: true } } },
         orderBy: { name: 'asc' },
       });
-      return agents.map((a) => ({
-        id: a.id,
-        name: a.name,
-        publishedVersion: a.publishedVersion?.version ?? null,
-      }));
+      const drafts = await tx.agentVersion.findMany({
+        where: { status: 'draft', agentId: { in: agents.map((a) => a.id) } },
+        select: { agentId: true, version: true, updatedAt: true },
+      });
+      const draftOf = new Map(drafts.map((d) => [d.agentId, d]));
+      return agents.map((a) => {
+        const draft = draftOf.get(a.id);
+        return {
+          id: a.id,
+          name: a.name,
+          publishedVersion: a.publishedVersion?.version ?? null,
+          publishedAt: a.publishedVersion?.publishedAt?.toISOString() ?? null,
+          draftVersion: draft?.version ?? null,
+          draftUpdatedAt: draft?.updatedAt.toISOString() ?? null,
+        };
+      });
     });
   }
 

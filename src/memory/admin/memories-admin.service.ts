@@ -24,6 +24,10 @@ export type MemorySearchQuery = z.infer<typeof memorySearchSchema>;
 
 export const memoryListSchema = z.object({
   status: z.enum(['active', 'quarantined']).default('quarantined'),
+  type: z.enum(['episodic', 'semantic', 'procedural']).optional(),
+  scope: z.enum(['user', 'agent']).optional(),
+  agentId: z.uuid().optional(),
+  endUserId: z.uuid().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(20),
   cursor: z.uuid().optional(),
 });
@@ -52,6 +56,8 @@ export interface MemoryView {
   quarantineReason?: string | null;
   pinned: boolean;
   endUserId: string | null;
+  /** 위젯 사용자 가명 (콘솔 공통 표시 — 작업 · 승인 화면과 같은 값) */
+  endUserPseudonym: string | null;
   source: { type: string; taskIds: string[]; conversationId: string | null };
   useCount: number;
   lastUsedAt: string | null;
@@ -87,23 +93,33 @@ export class MemoriesAdminService {
         q.mode === 'semantic'
           ? await this.retriever.semantic(tx, query)
           : await this.retriever.keyword(tx, query);
-      return hits.map(fromHit);
+      return withPseudonyms(tx, hits.map(fromHit));
     });
   }
 
   async list(admin: AdminSession, q: MemoryListQuery): Promise<Page<MemoryView>> {
     return this.prisma.withTenant(admin.tenantId, async (tx) => {
       const rows = await tx.memory.findMany({
-        where: { status: q.status, ...(q.cursor ? { id: { lt: q.cursor } } : {}) },
+        where: {
+          status: q.status,
+          ...(q.type ? { type: q.type } : {}),
+          ...(q.scope ? { scope: q.scope } : {}),
+          ...(q.agentId ? { agentId: q.agentId } : {}),
+          ...(q.endUserId ? { endUserId: q.endUserId } : {}),
+          ...(q.cursor ? { id: { lt: q.cursor } } : {}),
+        },
         orderBy: { id: 'desc' },
         take: q.limit + 1,
       });
-      return toPage(rows, q.limit, fromRow);
+      const page = toPage(rows, q.limit, fromRow);
+      return { ...page, items: await withPseudonyms(tx, page.items) };
     });
   }
 
   async get(admin: AdminSession, id: string): Promise<MemoryView> {
-    return this.prisma.withTenant(admin.tenantId, async (tx) => fromRow(await this.find(tx, id)));
+    return this.prisma.withTenant(admin.tenantId, async (tx) =>
+      named(tx, fromRow(await this.find(tx, id))),
+    );
   }
 
   /** 수정 → 다시 임베딩. 운영자가 확인한 내용이므로 검증 필요 표시를 내린다 */
@@ -134,7 +150,7 @@ export class MemoriesAdminService {
         },
         req,
       );
-      return fromRow(updated);
+      return named(tx, fromRow(updated));
     });
   }
 
@@ -164,7 +180,7 @@ export class MemoriesAdminService {
         { action: pinned ? 'memory.pin' : 'memory.unpin', targetType: 'memory', targetId: id },
         req,
       );
-      return fromRow(updated);
+      return named(tx, fromRow(updated));
     });
   }
 
@@ -189,7 +205,7 @@ export class MemoriesAdminService {
         },
         req,
       );
-      return fromRow(updated);
+      return named(tx, fromRow(updated));
     });
   }
 
@@ -252,6 +268,25 @@ export class MemoriesAdminService {
   }
 }
 
+/** 사용자 범위 기억에 위젯 사용자 가명을 붙인다 (한 번에 조회) */
+async function withPseudonyms(tx: TenantTx, views: MemoryView[]): Promise<MemoryView[]> {
+  const ids = [...new Set(views.flatMap((v) => (v.endUserId ? [v.endUserId] : [])))];
+  if (!ids.length) return views;
+  const users = await tx.endUser.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, pseudonym: true },
+  });
+  const byId = new Map(users.map((u) => [u.id, u.pseudonym]));
+  return views.map((v) => ({
+    ...v,
+    endUserPseudonym: v.endUserId ? (byId.get(v.endUserId) ?? null) : null,
+  }));
+}
+
+async function named(tx: TenantTx, view: MemoryView): Promise<MemoryView> {
+  return (await withPseudonyms(tx, [view]))[0]!;
+}
+
 function fromHit(h: MemoryHit): MemoryView {
   return {
     id: h.id,
@@ -265,6 +300,7 @@ function fromHit(h: MemoryHit): MemoryView {
     status: h.status as Memory['status'],
     pinned: h.pinned,
     endUserId: h.endUserId,
+    endUserPseudonym: null,
     source: {
       type: h.sourceType,
       taskIds: h.sourceTaskIds,
@@ -290,6 +326,7 @@ function fromRow(m: Memory): MemoryView {
     quarantineReason: m.quarantineReason,
     pinned: m.pinned,
     endUserId: m.endUserId,
+    endUserPseudonym: null,
     source: {
       type: m.sourceType,
       taskIds: m.sourceTaskIds,

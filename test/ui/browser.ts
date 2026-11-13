@@ -47,6 +47,8 @@ export interface Page extends Pick<
   url(): string;
   waitForURL(url: string | RegExp, options?: { timeout?: number }): Promise<void>;
   keyboard: { press(key: string): Promise<void> };
+  /** 동작 · 대기의 기본 시간 제한 (ms) */
+  setDefaultTimeout(ms: number): void;
   context(): { addInitScript(script: string): Promise<void> };
 }
 export interface Browser {

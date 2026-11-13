@@ -11,18 +11,23 @@ import { type ApprovalView, taskScopeAllowed, toApprovalView } from '../approval
 import type { PlanStep } from '../plan.js';
 import { taskSummarySelect, toTaskSummary, type TaskSummaryView } from '../task-views.js';
 
+const taskStatusSchema = z.enum([
+  'queued',
+  'running',
+  'waiting_approval',
+  'paused',
+  'recovering',
+  'completed',
+  'failed',
+  'cancelled',
+]);
+
 export const adminTaskQuerySchema = z.object({
+  /** 하나 또는 쉼표로 여러 개 (예: running,waiting_approval) */
   status: z
-    .enum([
-      'queued',
-      'running',
-      'waiting_approval',
-      'paused',
-      'recovering',
-      'completed',
-      'failed',
-      'cancelled',
-    ])
+    .string()
+    .transform((v) => [...new Set(v.split(',').map((x) => x.trim()))])
+    .pipe(z.array(taskStatusSchema).min(1).max(8))
     .optional(),
   agentId: z.uuid().optional(),
   endUserId: z.uuid().optional(),
@@ -40,6 +45,9 @@ export interface AdminTaskRow extends TaskSummaryView {
   elapsedMs: number;
   workerId: string | null;
   recoveryCount: number;
+  agentVersion: number;
+  costAmount: number;
+  costCurrency: string | null;
 }
 
 const rowSelect = {
@@ -50,6 +58,9 @@ const rowSelect = {
   startedAt: true,
   workerId: true,
   recoveryCount: true,
+  costAmount: true,
+  costCurrency: true,
+  agentVersion: { select: { version: true } },
 } satisfies Prisma.TaskSelect;
 
 type Row = Prisma.TaskGetPayload<{ select: typeof rowSelect }>;
@@ -74,7 +85,7 @@ export class TasksAdminService {
     return this.prisma.withTenant(admin.tenantId, async (tx) => {
       const rows = await tx.task.findMany({
         where: {
-          ...(q.status ? { status: q.status } : {}),
+          ...(q.status ? { status: { in: q.status } } : {}),
           ...(q.agentId ? { agentId: q.agentId } : {}),
           ...(q.endUserId ? { endUserId: q.endUserId } : {}),
           ...(q.from || q.to
@@ -221,6 +232,20 @@ export class TasksAdminService {
         orderBy: { id: 'asc' },
         select: { id: true, title: true, status: true, createdAt: true },
       });
+      const views = messages.map(toMessageView);
+      const artifactIds = [
+        ...new Set(
+          views.flatMap((m) =>
+            m.content.flatMap((b) => (b.type === 'attachment' ? [b.artifactId] : [])),
+          ),
+        ),
+      ];
+      const artifacts = artifactIds.length
+        ? await tx.artifact.findMany({
+            where: { id: { in: artifactIds } },
+            select: { id: true, fileName: true, mimeType: true, sizeBytes: true },
+          })
+        : [];
       return {
         id: conversation.id,
         title: conversation.title,
@@ -228,7 +253,14 @@ export class TasksAdminService {
         endUserPseudonym: conversation.endUser.pseudonym,
         summary: conversation.summary,
         createdAt: conversation.createdAt.toISOString(),
-        messages: messages.map(toMessageView),
+        messages: views,
+        /** 메시지 첨부 파일 정보 (artifactId → 이름 · 형식 · 크기) */
+        attachments: Object.fromEntries(
+          artifacts.map((a) => [
+            a.id,
+            { fileName: a.fileName, mimeType: a.mimeType, sizeBytes: Number(a.sizeBytes) },
+          ]),
+        ),
         tasks: tasks.map((t) => ({ ...t, createdAt: t.createdAt.toISOString() })),
       };
     });
@@ -290,6 +322,9 @@ function toRow(task: Row): AdminTaskRow {
     elapsedMs: (task.finishedAt ?? new Date()).getTime() - started.getTime(),
     workerId: task.workerId,
     recoveryCount: task.recoveryCount,
+    agentVersion: task.agentVersion.version,
+    costAmount: Number(task.costAmount),
+    costCurrency: task.costCurrency,
   };
 }
 
