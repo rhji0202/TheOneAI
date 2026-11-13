@@ -1,22 +1,46 @@
 import {
   BotIcon,
+  ChevronsUpDownIcon,
   CreditCardIcon,
   DatabaseIcon,
   FileCodeIcon,
   LayoutDashboardIcon,
   ListChecksIcon,
+  LogOutIcon,
   type LucideIcon,
-  MenuIcon,
   MessageSquareIcon,
   PlugIcon,
   ShieldCheckIcon,
   StoreIcon,
 } from 'lucide-react';
-import { useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router';
-import { Button } from '@/components/ui/button';
-import { TooltipProvider } from '@/components/ui/tooltip';
-import { cn } from '@/lib/utils';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { Separator } from '@/components/ui/separator';
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuBadge,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarRail,
+  SidebarTrigger,
+  useSidebar,
+} from '@/components/ui/sidebar';
 import { ROLE_LABEL } from './api';
 import { useAuth } from './auth';
 import { type Page, ToastProvider, useQuery } from './ui';
@@ -29,10 +53,18 @@ interface NavItem {
   badge?: number;
 }
 
+interface NavSection {
+  title: string;
+  items: NavItem[];
+}
+
+function isActive(item: NavItem, pathname: string): boolean {
+  return item.end ? pathname === item.to : pathname.startsWith(item.to);
+}
+
 export function Layout() {
-  const { user, tenantSlug, logout, api } = useAuth();
-  const [menuOpen, setMenuOpen] = useState(false);
-  const location = useLocation();
+  const { tenantSlug, api } = useAuth();
+  const { pathname } = useLocation();
   // 승인 대기 수 — 사이드바 배지 (30초마다)
   const pending = useQuery(
     () => api.get<Page<unknown>>('/v1/admin/approvals', { status: 'pending', limit: 100 }),
@@ -41,7 +73,7 @@ export function Layout() {
   );
   const pendingCount = pending.data?.items.length ?? 0;
 
-  const sections: { title: string; items: NavItem[] }[] = [
+  const sections: NavSection[] = [
     {
       title: '운영',
       items: [
@@ -68,121 +100,161 @@ export function Layout() {
       ],
     },
   ];
+  const current = sections.flatMap((s) =>
+    s.items.filter((i) => isActive(i, pathname)).map((i) => ({ section: s.title, label: i.label })),
+  )[0];
 
   return (
     <ToastProvider>
-      <TooltipProvider>
-        <div className="grid min-h-screen grid-cols-[232px_minmax(0,1fr)] gap-0 max-[900px]:grid-cols-1">
-          <a
-            href="#main"
-            className="absolute top-2 -left-[999px] z-[100] rounded-lg bg-card px-3 py-2 focus:left-2"
-          >
-            본문으로 건너뛰기
-          </a>
-          <aside
-            aria-label="콘솔 메뉴"
-            className={cn(
-              'sticky top-0 h-screen overflow-y-auto border-r bg-sidebar px-3 py-4 text-sidebar-foreground',
-              'max-[900px]:fixed max-[900px]:left-0 max-[900px]:z-40 max-[900px]:w-[260px] max-[900px]:transition-transform',
-              menuOpen ? 'max-[900px]:shadow-2xl' : 'max-[900px]:-translate-x-full',
-            )}
-          >
-            <div className="flex items-center gap-2.5 px-2 pt-1 pb-4">
+      <SidebarProvider>
+        <a
+          href="#main"
+          className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[100] focus:rounded-lg focus:bg-card focus:px-3 focus:py-2"
+        >
+          본문으로 건너뛰기
+        </a>
+        <Sidebar collapsible="icon">
+          <SidebarHeader>
+            <div className="flex items-center gap-2 overflow-hidden p-1">
               <span
-                className="inline-grid size-8 place-items-center rounded-[9px] bg-primary font-bold text-primary-foreground"
+                className="inline-grid size-8 shrink-0 place-items-center rounded-lg bg-sidebar-primary font-bold text-sidebar-primary-foreground"
                 aria-hidden="true"
               >
                 T
               </span>
-              <div>
-                <p className="font-bold">TheOneAI</p>
-                <p className="text-xs text-muted-foreground">{tenantSlug ?? '워크스페이스'}</p>
+              <div className="grid min-w-0 leading-tight group-data-[collapsible=icon]:hidden">
+                <span className="truncate font-semibold">TheOneAI</span>
+                <span className="truncate text-xs text-muted-foreground">
+                  {tenantSlug ?? '워크스페이스'}
+                </span>
               </div>
             </div>
-            <nav>
+          </SidebarHeader>
+          <SidebarContent>
+            <nav aria-label="콘솔 메뉴">
               {sections.map((s) => (
-                <div key={s.title} className="mt-3">
-                  <p className="px-2.5 py-1.5 text-xs font-semibold tracking-wide text-muted-foreground">
-                    {s.title}
-                  </p>
-                  {s.items.map((item) => (
-                    <NavLink
-                      key={item.to}
-                      to={item.to}
-                      end={item.end}
-                      className={({ isActive }) =>
-                        cn(
-                          'flex min-h-[38px] items-center gap-2.5 rounded-lg px-2.5 py-2 font-medium text-foreground/75 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
-                          isActive && 'bg-sidebar-accent text-primary hover:text-primary',
-                        )
-                      }
-                      onClick={() => setMenuOpen(false)}
-                    >
-                      <item.icon className="size-[18px] shrink-0" aria-hidden="true" />
-                      <span>{item.label}</span>
-                      {item.badge ? (
-                        <span
-                          className="ml-auto inline-grid h-5 min-w-5 place-items-center rounded-full bg-amber-500 px-1.5 text-xs font-bold text-amber-950"
-                          aria-label={`대기 ${item.badge}건`}
-                        >
-                          {item.badge > 99 ? '99+' : item.badge}
-                        </span>
-                      ) : null}
-                    </NavLink>
-                  ))}
-                </div>
+                <SidebarGroup key={s.title}>
+                  <SidebarGroupLabel>{s.title}</SidebarGroupLabel>
+                  <SidebarMenu>
+                    {s.items.map((item) => (
+                      <NavItemLink key={item.to} item={item} active={isActive(item, pathname)} />
+                    ))}
+                  </SidebarMenu>
+                </SidebarGroup>
               ))}
             </nav>
-          </aside>
-          <div className="flex min-w-0 flex-col">
-            <header className="sticky top-0 z-10 flex h-14 items-center gap-3 border-b bg-background/90 px-6 backdrop-blur">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="hidden max-[900px]:inline-flex"
-                aria-label="메뉴"
-                aria-expanded={menuOpen}
-                onClick={() => setMenuOpen((v) => !v)}
-              >
-                <MenuIcon className="size-5" />
-              </Button>
-              <div className="flex-1" />
-              {user && (
-                <div className="flex items-center gap-2.5">
-                  <span
-                    className="inline-grid size-8 place-items-center rounded-full bg-muted font-semibold"
-                    aria-hidden="true"
-                  >
-                    {(user.name || user.email).slice(0, 1).toUpperCase()}
+          </SidebarContent>
+          <SidebarFooter>
+            <NavUser />
+          </SidebarFooter>
+          <SidebarRail />
+        </Sidebar>
+        <SidebarInset className="min-w-0">
+          <header className="sticky top-0 z-10 flex h-14 shrink-0 items-center gap-2 border-b bg-background/90 px-4 backdrop-blur">
+            <SidebarTrigger className="-ml-1" />
+            {current && (
+              <>
+                <Separator
+                  orientation="vertical"
+                  className="mr-1 data-[orientation=vertical]:h-4"
+                />
+                <p className="text-sm text-muted-foreground">
+                  {current.section}
+                  <span className="mx-1.5" aria-hidden="true">
+                    /
                   </span>
-                  <div>
-                    <p className="text-sm font-semibold">{user.name || user.email}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {ROLE_LABEL[user.role]} · {user.email}
-                    </p>
-                  </div>
-                  <Button variant="ghost" size="sm" onClick={logout}>
-                    로그아웃
-                  </Button>
-                </div>
-              )}
-            </header>
-            <main
-              id="main"
-              className="mx-auto w-full max-w-[1280px] p-6"
-              key={location.pathname.split('/')[1]}
-            >
-              <Outlet />
-            </main>
-          </div>
-          {menuOpen && (
-            <div
-              className="fixed inset-0 z-30 bg-black/40 min-[901px]:hidden"
-              onClick={() => setMenuOpen(false)}
-            />
-          )}
-        </div>
-      </TooltipProvider>
+                  <span className="font-medium text-foreground">{current.label}</span>
+                </p>
+              </>
+            )}
+          </header>
+          <main
+            id="main"
+            className="mx-auto w-full max-w-[1280px] p-6"
+            key={pathname.split('/')[1]}
+          >
+            <Outlet />
+          </main>
+        </SidebarInset>
+      </SidebarProvider>
     </ToastProvider>
+  );
+}
+
+function NavItemLink({ item, active }: { item: NavItem; active: boolean }) {
+  const { isMobile, setOpenMobile } = useSidebar();
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton asChild isActive={active} tooltip={item.label}>
+        <NavLink to={item.to} end={item.end} onClick={() => isMobile && setOpenMobile(false)}>
+          <item.icon />
+          <span>{item.label}</span>
+        </NavLink>
+      </SidebarMenuButton>
+      {item.badge ? (
+        <SidebarMenuBadge className="rounded-full bg-amber-500 font-bold text-amber-950 peer-hover/menu-button:text-amber-950 peer-data-[active=true]/menu-button:text-amber-950">
+          <span className="sr-only">대기 </span>
+          {item.badge > 99 ? '99+' : item.badge}
+          <span className="sr-only">건</span>
+        </SidebarMenuBadge>
+      ) : null}
+    </SidebarMenuItem>
+  );
+}
+
+/** 로그인한 사용자 — 사이드바 맨 아래, 누르면 계정 메뉴(로그아웃) */
+function NavUser() {
+  const { user, logout } = useAuth();
+  const { isMobile } = useSidebar();
+  if (!user) return null;
+  const name = user.name || user.email;
+  const avatar = (
+    <Avatar className="size-8 rounded-lg">
+      <AvatarFallback className="rounded-lg font-semibold">
+        {name.slice(0, 1).toUpperCase()}
+      </AvatarFallback>
+    </Avatar>
+  );
+  return (
+    <SidebarMenu>
+      <SidebarMenuItem>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <SidebarMenuButton
+              size="lg"
+              className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
+            >
+              {avatar}
+              <div className="grid min-w-0 flex-1 text-left text-sm leading-tight">
+                <span className="truncate font-semibold">{name}</span>
+                <span className="truncate text-xs text-muted-foreground">
+                  {ROLE_LABEL[user.role]} · {user.email}
+                </span>
+              </div>
+              <ChevronsUpDownIcon className="ml-auto size-4" />
+            </SidebarMenuButton>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            className="w-(--radix-dropdown-menu-trigger-width) min-w-56 rounded-lg"
+            side={isMobile ? 'bottom' : 'right'}
+            align="end"
+            sideOffset={4}
+          >
+            <DropdownMenuLabel className="flex items-center gap-2 font-normal">
+              {avatar}
+              <div className="grid min-w-0 flex-1 leading-tight">
+                <span className="truncate font-semibold">{name}</span>
+                <span className="truncate text-xs text-muted-foreground">{user.email}</span>
+              </div>
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={logout}>
+              <LogOutIcon />
+              로그아웃
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </SidebarMenuItem>
+    </SidebarMenu>
   );
 }
