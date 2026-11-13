@@ -2,6 +2,14 @@
  * 사용량 · 비용 — 기간별 사용량 보고(합계 · 일별 · 모델별 · 용도별), 모델 단가 편집(Admin), 월 한도(Owner).
  * API: /v1/admin/billing/usage · model-prices · budget (src/billing/admin/*)
  */
+import {
+  ArrowUpIcon,
+  ChartColumnIcon,
+  PlusIcon,
+  RotateCcwIcon,
+  TableIcon,
+  XIcon,
+} from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatNumber, formatPercent } from '../../../shared/format';
 import { ApiError } from '../api';
@@ -15,6 +23,7 @@ import {
   Field,
   Kpi,
   Loading,
+  Mono,
   Notice,
   PageHeader,
   type Query,
@@ -24,6 +33,20 @@ import {
   useToast,
 } from '../ui';
 import { Button } from '@/components/ui/button';
+import { Card as UiCard } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { cn } from '@/lib/utils';
 
 /* ───────────── 타입 (src/billing/admin/billing-admin.service.ts) ───────────── */
 
@@ -135,33 +158,34 @@ export function BillingPage() {
         title="사용량 · 비용"
         description="모델 호출 토큰과 비용입니다. 비용은 워크스페이스가 등록한 모델 단가로 계산해요 (기억 추출 호출도 포함)."
         actions={
-          <div className="row">
-            <select
-              className="input"
+          <>
+            <NativeSelect
+              containerClassName="w-auto"
               aria-label="Agent"
               value={agentId}
               onChange={(e) => setAgentId(e.target.value)}
             >
-              <option value="">모든 Agent</option>
+              <NativeSelectOption value="">모든 Agent</NativeSelectOption>
               {(agents.data ?? []).map((a) => (
-                <option key={a.id} value={a.id}>
+                <NativeSelectOption key={a.id} value={a.id}>
                   {a.name}
-                </option>
+                </NativeSelectOption>
               ))}
-            </select>
-            <div className="segmented" role="group" aria-label="기간">
+            </NativeSelect>
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              aria-label="기간"
+              value={range}
+              onValueChange={(v) => v && setRange(v as Range)}
+            >
               {(Object.keys(RANGE_LABEL) as Range[]).map((r) => (
-                <button
-                  key={r}
-                  type="button"
-                  aria-pressed={range === r}
-                  onClick={() => setRange(r)}
-                >
+                <ToggleGroupItem key={r} value={r}>
                   {RANGE_LABEL[r]}
-                </button>
+                </ToggleGroupItem>
               ))}
-            </div>
-          </div>
+            </ToggleGroup>
+          </>
         }
       />
       <ErrorNotice error={usage.error} onRetry={() => void usage.reload()} />
@@ -170,7 +194,7 @@ export function BillingPage() {
       ) : report ? (
         <UsageSection report={report} range={range} />
       ) : null}
-      <div className="grid grid-main-side billing-settings">
+      <div className="mt-4 grid items-start gap-x-4 gap-y-0 xl:grid-cols-[minmax(0,1fr)_340px]">
         <PricesCard
           prices={prices}
           unpriced={(report?.byModel ?? []).filter((m) => !m.priced)}
@@ -209,7 +233,7 @@ function UsageSection({ report, range }: { report: UsageReport; range: Range }) 
           </span>
         </Notice>
       )}
-      <div className="grid grid-4 kpi-row">
+      <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Kpi
           label={`비용 · ${RANGE_LABEL[range]}`}
           value={money(totals.cost, currency)}
@@ -228,13 +252,19 @@ function UsageSection({ report, range }: { report: UsageReport; range: Range }) 
         <BudgetKpi budget={budget} />
       </div>
       <DailyCard days={days} currency={currency} />
-      <div className="grid grid-main-side">
+      <div className="grid gap-x-4 gap-y-0 xl:grid-cols-[minmax(0,1fr)_340px]">
         <ByModelCard report={report} />
         <ByPurposeCard report={report} />
       </div>
     </>
   );
 }
+
+const METER_FILL = {
+  ok: 'bg-primary',
+  near: 'bg-amber-500 dark:bg-amber-400',
+  over: 'bg-destructive',
+} as const;
 
 function BudgetKpi({ budget }: { budget: UsageReport['budget'] }) {
   if (budget.monthlyBudget === null)
@@ -248,28 +278,39 @@ function BudgetKpi({ budget }: { budget: UsageReport['budget'] }) {
   const ratio = budget.monthlyBudget > 0 ? budget.monthToDate / budget.monthlyBudget : 1;
   const state = ratio >= 1 ? 'over' : ratio >= 0.8 ? 'near' : 'ok';
   return (
-    <div className="kpi">
-      <p className="kpi-label">이번 달 사용 · 월 한도</p>
-      <p className="kpi-value">{formatPercent(Math.min(ratio, 9.99), 0)}</p>
+    <UiCard className="min-w-0 gap-1 px-4 py-3.5">
+      <p className="text-sm text-muted-foreground">이번 달 사용 · 월 한도</p>
+      <p className="text-2xl font-semibold tracking-tight tabular-nums">
+        {formatPercent(Math.min(ratio, 9.99), 0)}
+      </p>
       <div
-        className={`meter meter-${state}`}
+        className="my-1 h-1.5 overflow-hidden rounded-full bg-muted"
         role="meter"
         aria-label="월 한도 사용률"
         aria-valuemin={0}
         aria-valuemax={budget.monthlyBudget}
         aria-valuenow={budget.monthToDate}
       >
-        <span style={{ width: `${Math.min(100, ratio * 100)}%` }} />
+        <span
+          className={cn('block h-full rounded-full', METER_FILL[state])}
+          style={{ width: `${Math.min(100, ratio * 100)}%` }}
+        />
       </div>
-      <div className="kpi-foot">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
         <span>
           {money(budget.monthToDate, budget.currency)} /{' '}
           {money(budget.monthlyBudget, budget.currency)}
         </span>
-        {state === 'over' && <span className="kpi-delta bad">▲ 한도 초과</span>}
-        {state === 'near' && <span className="kpi-delta bad">80% 넘음</span>}
+        {state === 'over' && (
+          <span className="inline-flex items-center gap-0.5 font-semibold text-red-600 dark:text-red-400">
+            <ArrowUpIcon className="size-3" aria-hidden="true" /> 한도 초과
+          </span>
+        )}
+        {state === 'near' && (
+          <span className="font-semibold text-red-600 dark:text-red-400">80% 넘음</span>
+        )}
       </div>
-    </div>
+    </UiCard>
   );
 }
 
@@ -316,52 +357,63 @@ function DailyCard({ days, currency }: { days: Day[]; currency: string }) {
       title={`일별 ${METRIC_LABEL[metric]}`}
       description="UTC 날짜 기준"
       actions={
-        <div className="row">
-          <div className="segmented" role="group" aria-label="지표">
+        <>
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            size="sm"
+            aria-label="지표"
+            value={metric}
+            onValueChange={(v) => v && setMetric(v as Metric)}
+          >
             {(Object.keys(METRIC_LABEL) as Metric[]).map((m) => (
-              <button
-                key={m}
-                type="button"
-                aria-pressed={metric === m}
-                onClick={() => setMetric(m)}
-              >
+              <ToggleGroupItem key={m} value={m}>
                 {METRIC_LABEL[m]}
-              </button>
+              </ToggleGroupItem>
             ))}
-          </div>
+          </ToggleGroup>
           <Button size="sm" variant="ghost" onClick={() => setAsTable((v) => !v)}>
+            {asTable ? <ChartColumnIcon aria-hidden="true" /> : <TableIcon aria-hidden="true" />}
             {asTable ? '차트로 보기' : '표로 보기'}
           </Button>
-        </div>
+        </>
       }
     >
       {asTable ? (
-        <div className="table-wrap daily-table">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>날짜</th>
-                <th className="num">호출</th>
-                <th className="num">입력 토큰</th>
-                <th className="num">출력 토큰</th>
-                <th className="num">비용</th>
-              </tr>
-            </thead>
-            <tbody>
+        <div className="max-h-80 overflow-auto">
+          <Table aria-label="일별 사용량">
+            <TableHeader className="bg-muted/50 [&_th]:text-xs [&_th]:text-muted-foreground">
+              <TableRow>
+                <TableHead>날짜</TableHead>
+                <TableHead className="text-right">호출</TableHead>
+                <TableHead className="text-right">입력 토큰</TableHead>
+                <TableHead className="text-right">출력 토큰</TableHead>
+                <TableHead className="text-right">비용</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {[...days].reverse().map((d) => (
-                <tr key={d.date}>
-                  <td>{d.date}</td>
-                  <td className="num">{formatNumber(d.calls)}</td>
-                  <td className="num">{formatNumber(d.inputTokens)}</td>
-                  <td className="num">{formatNumber(d.outputTokens)}</td>
-                  <td className="num">{money(d.cost, currency)}</td>
-                </tr>
+                <TableRow key={d.date}>
+                  <TableCell>{d.date}</TableCell>
+                  <TableCell className="text-right tabular-nums">{formatNumber(d.calls)}</TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatNumber(d.inputTokens)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatNumber(d.outputTokens)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {money(d.cost, currency)}
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </div>
       ) : empty ? (
-        <div className="chart-empty">이 기간에 기록된 모델 호출이 없어요</div>
+        <div className="grid h-44 place-items-center rounded-lg border border-dashed text-sm text-muted-foreground">
+          이 기간에 기록된 모델 호출이 없어요
+        </div>
       ) : (
         <BarChart
           data={days.map((d) => ({
@@ -435,8 +487,9 @@ function BarChart({
   const h = hover !== null ? data[hover] : null;
 
   return (
-    <div className="chart" ref={wrap}>
+    <div className="relative w-full overflow-hidden" ref={wrap}>
       <svg
+        className="block"
         width={width}
         height={height}
         role="img"
@@ -450,9 +503,15 @@ function BarChart({
               x2={width - pad.right}
               y1={y(t)}
               y2={y(t)}
-              className={t === 0 ? 'chart-baseline' : 'chart-grid'}
+              className={t === 0 ? 'stroke-muted-foreground/40' : 'stroke-border'}
             />
-            <text x={pad.left - 8} y={y(t)} dy="0.32em" textAnchor="end" className="chart-axis">
+            <text
+              x={pad.left - 8}
+              y={y(t)}
+              dy="0.32em"
+              textAnchor="end"
+              className="fill-muted-foreground text-[11px] tabular-nums"
+            >
               {axisFormat(t)}
             </text>
           </g>
@@ -466,12 +525,17 @@ function BarChart({
             <g key={d.key}>
               {d.value > 0 && (
                 <path
-                  className={hover === i ? 'chart-bar active' : 'chart-bar'}
+                  className={cn('fill-primary', hover === i ? 'opacity-100' : 'opacity-90')}
                   d={`M${x},${y(0)} V${yTop + r} Q${x},${yTop} ${x + r},${yTop} H${x + barW - r} Q${x + barW},${yTop} ${x + barW},${yTop + r} V${y(0)} Z`}
                 />
               )}
               {i % labelEvery === 0 && (
-                <text x={x + barW / 2} y={height - 8} textAnchor="middle" className="chart-axis">
+                <text
+                  x={x + barW / 2}
+                  y={height - 8}
+                  textAnchor="middle"
+                  className="fill-muted-foreground text-[11px] tabular-nums"
+                >
                   {d.label}
                 </text>
               )}
@@ -480,7 +544,7 @@ function BarChart({
                 y={pad.top}
                 width={band}
                 height={plotH}
-                className={hover === i ? 'chart-hit active' : 'chart-hit'}
+                className={hover === i ? 'fill-foreground/5' : 'fill-transparent'}
                 onMouseEnter={() => setHover(i)}
               />
             </g>
@@ -489,16 +553,16 @@ function BarChart({
       </svg>
       {h && hover !== null && (
         <div
-          className="chart-tip"
+          className="pointer-events-none absolute w-[190px] rounded-md border bg-popover px-2.5 py-2 text-xs text-popover-foreground shadow-md"
           style={{
             left: Math.min(width - 190, Math.max(0, pad.left + hover * band + band / 2 - 95)),
             top: Math.max(0, Math.min(y(h.value), pad.top + plotH * 0.6) - 78),
           }}
           role="status"
         >
-          <p className="chart-tip-title">{h.key}</p>
-          <p className="chart-tip-value">{format(h.value)}</p>
-          {h.detail && <p className="chart-tip-detail">{h.detail}</p>}
+          <p className="text-muted-foreground">{h.key}</p>
+          <p className="text-[15px] font-bold tabular-nums">{format(h.value)}</p>
+          {h.detail && <p className="text-muted-foreground">{h.detail}</p>}
         </div>
       )}
     </div>
@@ -507,11 +571,19 @@ function BarChart({
 
 function ShareBar({ ratio }: { ratio: number }) {
   return (
-    <span className="share" title={formatPercent(ratio)}>
-      <span className="share-track">
-        <span className="share-fill" style={{ width: `${Math.min(100, ratio * 100)}%` }} />
+    <span
+      className="inline-flex w-full min-w-[110px] items-center gap-2"
+      title={formatPercent(ratio)}
+    >
+      <span className="h-1.5 min-w-10 flex-1 overflow-hidden rounded-full bg-muted">
+        <span
+          className="block h-full rounded-full bg-primary"
+          style={{ width: `${Math.min(100, ratio * 100)}%` }}
+        />
       </span>
-      <span className="share-text">{formatPercent(ratio, 0)}</span>
+      <span className="w-9 text-right text-xs whitespace-nowrap text-muted-foreground tabular-nums">
+        {formatPercent(ratio, 0)}
+      </span>
     </span>
   );
 }
@@ -528,11 +600,13 @@ function ByModelCard({ report }: { report: UsageReport }) {
       header: '모델',
       render: (r) => (
         <div>
-          <div className="row model-name">
-            <code className="mono">{r.model}</code>
+          <div className="flex items-center gap-1.5 [&_code]:break-normal [&_code]:whitespace-nowrap">
+            <Mono>{r.model}</Mono>
             {!r.priced && <Badge tone="warning">단가 없음</Badge>}
           </div>
-          <div className="cell-sub">{PROVIDER_LABEL[r.providerKind] ?? r.providerKind}</div>
+          <div className="text-xs text-muted-foreground">
+            {PROVIDER_LABEL[r.providerKind] ?? r.providerKind}
+          </div>
         </div>
       ),
     },
@@ -540,14 +614,14 @@ function ByModelCard({ report }: { report: UsageReport }) {
       key: 'calls',
       header: '호출',
       align: 'right',
-      render: (r) => <span className="num">{formatNumber(r.calls)}</span>,
+      render: (r) => <span className="tabular-nums">{formatNumber(r.calls)}</span>,
     },
     {
       key: 'tokens',
       header: '토큰 (입력 · 출력)',
       align: 'right',
       render: (r) => (
-        <span className="num">
+        <span className="tabular-nums">
           {compact(r.inputTokens)} · {compact(r.outputTokens)}
         </span>
       ),
@@ -556,7 +630,7 @@ function ByModelCard({ report }: { report: UsageReport }) {
       key: 'cost',
       header: '비용',
       align: 'right',
-      render: (r) => <span className="num">{money(r.cost, report.currency)}</span>,
+      render: (r) => <span className="tabular-nums">{money(r.cost, report.currency)}</span>,
     },
     {
       key: 'share',
@@ -567,7 +641,7 @@ function ByModelCard({ report }: { report: UsageReport }) {
   ];
   return (
     <Card title="모델별" flush>
-      <div className="wide-table model-table">
+      <div className="[&_table]:min-w-[640px]">
         <DataTable
           label="모델별 사용량"
           columns={columns}
@@ -587,14 +661,16 @@ function ByPurposeCard({ report }: { report: UsageReport }) {
   return (
     <Card title="용도별" description={totalCost > 0 ? '비용 비중' : '토큰 비중'}>
       {rows.length === 0 ? (
-        <p className="muted">이 기간에 기록이 없어요</p>
+        <p className="text-sm text-muted-foreground">이 기간에 기록이 없어요</p>
       ) : (
-        <ul className="purpose-list">
+        <ul className="flex flex-col gap-3.5">
           {rows.map((r) => (
             <li key={r.purpose}>
-              <div className="purpose-head">
-                <span className="purpose-name">{PURPOSE_LABEL[r.purpose] ?? r.purpose}</span>
-                <span className="num">{money(r.cost, report.currency)}</span>
+              <div className="mb-1 flex justify-between gap-2">
+                <span className="font-medium">{PURPOSE_LABEL[r.purpose] ?? r.purpose}</span>
+                <span className="whitespace-nowrap tabular-nums">
+                  {money(r.cost, report.currency)}
+                </span>
               </div>
               <ShareBar
                 ratio={
@@ -605,7 +681,7 @@ function ByPurposeCard({ report }: { report: UsageReport }) {
                       : 0
                 }
               />
-              <p className="cell-sub">
+              <p className="mt-0.5 text-xs text-muted-foreground">
                 {r.purpose === 'memory'
                   ? '작업이 끝난 뒤 기억할 내용 추리기'
                   : '계획 · 실행 · 답변 · 검증'}{' '}
@@ -761,6 +837,7 @@ function PricesCard({
                 save.reset();
               }}
             >
+              <RotateCcwIcon aria-hidden="true" />
               되돌리기
             </Button>
             <Button loading={save.pending} disabled={!dirty} onClick={() => void submit()}>
@@ -773,113 +850,117 @@ function PricesCard({
       {prices.loading && !prices.data ? (
         <Loading />
       ) : (
-        <>
+        <TooltipProvider>
           <ErrorNotice error={prices.error} onRetry={() => void prices.reload()} />
           {editable && missing.length > 0 && (
             <Notice tone="warn">
-              <span>
-                단가가 없는 모델 {missing.length}개: {missing.map((m) => m.model).join(', ')}
-              </span>
-              <Button variant="outline" size="sm" onClick={() => addRows(missing)}>
-                줄 추가
-              </Button>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span>
+                  단가가 없는 모델 {missing.length}개: {missing.map((m) => m.model).join(', ')}
+                </span>
+                <Button variant="outline" size="sm" onClick={() => addRows(missing)}>
+                  <PlusIcon aria-hidden="true" />줄 추가
+                </Button>
+              </div>
             </Notice>
           )}
-          <div className="table-wrap">
-            <table className="table price-table" aria-label="모델 단가">
-              <thead>
-                <tr>
-                  <th>Provider</th>
-                  <th>모델</th>
-                  <th className="num">입력</th>
-                  <th className="num">캐시 입력</th>
-                  <th className="num">출력</th>
-                  {editable && <th />}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r, i) => (
-                  <tr key={i}>
-                    <td>
-                      <select
-                        className="input"
-                        aria-label={`${i + 1}번째 provider`}
-                        value={r.providerKind}
+          <Table aria-label="모델 단가" className="min-w-[620px]">
+            <TableHeader className="bg-muted/50 [&_th]:text-xs [&_th]:text-muted-foreground">
+              <TableRow>
+                <TableHead>Provider</TableHead>
+                <TableHead>모델</TableHead>
+                <TableHead className="text-right">입력</TableHead>
+                <TableHead className="text-right">캐시 입력</TableHead>
+                <TableHead className="text-right">출력</TableHead>
+                {editable && <TableHead className="w-10" />}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((r, i) => (
+                <TableRow key={i} className="hover:bg-transparent">
+                  <TableCell className="px-2 py-1.5">
+                    <NativeSelect
+                      containerClassName="min-w-[130px]"
+                      aria-label={`${i + 1}번째 provider`}
+                      value={r.providerKind}
+                      disabled={!editable}
+                      onChange={(e) => change(i, { providerKind: e.target.value as ProviderKind })}
+                    >
+                      {PROVIDER_KINDS.map((k) => (
+                        <NativeSelectOption key={k} value={k}>
+                          {PROVIDER_LABEL[k]}
+                        </NativeSelectOption>
+                      ))}
+                    </NativeSelect>
+                  </TableCell>
+                  <TableCell className="px-2 py-1.5">
+                    <Input
+                      className="min-w-40 font-mono text-[12.5px]"
+                      aria-label={`${i + 1}번째 모델`}
+                      value={r.model}
+                      disabled={!editable}
+                      placeholder="deepseek-chat"
+                      onChange={(e) => change(i, { model: e.target.value })}
+                    />
+                  </TableCell>
+                  {(['input', 'cached', 'output'] as const).map((f) => (
+                    <TableCell key={f} className="px-2 py-1.5">
+                      <Input
+                        className="min-w-20 text-right tabular-nums"
+                        inputMode="decimal"
+                        aria-label={`${i + 1}번째 ${f === 'input' ? '입력' : f === 'cached' ? '캐시 입력' : '출력'} 단가`}
+                        value={r[f]}
                         disabled={!editable}
-                        onChange={(e) =>
-                          change(i, { providerKind: e.target.value as ProviderKind })
-                        }
-                      >
-                        {PROVIDER_KINDS.map((k) => (
-                          <option key={k} value={k}>
-                            {PROVIDER_LABEL[k]}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td>
-                      <input
-                        className="input mono-input"
-                        aria-label={`${i + 1}번째 모델`}
-                        value={r.model}
-                        disabled={!editable}
-                        placeholder="deepseek-chat"
-                        onChange={(e) => change(i, { model: e.target.value })}
+                        placeholder={f === 'cached' ? '없음' : '0.00'}
+                        onChange={(e) => change(i, { [f]: e.target.value })}
                       />
-                    </td>
-                    {(['input', 'cached', 'output'] as const).map((f) => (
-                      <td key={f}>
-                        <input
-                          className="input num-input"
-                          inputMode="decimal"
-                          aria-label={`${i + 1}번째 ${f === 'input' ? '입력' : f === 'cached' ? '캐시 입력' : '출력'} 단가`}
-                          value={r[f]}
-                          disabled={!editable}
-                          placeholder={f === 'cached' ? '없음' : '0.00'}
-                          onChange={(e) => change(i, { [f]: e.target.value })}
-                        />
-                      </td>
-                    ))}
-                    {editable && (
-                      <td>
-                        <button
-                          type="button"
-                          className="row-remove"
-                          aria-label={`${r.model || `${i + 1}번째`} 단가 삭제`}
-                          onClick={() => {
-                            setRows((prev) => prev.filter((_, j) => j !== i));
-                            setDirty(true);
-                          }}
-                        >
-                          ×
-                        </button>
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {rows.length === 0 && (
-              <div className="table-empty">
-                등록한 단가가 없어요 — 모든 호출이 비용 0 으로 기록됩니다.
-              </div>
-            )}
-          </div>
-          <div className="price-foot">
+                    </TableCell>
+                  ))}
+                  {editable && (
+                    <TableCell className="px-2 py-1.5">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            className="text-muted-foreground"
+                            aria-label={`${r.model || `${i + 1}번째`} 단가 삭제`}
+                            onClick={() => {
+                              setRows((prev) => prev.filter((_, j) => j !== i));
+                              setDirty(true);
+                            }}
+                          >
+                            <XIcon aria-hidden="true" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>단가 삭제</TooltipContent>
+                      </Tooltip>
+                    </TableCell>
+                  )}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+          {rows.length === 0 && (
+            <div className="px-4 py-6 text-center text-sm text-muted-foreground">
+              등록한 단가가 없어요 — 모든 호출이 비용 0 으로 기록됩니다.
+            </div>
+          )}
+          <div className="my-2.5 flex items-center gap-2">
             {editable && (
               <Button
                 size="sm"
                 variant="ghost"
                 onClick={() => addRows([{ providerKind: 'openai', model: '' }])}
               >
-                + 단가 추가
+                <PlusIcon aria-hidden="true" />
+                단가 추가
               </Button>
             )}
-            <span className="spacer" />
-            <label className="currency">
-              <span className="muted small">통화</span>
-              <input
-                className="input"
+            <label className="ml-auto inline-flex items-center gap-1.5">
+              <span className="text-xs text-muted-foreground">통화</span>
+              <Input
+                className="w-[70px] uppercase"
                 value={currency}
                 maxLength={3}
                 disabled={!editable}
@@ -899,9 +980,11 @@ function PricesCard({
             </Notice>
           ))}
           {save.error && serverIssues.length === 0 && <ErrorNotice error={save.error} />}
-          {!editable && <p className="muted small">단가는 Admin 이상만 바꿀 수 있어요.</p>}
+          {!editable && (
+            <p className="text-xs text-muted-foreground">단가는 Admin 이상만 바꿀 수 있어요.</p>
+          )}
           {prices.data && prices.data.length > 0 && (
-            <p className="muted small">
+            <p className="text-xs text-muted-foreground">
               마지막 변경{' '}
               <Time
                 iso={
@@ -913,7 +996,7 @@ function PricesCard({
               />
             </p>
           )}
-        </>
+        </TooltipProvider>
       )}
     </Card>
   );
@@ -958,8 +1041,8 @@ function BudgetCard({ report, onSaved }: { report: UsageReport | undefined; onSa
       {!budget ? (
         <Loading />
       ) : (
-        <div className="stack">
-          <p className="budget-now">
+        <div className="flex flex-col gap-3">
+          <p className="text-sm">
             이번 달 <strong>{money(budget.monthToDate, budget.currency)}</strong>
             {budget.monthlyBudget !== null ? (
               <>
@@ -975,14 +1058,14 @@ function BudgetCard({ report, onSaved }: { report: UsageReport | undefined; onSa
           </p>
           {owner ? (
             <>
-              <div className="budget-form">
+              <div className="grid grid-cols-[minmax(0,1fr)_90px] gap-x-2.5 gap-y-0">
                 <Field
                   label="월 한도"
                   hint="비우면 한도 없음"
                   error={invalid ? '0 이상의 숫자여야 해요' : undefined}
                 >
-                  <input
-                    className="input num-input"
+                  <Input
+                    className="text-right tabular-nums"
                     inputMode="decimal"
                     value={amount}
                     placeholder="한도 없음"
@@ -990,15 +1073,15 @@ function BudgetCard({ report, onSaved }: { report: UsageReport | undefined; onSa
                   />
                 </Field>
                 <Field label="통화">
-                  <input
-                    className="input"
+                  <Input
+                    className="uppercase"
                     value={currency}
                     maxLength={3}
                     onChange={(e) => setCurrency(e.target.value.toUpperCase())}
                   />
                 </Field>
               </div>
-              <div className="row">
+              <div className="flex flex-wrap items-center gap-2">
                 <Button
                   loading={save.pending}
                   disabled={invalid || unchanged || !/^[A-Z]{3}$/.test(currency)}
@@ -1019,7 +1102,7 @@ function BudgetCard({ report, onSaved }: { report: UsageReport | undefined; onSa
               <ErrorNotice error={save.error} />
             </>
           ) : (
-            <p className="muted small">월 한도는 Owner 만 바꿀 수 있어요.</p>
+            <p className="text-xs text-muted-foreground">월 한도는 Owner 만 바꿀 수 있어요.</p>
           )}
         </div>
       )}

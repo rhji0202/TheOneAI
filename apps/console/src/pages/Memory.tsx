@@ -3,6 +3,7 @@
  * 출처 추적, 격리 해제 · 편집(재임베딩) · 고정 · 삭제, 사용자 데이터 삭제.
  * API: docs/api-spec.md §4.8 (/v1/admin/memories…, /v1/admin/end-users/:id/erase)
  */
+import { PencilIcon, SearchIcon, Trash2Icon, UserXIcon, XIcon } from 'lucide-react';
 import { type FormEvent, useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { formatDateTime, formatPercent } from '../../../shared/format';
@@ -26,13 +27,16 @@ import {
   pseudonym,
   Tabs,
   Time,
-  Toolbar,
   useAction,
   usePaged,
   useQuery,
   useToast,
 } from '../ui';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
+import { Textarea } from '@/components/ui/textarea';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 
 /* ───────────── 타입 (src/memory/admin/memories-admin.service.ts) ───────────── */
 
@@ -86,6 +90,7 @@ const SOURCE_LABEL: Record<string, string> = {
 };
 
 type StatusTab = 'active' | 'quarantined';
+type SearchMode = 'semantic' | 'keyword';
 
 /** 만료까지 남은 기간 — "45일 후" */
 function untilLabel(iso: string | null, pinned: boolean): string {
@@ -111,12 +116,12 @@ export function MemoryPage() {
 
   // 검색 조건 — 입력 중인 값과 실행한 값을 나눠 둔다
   const [text, setText] = useState('');
-  const [mode, setMode] = useState<'semantic' | 'keyword'>('semantic');
+  const [mode, setMode] = useState<SearchMode>('semantic');
   const [type, setType] = useState<MemoryType | ''>('');
   const [scope, setScope] = useState<MemoryScope | ''>('');
   const [search, setSearch] = useState<{
     q: string;
-    mode: 'semantic' | 'keyword';
+    mode: SearchMode;
     agentId: string;
     type: MemoryType | '';
     scope: MemoryScope | '';
@@ -186,82 +191,82 @@ export function MemoryPage() {
         title="Memory 탐색"
         description="Agent 가 대화에서 기억한 사용자 사실 · 대화 요약 · 처리 요령입니다. 검색은 Agent 가 Context 를 만들 때와 같은 방식으로 찾아요."
       />
-      <Card className="memory-search">
-        <form className="memory-search-form" onSubmit={submit} role="search">
-          <select
-            className="input"
+      <Card>
+        <form className="mb-2.5 flex flex-wrap gap-2" onSubmit={submit} role="search">
+          <NativeSelect
+            containerClassName="w-auto max-w-[220px]"
             aria-label="Agent"
             value={agentId}
             onChange={(e) => setAgentId(e.target.value)}
           >
             {(agents.data ?? []).map((a) => (
-              <option key={a.id} value={a.id}>
+              <NativeSelectOption key={a.id} value={a.id}>
                 {a.name}
-              </option>
+              </NativeSelectOption>
             ))}
-          </select>
-          <input
-            type="search"
-            className="input memory-q"
-            aria-label="기억 검색어"
-            placeholder={
-              mode === 'semantic'
-                ? '무엇을 떠올리는지 확인할 문장 — 예: 배송 주소 바꾸는 방법'
-                : '포함된 단어 — 예: 환불'
-            }
-            value={text}
-            onChange={(e) => {
-              setText(e.target.value);
-              if (!e.target.value) setSearch(null);
-            }}
-          />
-          <div className="segmented" role="group" aria-label="검색 방식">
-            <button
-              type="button"
-              aria-pressed={mode === 'semantic'}
-              onClick={() => setMode('semantic')}
-            >
-              의미
-            </button>
-            <button
-              type="button"
-              aria-pressed={mode === 'keyword'}
-              onClick={() => setMode('keyword')}
-            >
-              키워드
-            </button>
+          </NativeSelect>
+          <div className="relative min-w-0 flex-[1_1_320px]">
+            <SearchIcon
+              className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
+              aria-hidden="true"
+            />
+            <Input
+              type="search"
+              className="pl-8"
+              aria-label="기억 검색어"
+              placeholder={
+                mode === 'semantic'
+                  ? '무엇을 떠올리는지 확인할 문장 — 예: 배송 주소 바꾸는 방법'
+                  : '포함된 단어 — 예: 환불'
+              }
+              value={text}
+              onChange={(e) => {
+                setText(e.target.value);
+                if (!e.target.value) setSearch(null);
+              }}
+            />
           </div>
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            aria-label="검색 방식"
+            value={mode}
+            onValueChange={(v) => v && setMode(v as SearchMode)}
+          >
+            <ToggleGroupItem value="semantic">의미</ToggleGroupItem>
+            <ToggleGroupItem value="keyword">키워드</ToggleGroupItem>
+          </ToggleGroup>
           <Button type="submit" disabled={!text.trim() || !agentId}>
             검색
           </Button>
         </form>
-        <Toolbar>
-          <select
-            className="input"
+        <div className="flex flex-wrap items-center gap-2">
+          <NativeSelect
+            containerClassName="w-auto"
             aria-label="종류"
             value={type}
             onChange={(e) => setType(e.target.value as MemoryType | '')}
           >
-            <option value="">모든 종류</option>
+            <NativeSelectOption value="">모든 종류</NativeSelectOption>
             {(Object.keys(TYPE_LABEL) as MemoryType[]).map((t) => (
-              <option key={t} value={t}>
+              <NativeSelectOption key={t} value={t}>
                 {TYPE_LABEL[t]}
-              </option>
+              </NativeSelectOption>
             ))}
-          </select>
-          <select
-            className="input"
+          </NativeSelect>
+          <NativeSelect
+            containerClassName="w-auto"
             aria-label="범위"
             value={scope}
             onChange={(e) => setScope(e.target.value as MemoryScope | '')}
           >
-            <option value="">모든 범위</option>
-            <option value="user">사용자별</option>
-            <option value="agent">Agent 공통</option>
-          </select>
+            <NativeSelectOption value="">모든 범위</NativeSelectOption>
+            <NativeSelectOption value="user">사용자별</NativeSelectOption>
+            <NativeSelectOption value="agent">Agent 공통</NativeSelectOption>
+          </NativeSelect>
           {searching && (
             <>
-              <span className="muted">
+              <span className="text-sm text-muted-foreground">
                 “{search.q}” {search.mode === 'semantic' ? '의미' : '키워드'} 검색 결과{' '}
                 {results.data ? `${results.data.length}건` : ''}
               </span>
@@ -273,13 +278,14 @@ export function MemoryPage() {
                   setSearch(null);
                 }}
               >
+                <XIcon aria-hidden="true" />
                 검색 지우기
               </Button>
             </>
           )}
-        </Toolbar>
+        </div>
         {searching && (
-          <p className="muted small">
+          <p className="mt-2 text-xs text-muted-foreground">
             검색은 활성 기억만 찾아요 — 격리된 기억은 Agent 가 떠올리지 않습니다.
           </p>
         )}
@@ -365,7 +371,9 @@ function MemoryTable({
             width: '72px',
             align: 'right' as const,
             render: (m: MemoryView) => (
-              <span className="num">{m.score !== undefined ? m.score.toFixed(2) : '—'}</span>
+              <span className="tabular-nums">
+                {m.score !== undefined ? m.score.toFixed(2) : '—'}
+              </span>
             ),
           },
         ]
@@ -374,17 +382,19 @@ function MemoryTable({
       key: 'content',
       header: '내용',
       render: (m) => (
-        <div className="memory-content">
-          <div className="row memory-flags">
+        <div className="max-w-[560px] min-w-[260px] whitespace-normal">
+          <div className="mb-1 flex flex-wrap items-center gap-1">
             <Badge tone={TYPE_TONE[m.type]}>{TYPE_LABEL[m.type]}</Badge>
             {m.pinned && <Badge tone="neutral">고정</Badge>}
             {m.status === 'quarantined' && <Badge tone="danger">격리</Badge>}
             {m.needsVerification && <Badge tone="warning">검증 필요</Badge>}
           </div>
-          {m.title && <p className="memory-title">{m.title}</p>}
-          <p className="memory-text">{m.content}</p>
+          {m.title && <p className="font-semibold">{m.title}</p>}
+          <p className="line-clamp-2 break-words">{m.content}</p>
           {m.status === 'quarantined' && m.quarantineReason && (
-            <p className="memory-quarantine">격리 사유: {m.quarantineReason}</p>
+            <p className="mt-1 text-xs text-red-700 dark:text-red-400">
+              격리 사유: {m.quarantineReason}
+            </p>
           )}
         </div>
       ),
@@ -395,7 +405,7 @@ function MemoryTable({
       width: '120px',
       render: (m) =>
         m.scope === 'user' ? (
-          <span className="ident">
+          <span className="[&_code]:break-normal [&_code]:whitespace-nowrap">
             <Mono>{m.endUserPseudonym ?? pseudonym(m.endUserId)}</Mono>
           </span>
         ) : (
@@ -407,7 +417,7 @@ function MemoryTable({
       header: '확신도',
       width: '80px',
       align: 'right',
-      render: (m) => <span className="num">{formatPercent(m.confidence, 0)}</span>,
+      render: (m) => <span className="tabular-nums">{formatPercent(m.confidence, 0)}</span>,
     },
     {
       key: 'uses',
@@ -415,8 +425,8 @@ function MemoryTable({
       width: '110px',
       render: (m) => (
         <div>
-          <span className="num">{m.useCount}회</span>
-          <div className="cell-sub">
+          <span className="tabular-nums">{m.useCount}회</span>
+          <div className="text-xs text-muted-foreground">
             {m.lastUsedAt ? <Time iso={m.lastUsedAt} /> : '아직 안 씀'}
           </div>
         </div>
@@ -429,7 +439,7 @@ function MemoryTable({
       render: (m) => (
         <div>
           <span>{SOURCE_LABEL[m.source.type] ?? m.source.type}</span>
-          <div className="cell-sub">
+          <div className="text-xs text-muted-foreground">
             {m.source.taskIds.length > 0 ? `작업 ${m.source.taskIds.length}건` : '—'}
           </div>
         </div>
@@ -439,11 +449,13 @@ function MemoryTable({
       key: 'expires',
       header: '보존',
       width: '120px',
-      render: (m) => <span className="cell-sub">{untilLabel(m.expiresAt, m.pinned)}</span>,
+      render: (m) => (
+        <span className="text-xs text-muted-foreground">{untilLabel(m.expiresAt, m.pinned)}</span>
+      ),
     },
   ];
   return (
-    <div className="wide-table memory-table">
+    <div className="[&_table]:min-w-[900px]">
       <DataTable
         label="기억 목록"
         columns={columns}
@@ -537,10 +549,14 @@ function MemoryDetail({
           <>
             {admin && !editing && (
               <>
-                <Button variant="destructive" onClick={() => setConfirmDelete(true)}>
+                <Button
+                  variant="destructive"
+                  className="sm:mr-auto"
+                  onClick={() => setConfirmDelete(true)}
+                >
+                  <Trash2Icon aria-hidden="true" />
                   삭제
                 </Button>
-                <span className="spacer" />
                 {m.status === 'quarantined' && (
                   <Button
                     variant="outline"
@@ -567,7 +583,10 @@ function MemoryDetail({
                 >
                   {m.pinned ? '고정 해제' : '고정'}
                 </Button>
-                <Button onClick={() => setEditing(true)}>편집</Button>
+                <Button onClick={() => setEditing(true)}>
+                  <PencilIcon aria-hidden="true" />
+                  편집
+                </Button>
               </>
             )}
             {admin && editing && (
@@ -600,8 +619,8 @@ function MemoryDetail({
           </>
         }
       >
-        <div className="stack">
-          <div className="row">
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center gap-2">
             <Badge tone={TYPE_TONE[m.type]}>{TYPE_LABEL[m.type]}</Badge>
             {m.status === 'quarantined' ? (
               <Badge tone="danger">격리됨</Badge>
@@ -611,7 +630,7 @@ function MemoryDetail({
             {m.pinned && <Badge>고정</Badge>}
             {m.needsVerification && <Badge tone="warning">검증 필요</Badge>}
             {m.score !== undefined && (
-              <span className="muted small">유사도 {m.score.toFixed(3)}</span>
+              <span className="text-xs text-muted-foreground">유사도 {m.score.toFixed(3)}</span>
             )}
           </div>
           {m.status === 'quarantined' && (
@@ -622,20 +641,14 @@ function MemoryDetail({
           {editing ? (
             <>
               <Field label="제목" hint="60자 이내 (비우면 제목 없음)">
-                <input
-                  className="input"
-                  value={title}
-                  maxLength={60}
-                  onChange={(e) => setTitle(e.target.value)}
-                />
+                <Input value={title} maxLength={60} onChange={(e) => setTitle(e.target.value)} />
               </Field>
               <Field
                 label="내용"
                 hint="내용을 바꾸면 저장할 때 다시 임베딩해요 (1,000자 이내)"
                 required
               >
-                <textarea
-                  className="input"
+                <Textarea
                   rows={5}
                   maxLength={1000}
                   value={content}
@@ -644,9 +657,9 @@ function MemoryDetail({
               </Field>
             </>
           ) : (
-            <div className="memory-detail-body">
-              {m.title && <p className="memory-title">{m.title}</p>}
-              <p className="memory-detail-text">{m.content}</p>
+            <div className="rounded-lg border bg-muted/50 px-3.5 py-3">
+              {m.title && <p className="font-semibold">{m.title}</p>}
+              <p className="leading-relaxed break-words whitespace-pre-wrap">{m.content}</p>
             </div>
           )}
           <ErrorNotice error={error} />
@@ -655,11 +668,11 @@ function MemoryDetail({
               [
                 '범위',
                 m.scope === 'user' ? (
-                  <span className="row">
+                  <span className="inline-flex flex-wrap items-center gap-2">
                     사용자별 <Mono>{m.endUserPseudonym ?? pseudonym(m.endUserId)}</Mono>
                     {admin && m.endUserId && (
                       <Button size="sm" variant="ghost" onClick={() => setConfirmErase(true)}>
-                        이 사용자 데이터 삭제
+                        <UserXIcon aria-hidden="true" />이 사용자 데이터 삭제
                       </Button>
                     )}
                   </span>
@@ -675,9 +688,9 @@ function MemoryDetail({
               [
                 '출처 작업',
                 m.source.taskIds.length > 0 ? (
-                  <span className="source-links">
+                  <span className="inline-flex flex-wrap gap-1.5">
                     {m.source.taskIds.map((id) => (
-                      <Link key={id} to={`/tasks/${id}`}>
+                      <Link key={id} to={`/tasks/${id}`} className="text-primary hover:underline">
                         <Mono title={id}>{id.slice(0, 8)}</Mono>
                       </Link>
                     ))}
@@ -689,7 +702,12 @@ function MemoryDetail({
               [
                 '출처 대화',
                 m.source.conversationId ? (
-                  <Link to={`/conversations/${m.source.conversationId}`}>대화 보기</Link>
+                  <Link
+                    to={`/conversations/${m.source.conversationId}`}
+                    className="text-primary hover:underline"
+                  >
+                    대화 보기
+                  </Link>
                 ) : (
                   '—'
                 ),
@@ -710,7 +728,11 @@ function MemoryDetail({
               ['ID', <Mono>{m.id}</Mono>],
             ]}
           />
-          {!admin && <p className="muted small">기억을 바꾸거나 지우려면 Admin 권한이 필요해요.</p>}
+          {!admin && (
+            <p className="text-xs text-muted-foreground">
+              기억을 바꾸거나 지우려면 Admin 권한이 필요해요.
+            </p>
+          )}
         </div>
       </Modal>
       <ConfirmModal
@@ -799,19 +821,19 @@ function EraseUserModal({
         </>
       }
     >
-      <div className="stack">
+      <div className="flex flex-col gap-3">
         <Notice tone="error">
           <span>
             <Mono>{name}</Mono> 사용자의 기억 · 대화 · 작업 · 산출물 · 피드백을 모두 지우고 외부 ID
             연결을 끊어요. 같은 사람이 다시 오면 새 사용자로 시작합니다. 되돌릴 수 없어요.
           </span>
         </Notice>
-        <p className="muted small">
+        <p className="text-xs text-muted-foreground">
           삭제 기록은 감사 로그에 남아요 (지운 건수만, 내용은 남기지 않음).
         </p>
         <Field label={`확인을 위해 ${name} 을(를) 입력하세요`} required>
-          <input
-            className="input mono-input"
+          <Input
+            className="font-mono text-[12.5px]"
             value={typed}
             autoComplete="off"
             onChange={(e) => setTyped(e.target.value)}

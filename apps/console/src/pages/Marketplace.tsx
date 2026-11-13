@@ -2,6 +2,15 @@
  * 마켓플레이스 (P2) — Skill · MCP 서버 템플릿 공유. 목록 · 상세(버전 · 서명 · 파일) · 설치 · 게시 · 철회.
  * API: /v1/admin/marketplace/… (src/marketplace/marketplace.controller.ts)
  */
+import {
+  ArrowRightIcon,
+  PuzzleIcon,
+  SearchIcon,
+  ServerIcon,
+  ShieldAlertIcon,
+  ShieldCheckIcon,
+  UploadIcon,
+} from 'lucide-react';
 import { type FormEvent, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { formatBytes, formatDateTime, formatNumber } from '../../../shared/format';
@@ -23,11 +32,25 @@ import {
   PageHeader,
   Tabs,
   Time,
+  TONE_CLASS,
   useAction,
   useQuery,
   useToast,
 } from '../ui';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { Textarea } from '@/components/ui/textarea';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { cn } from '@/lib/utils';
 
 /* ───────────── 타입 (src/marketplace/marketplace.service.ts) ───────────── */
 
@@ -122,6 +145,9 @@ interface McpServerSummary {
 
 type TabId = 'skill' | 'mcp' | 'mine';
 
+const KIND_ICON = { skill: PuzzleIcon, mcp: ServerIcon } as const;
+const KIND_TONE = { skill: 'purple', mcp: 'info' } as const;
+
 const isSkillManifest = (m: SkillManifest | McpManifest): m is SkillManifest => 'files' in m;
 const shortHash = (h: string) => `${h.slice(0, 12)}…`;
 
@@ -156,7 +182,12 @@ export function MarketplacePage() {
         title="마켓플레이스"
         description="검증을 통과한 Skill 과 MCP 서버 연결 템플릿을 다른 워크스페이스와 공유해요. 모든 항목은 플랫폼 키로 서명되고, 설치할 때 서명과 파일 해시를 다시 확인합니다."
         actions={
-          can('admin') ? <Button onClick={() => setPublishing(true)}>게시하기</Button> : undefined
+          can('admin') ? (
+            <Button onClick={() => setPublishing(true)}>
+              <UploadIcon aria-hidden="true" />
+              게시하기
+            </Button>
+          ) : undefined
         }
       />
       <Tabs<TabId>
@@ -169,18 +200,24 @@ export function MarketplacePage() {
           { id: 'mine', label: '내 게시물' },
         ]}
       />
-      <form className="toolbar" onSubmit={onSearch} role="search">
-        <input
-          type="search"
-          className="input search"
-          aria-label="마켓플레이스 검색"
-          placeholder="이름 · 제목 · 설명"
-          value={qInput}
-          onChange={(e) => {
-            setQInput(e.target.value);
-            if (!e.target.value) setQ('');
-          }}
-        />
+      <form className="mb-3 flex flex-wrap items-center gap-2" onSubmit={onSearch} role="search">
+        <div className="relative w-full max-w-xs">
+          <SearchIcon
+            className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
+            aria-hidden="true"
+          />
+          <Input
+            type="search"
+            className="pl-8"
+            aria-label="마켓플레이스 검색"
+            placeholder="이름 · 제목 · 설명"
+            value={qInput}
+            onChange={(e) => {
+              setQInput(e.target.value);
+              if (!e.target.value) setQ('');
+            }}
+          />
+        </div>
         <Button variant="outline" type="submit">
           검색
         </Button>
@@ -207,7 +244,7 @@ export function MarketplacePage() {
           </Empty>
         </Card>
       ) : (
-        <div className="listing-grid">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
           {items.map((l) => (
             <ListingCard key={l.id} listing={l} onOpen={() => setOpenId(l.id)} />
           ))}
@@ -235,26 +272,39 @@ export function MarketplacePage() {
 }
 
 function ListingCard({ listing, onOpen }: { listing: ListingView; onOpen: () => void }) {
+  const Icon = KIND_ICON[listing.kind];
   return (
-    <button type="button" className="listing-card" onClick={onOpen}>
-      <div className="listing-card-head">
-        <span className={`listing-icon ${listing.kind}`} aria-hidden="true">
-          {listing.kind === 'skill' ? 'S' : 'M'}
+    <button
+      type="button"
+      className="flex min-w-0 flex-col gap-2.5 rounded-xl border bg-card p-4 text-left text-card-foreground shadow-sm transition-colors outline-none hover:border-primary focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      onClick={onOpen}
+    >
+      <div className="flex min-w-0 items-center gap-2.5">
+        <span
+          className={cn(
+            'grid size-9 shrink-0 place-items-center rounded-lg',
+            TONE_CLASS[KIND_TONE[listing.kind]],
+          )}
+          aria-hidden="true"
+        >
+          <Icon className="size-[18px]" />
         </span>
-        <div className="listing-card-titles">
-          <p className="listing-title">{listing.title || listing.name}</p>
-          <p className="listing-name">
+        <div className="min-w-0">
+          <p className="truncate font-semibold">{listing.title || listing.name}</p>
+          <p className="[&_code]:text-xs">
             <Mono>{listing.name}</Mono>
           </p>
         </div>
       </div>
-      <p className="listing-desc">{listing.description || '설명이 없어요'}</p>
-      <div className="listing-badges">
+      <p className="line-clamp-2 min-h-10 text-sm text-muted-foreground">
+        {listing.description || '설명이 없어요'}
+      </p>
+      <div className="flex min-h-[22px] flex-wrap gap-1">
         {listing.status === 'withdrawn' && <Badge tone="danger">철회됨</Badge>}
         {listing.installed && <Badge tone="success">설치됨</Badge>}
         {listing.mine && <Badge tone="info">내 게시물</Badge>}
       </div>
-      <div className="listing-foot">
+      <div className="flex flex-wrap gap-x-3 gap-y-1 border-t pt-2 text-xs text-muted-foreground">
         <span>{listing.publisher}</span>
         <span>v{listing.latestVersion}</span>
         <span>설치 {formatNumber(listing.installCount)}</span>
@@ -333,11 +383,14 @@ function ListingModal({
           d && (
             <>
               {d.mine && d.status === 'published' && can('admin') && (
-                <Button variant="destructive" onClick={() => setWithdrawing(true)}>
+                <Button
+                  variant="destructive"
+                  className="sm:mr-auto"
+                  onClick={() => setWithdrawing(true)}
+                >
                   게시 철회
                 </Button>
               )}
-              <span className="spacer" />
               <Button variant="outline" onClick={onClose}>
                 닫기
               </Button>
@@ -359,19 +412,27 @@ function ListingModal({
         ) : detail.error ? (
           <ErrorNotice error={detail.error} onRetry={() => void detail.reload()} />
         ) : d ? (
-          <div className="stack">
-            <div className="row">
-              <Badge tone={d.kind === 'skill' ? 'purple' : 'info'}>
-                {d.kind === 'skill' ? 'Skill' : 'MCP 템플릿'}
-              </Badge>
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge tone={KIND_TONE[d.kind]}>{d.kind === 'skill' ? 'Skill' : 'MCP 템플릿'}</Badge>
               <Mono>{d.name}</Mono>
               {d.status === 'withdrawn' && <Badge tone="danger">철회됨</Badge>}
               {d.installed && <Badge tone="success">설치됨</Badge>}
               {d.mine && <Badge tone="info">내 게시물</Badge>}
-              {latestValid === true && <Badge tone="success">✓ 서명 확인됨</Badge>}
-              {latestValid === false && <Badge tone="danger">서명 불일치</Badge>}
+              {latestValid === true && (
+                <Badge tone="success">
+                  <ShieldCheckIcon aria-hidden="true" />
+                  서명 확인됨
+                </Badge>
+              )}
+              {latestValid === false && (
+                <Badge tone="danger">
+                  <ShieldAlertIcon aria-hidden="true" />
+                  서명 불일치
+                </Badge>
+              )}
             </div>
-            <p className="listing-detail-desc">{d.description}</p>
+            <p className="whitespace-pre-wrap text-muted-foreground">{d.description}</p>
             {result && (
               <InstallResultNotice
                 result={result}
@@ -381,29 +442,29 @@ function ListingModal({
             <ErrorNotice error={installError(install.error)} />
             {!result && can('admin') && d.status === 'published' && d.versions.length > 1 && (
               <Field label="설치할 버전">
-                <select
-                  className="input"
-                  value={version}
-                  onChange={(e) => setVersion(e.target.value)}
-                >
+                <NativeSelect value={version} onChange={(e) => setVersion(e.target.value)}>
                   {d.versions.map((v) => (
-                    <option key={v.version} value={v.version} disabled={!v.signatureValid}>
+                    <NativeSelectOption
+                      key={v.version}
+                      value={v.version}
+                      disabled={!v.signatureValid}
+                    >
                       v{v.version}
                       {v.version === d.latestVersion ? ' (최신)' : ''}
                       {!v.signatureValid ? ' — 서명 불일치' : ''}
-                    </option>
+                    </NativeSelectOption>
                   ))}
-                </select>
+                </NativeSelect>
               </Field>
             )}
             {d.kind === 'skill' && !result && (
-              <p className="muted small">
+              <p className="text-xs text-muted-foreground">
                 설치하면 업로드와 같은 검사(SKILL.md · 신뢰 검증)를 거쳐 검토 대기 버전이 돼요.
                 활성화는 Skill 화면에서 운영자가 합니다.
               </p>
             )}
             {d.kind === 'mcp' && !result && (
-              <p className="muted small">
+              <p className="text-xs text-muted-foreground">
                 템플릿에는 연결 정보와 Tool 목록만 있어요(비밀값 없음). 가져온 뒤 등록 마법사에서
                 API Key 입력 · 연결 테스트 · Tool 검증을 거쳐 등록합니다.
               </p>
@@ -422,46 +483,46 @@ function ListingModal({
               <McpContents manifest={d.latest} />
             )}
             <section>
-              <h3 className="section-title">버전 · 서명</h3>
-              <div className="table-wrap">
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>버전</th>
-                      <th>게시</th>
-                      <th>내용 해시</th>
-                      <th>서명 키</th>
-                      <th>서명</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {d.versions.map((v) => (
-                      <tr key={v.version}>
-                        <td>
-                          <strong>v{v.version}</strong>
-                          {v.description && <div className="cell-sub">{v.description}</div>}
-                        </td>
-                        <td>
-                          <Time iso={v.publishedAt} />
-                        </td>
-                        <td>
-                          <Mono title={v.contentHash}>{shortHash(v.contentHash)}</Mono>
-                        </td>
-                        <td>
-                          <Mono>{v.keyId}</Mono>
-                        </td>
-                        <td>
-                          {v.signatureValid ? (
-                            <Badge tone="success">확인됨</Badge>
-                          ) : (
-                            <Badge tone="danger">불일치</Badge>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <SectionTitle>버전 · 서명</SectionTitle>
+              <Table aria-label="버전 · 서명">
+                <TableHeader className="bg-muted/50 [&_th]:text-xs [&_th]:text-muted-foreground">
+                  <TableRow>
+                    <TableHead>버전</TableHead>
+                    <TableHead>게시</TableHead>
+                    <TableHead>내용 해시</TableHead>
+                    <TableHead>서명 키</TableHead>
+                    <TableHead>서명</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {d.versions.map((v) => (
+                    <TableRow key={v.version}>
+                      <TableCell className="whitespace-normal">
+                        <strong>v{v.version}</strong>
+                        {v.description && (
+                          <div className="text-xs text-muted-foreground">{v.description}</div>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Time iso={v.publishedAt} />
+                      </TableCell>
+                      <TableCell>
+                        <Mono title={v.contentHash}>{shortHash(v.contentHash)}</Mono>
+                      </TableCell>
+                      <TableCell>
+                        <Mono>{v.keyId}</Mono>
+                      </TableCell>
+                      <TableCell>
+                        {v.signatureValid ? (
+                          <Badge tone="success">확인됨</Badge>
+                        ) : (
+                          <Badge tone="danger">불일치</Badge>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             </section>
           </div>
         ) : null}
@@ -501,26 +562,35 @@ function InstallResultNotice({
   if (result.kind === 'mcp') {
     return (
       <Notice tone="success">
-        <span>
-          템플릿 v{result.version} 을 가져왔어요. 등록 마법사에서 API Key 를 넣고 연결을 확인하세요.
-        </span>
-        <Button size="sm" onClick={() => onUseTemplate(result.template)}>
-          등록 마법사로
-        </Button>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span>
+            템플릿 v{result.version} 을 가져왔어요. 등록 마법사에서 API Key 를 넣고 연결을
+            확인하세요.
+          </span>
+          <Button size="sm" onClick={() => onUseTemplate(result.template)}>
+            등록 마법사로
+            <ArrowRightIcon aria-hidden="true" />
+          </Button>
+        </div>
       </Notice>
     );
   }
   return (
-    <div className="stack">
+    <div>
       <Notice tone={result.duplicate ? 'info' : 'success'}>
-        <span>
-          {result.duplicate
-            ? `같은 내용이 이미 설치돼 있어요 — ${result.skill.name} v${result.version.version}`
-            : `${result.skill.name} v${result.version.version} 을 설치했어요 — 검토 대기 상태예요. Skill 화면에서 확인하고 활성화하세요.`}
-        </span>
-        <Link className="btn btn-sm btn-primary" to={`/skills/${result.skill.id}`}>
-          Skill 검토하기
-        </Link>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span>
+            {result.duplicate
+              ? `같은 내용이 이미 설치돼 있어요 — ${result.skill.name} v${result.version.version}`
+              : `${result.skill.name} v${result.version.version} 을 설치했어요 — 검토 대기 상태예요. Skill 화면에서 확인하고 활성화하세요.`}
+          </span>
+          <Button asChild size="sm">
+            <Link to={`/skills/${result.skill.id}`}>
+              Skill 검토하기
+              <ArrowRightIcon aria-hidden="true" />
+            </Link>
+          </Button>
+        </div>
       </Notice>
       {result.warnings.length > 0 && (
         <Notice tone="warn">
@@ -531,33 +601,59 @@ function InstallResultNotice({
   );
 }
 
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return <h3 className="mb-1.5 text-sm font-semibold">{children}</h3>;
+}
+
 function SkillContents({ manifest }: { manifest: SkillManifest }) {
   const total = manifest.files.reduce((n, f) => n + f.size, 0);
   return (
-    <section className="stack">
-      <h3 className="section-title">
-        파일 {manifest.files.length}개 · {formatBytes(total)}
-      </h3>
-      <div className="file-list">
-        {manifest.files.map((f) => (
-          <div key={f.path} className="file-row">
-            <Mono>{f.path}</Mono>
-            <span className="muted small">{f.kind}</span>
-            <span className="muted small num">{formatBytes(f.size)}</span>
-            <Mono title={f.sha256}>{f.sha256.slice(0, 10)}</Mono>
-          </div>
-        ))}
+    <section className="flex flex-col gap-3">
+      <div>
+        <SectionTitle>
+          파일 {manifest.files.length}개 · {formatBytes(total)}
+        </SectionTitle>
+        <div className="max-h-[260px] overflow-auto rounded-lg border">
+          <Table aria-label="파일">
+            <TableHeader className="bg-muted/50 [&_th]:text-xs [&_th]:text-muted-foreground">
+              <TableRow>
+                <TableHead>경로</TableHead>
+                <TableHead className="hidden sm:table-cell">종류</TableHead>
+                <TableHead className="text-right">크기</TableHead>
+                <TableHead className="hidden sm:table-cell">SHA-256</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {manifest.files.map((f) => (
+                <TableRow key={f.path}>
+                  <TableCell className="whitespace-normal">
+                    <Mono>{f.path}</Mono>
+                  </TableCell>
+                  <TableCell className="hidden text-xs text-muted-foreground sm:table-cell">
+                    {f.kind}
+                  </TableCell>
+                  <TableCell className="text-right text-xs text-muted-foreground tabular-nums">
+                    {formatBytes(f.size)}
+                  </TableCell>
+                  <TableCell className="hidden sm:table-cell">
+                    <Mono title={f.sha256}>{f.sha256.slice(0, 10)}</Mono>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       </div>
       <div>
-        <h3 className="section-title">허용 Tool (allowed-tools)</h3>
+        <SectionTitle>허용 Tool (allowed-tools)</SectionTitle>
         {manifest.allowedTools.length > 0 ? (
-          <div className="row">
+          <div className="flex flex-wrap gap-1.5">
             {manifest.allowedTools.map((t) => (
               <Mono key={t}>{t}</Mono>
             ))}
           </div>
         ) : (
-          <p className="muted small">없음 — 이 Skill 은 Tool 을 쓰지 않아요</p>
+          <p className="text-xs text-muted-foreground">없음 — 이 Skill 은 Tool 을 쓰지 않아요</p>
         )}
       </div>
     </section>
@@ -566,7 +662,7 @@ function SkillContents({ manifest }: { manifest: SkillManifest }) {
 
 function McpContents({ manifest }: { manifest: McpManifest }) {
   return (
-    <section className="stack">
+    <section className="flex flex-col gap-3">
       <KeyValue
         items={[
           ['엔드포인트', <Mono>{manifest.endpointUrl}</Mono>],
@@ -584,15 +680,34 @@ function McpContents({ manifest }: { manifest: McpManifest }) {
           ],
         ]}
       />
-      <h3 className="section-title">Tool {manifest.tools.length}개</h3>
-      <div className="file-list">
-        {manifest.tools.map((t) => (
-          <div key={t.name} className="tool-row">
-            <Mono>{t.name}</Mono>
-            <Badge>{LEVEL[t.permissionLevel] ?? t.permissionLevel}</Badge>
-            <span className="muted small tool-desc">{t.description}</span>
-          </div>
-        ))}
+      <div>
+        <SectionTitle>Tool {manifest.tools.length}개</SectionTitle>
+        <div className="max-h-[260px] overflow-auto rounded-lg border">
+          <Table aria-label="Tool">
+            <TableHeader className="bg-muted/50 [&_th]:text-xs [&_th]:text-muted-foreground">
+              <TableRow>
+                <TableHead>이름</TableHead>
+                <TableHead>권한</TableHead>
+                <TableHead>설명</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {manifest.tools.map((t) => (
+                <TableRow key={t.name}>
+                  <TableCell>
+                    <Mono>{t.name}</Mono>
+                  </TableCell>
+                  <TableCell>
+                    <Badge>{LEVEL[t.permissionLevel] ?? t.permissionLevel}</Badge>
+                  </TableCell>
+                  <TableCell className="text-xs whitespace-normal text-muted-foreground">
+                    {t.description}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       </div>
     </section>
   );
@@ -680,15 +795,18 @@ function PublishModal({
         </>
       }
     >
-      <div className="stack">
-        <div className="segmented" role="group" aria-label="게시할 종류">
-          <button type="button" aria-pressed={kind === 'skill'} onClick={() => setKind('skill')}>
-            Skill
-          </button>
-          <button type="button" aria-pressed={kind === 'mcp'} onClick={() => setKind('mcp')}>
-            MCP 템플릿
-          </button>
-        </div>
+      <div className="flex flex-col gap-3">
+        <ToggleGroup
+          type="single"
+          variant="outline"
+          aria-label="게시할 종류"
+          className="mb-1"
+          value={kind}
+          onValueChange={(v) => v && setKind(v as Kind)}
+        >
+          <ToggleGroupItem value="skill">Skill</ToggleGroupItem>
+          <ToggleGroupItem value="mcp">MCP 템플릿</ToggleGroupItem>
+        </ToggleGroup>
         {kind === 'skill' ? (
           <>
             <Field
@@ -696,21 +814,20 @@ function PublishModal({
               required
               hint="마켓플레이스에서 설치한 Skill 은 다시 게시할 수 없어요"
             >
-              <select
-                className="input"
+              <NativeSelect
                 value={skillId}
                 onChange={(e) => {
                   setSkillId(e.target.value);
                   setVersionId('');
                 }}
               >
-                <option value="">선택하세요</option>
+                <NativeSelectOption value="">선택하세요</NativeSelectOption>
                 {ownSkills.map((s) => (
-                  <option key={s.id} value={s.id}>
+                  <NativeSelectOption key={s.id} value={s.id}>
                     {s.name}
-                  </option>
+                  </NativeSelectOption>
                 ))}
-              </select>
+              </NativeSelect>
             </Field>
             {skillId && (
               <Field
@@ -723,13 +840,13 @@ function PublishModal({
                     : undefined
                 }
               >
-                <select
-                  className="input"
-                  value={versionId}
-                  onChange={(e) => setVersionId(e.target.value)}
-                >
+                <NativeSelect value={versionId} onChange={(e) => setVersionId(e.target.value)}>
                   {(versions.data ?? []).map((v) => (
-                    <option key={v.id} value={v.id} disabled={v.verificationStatus !== 'passed'}>
+                    <NativeSelectOption
+                      key={v.id}
+                      value={v.id}
+                      disabled={v.verificationStatus !== 'passed'}
+                    >
                       v{v.version}
                       {v.active ? ' (활성)' : ''}
                       {v.verificationStatus !== 'passed'
@@ -737,9 +854,9 @@ function PublishModal({
                           ? ' — 검증 실패'
                           : ' — 검증 대기'
                         : ''}
-                    </option>
+                    </NativeSelectOption>
                   ))}
-                </select>
+                </NativeSelect>
               </Field>
             )}
           </>
@@ -749,43 +866,33 @@ function PublishModal({
             required
             hint="연결 정보 · Tool 목록만 공유돼요. API Key · 허용 호스트 같은 설정은 공유하지 않아요"
           >
-            <select
-              className="input"
-              value={serverId}
-              onChange={(e) => setServerId(e.target.value)}
-            >
-              <option value="">선택하세요</option>
+            <NativeSelect value={serverId} onChange={(e) => setServerId(e.target.value)}>
+              <NativeSelectOption value="">선택하세요</NativeSelectOption>
               {(servers.data ?? []).map((s) => (
-                <option
+                <NativeSelectOption
                   key={s.id}
                   value={s.id}
                   disabled={s.status !== 'connected' || !s.endpointUrl}
                 >
                   {s.name}
                   {s.status !== 'connected' ? ` — ${s.status}` : ''}
-                </option>
+                </NativeSelectOption>
               ))}
-            </select>
+            </NativeSelect>
           </Field>
         )}
         <Field label="제목" hint="비우면 이름을 써요">
-          <input
-            className="input"
-            maxLength={120}
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-          />
+          <Input maxLength={120} value={title} onChange={(e) => setTitle(e.target.value)} />
         </Field>
         <Field label="설명" hint="비우면 Skill · 서버 설명을 써요">
-          <textarea
-            className="input"
+          <Textarea
             rows={3}
             maxLength={2000}
             value={description}
             onChange={(e) => setDescription(e.target.value)}
           />
         </Field>
-        <p className="muted small">
+        <p className="text-xs text-muted-foreground">
           게시하면 플랫폼 키(Ed25519)로 이름 · 버전 · 내용 해시를 서명해요. 같은 이름으로 다시
           게시하면 새 버전이 됩니다.
         </p>

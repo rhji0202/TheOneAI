@@ -1,3 +1,10 @@
+import {
+  ArrowRightIcon,
+  ChartColumnIcon,
+  TableIcon,
+  ThumbsDownIcon,
+  ThumbsUpIcon,
+} from 'lucide-react';
 import { type ReactNode, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import {
@@ -16,12 +23,25 @@ import {
   ErrorNotice,
   Kpi,
   Loading,
+  Mono,
   type Page,
   PageHeader,
   Time,
+  type Tone,
   Toolbar,
   useQuery,
 } from '../ui';
+import { Button } from '@/components/ui/button';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { cn } from '@/lib/utils';
 import { formatMoney } from './TaskDetail';
 import {
   type AdminTaskRow,
@@ -128,6 +148,8 @@ const WAITING_LABEL: Record<NonNullable<PendingApproval['waitingFor']>, string> 
   user_and_operator: '사용자 · 운영자 결정 필요',
 };
 
+const RISK_TONE: Record<string, Tone> = { low: 'success', medium: 'warning', high: 'danger' };
+
 const ACTIVE: AdminTaskRow['status'][] = [
   'running',
   'recovering',
@@ -171,10 +193,11 @@ function changeDelta(k: KpiValue): Delta | null {
 }
 
 function Target({ k, children }: { k: KpiValue; children: ReactNode }) {
+  const missed = k.status === 'warn';
   return (
-    <span className={k.status === 'warn' ? 'kpi-target-warn' : undefined}>
+    <span className={missed ? 'font-semibold text-destructive' : undefined}>
       {children}
-      {k.status === 'warn' && ' · 미달'}
+      {missed && ' · 미달'}
     </span>
   );
 }
@@ -222,37 +245,38 @@ export function DashboardPage() {
         }
       />
       <Toolbar>
-        <div className="dash-seg" role="radiogroup" aria-label="기간">
+        <ToggleGroup
+          type="single"
+          variant="outline"
+          aria-label="기간"
+          value={range}
+          onValueChange={(v) => v && setParam('range', v)}
+        >
           {RANGES.map((r) => (
-            <button
-              key={r.id}
-              type="button"
-              role="radio"
-              aria-checked={range === r.id}
-              className={range === r.id ? 'dash-seg-btn active' : 'dash-seg-btn'}
-              onClick={() => setParam('range', r.id)}
-            >
+            <ToggleGroupItem key={r.id} value={r.id}>
               {r.label}
-            </button>
+            </ToggleGroupItem>
           ))}
+        </ToggleGroup>
+        <div>
+          <AgentSelect
+            agents={agents.data}
+            value={agentId}
+            onChange={(v) => setParam('agentId', v)}
+          />
         </div>
-        <AgentSelect
-          agents={agents.data}
-          value={agentId}
-          onChange={(v) => setParam('agentId', v)}
-        />
       </Toolbar>
 
       <ErrorNotice error={metrics.error} onRetry={() => void metrics.reload()} />
       {m ? <KpiGrid m={m} /> : !metrics.error && <Loading />}
       {m && m.daily.length > 1 && <TrendCard daily={m.daily} />}
 
-      <div className="grid grid-main-side dash-main">
-        <div className="stack">
+      <div className="grid items-start gap-x-4 gap-y-0 xl:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="min-w-0">
           <ActiveTasksCard agentId={agentId} />
           {m && <FailuresCard failures={m.recentFailures} />}
         </div>
-        <div className="stack">
+        <div className="min-w-0">
           <PendingApprovalsCard />
           {m && <FeedbackCard feedback={m.feedback} />}
         </div>
@@ -269,7 +293,7 @@ function KpiGrid({ m }: { m: MetricsResponse }) {
   const noPrev = comparable ? undefined : '직전 기간 데이터 없음';
   return (
     <section aria-label="품질 지표">
-      <div className="grid grid-4 dash-kpis">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Kpi
           label="작업 수"
           value={formatNumber(k.tasksTotal.value)}
@@ -348,7 +372,7 @@ function KpiGrid({ m }: { m: MetricsResponse }) {
           hint={noPrev ?? '끝난 작업 기준'}
         />
       </div>
-      <p className="dash-footnote">
+      <p className="mt-2 mb-5 text-xs text-muted-foreground">
         {k.evalSuccessRate
           ? `평가셋 성공률 ${formatPercent(k.evalSuccessRate.value)}`
           : '평가셋 성공률은 Agent 설정에서 평가셋을 실행하면 표시됩니다.'}{' '}
@@ -361,10 +385,14 @@ function KpiGrid({ m }: { m: MetricsResponse }) {
 /* ───────────── 날짜별 추이 (누적 막대: 완료 · 실패 · 기타) ───────────── */
 
 const SERIES = [
-  { key: 'ok', label: '완료', color: '#0ca30c', icon: '✓' },
-  { key: 'fail', label: '실패', color: '#d03b3b', icon: '!' },
-  { key: 'other', label: '진행 · 취소', color: 'var(--dash-other)', icon: '·' },
+  { key: 'ok', label: '완료', swatch: 'bg-emerald-500 dark:bg-emerald-400' },
+  { key: 'fail', label: '실패', swatch: 'bg-red-500 dark:bg-red-400' },
+  { key: 'other', label: '진행 · 취소', swatch: 'bg-zinc-400 dark:bg-zinc-500' },
 ] as const;
+
+function Swatch({ className }: { className: string }) {
+  return <span className={cn('size-2.5 shrink-0 rounded-[3px]', className)} aria-hidden="true" />;
+}
 
 function niceMax(n: number): number {
   if (n <= 4) return 4;
@@ -391,92 +419,106 @@ function TrendCard({ daily }: { daily: DailyPoint[] }) {
       title="날짜별 작업"
       description={`기간 합계 ${formatNumber(total)}건 · UTC 날짜 기준`}
       actions={
-        <button
-          type="button"
-          className="btn btn-sm btn-ghost"
-          onClick={() => setAsTable((v) => !v)}
-        >
+        <Button size="sm" variant="ghost" onClick={() => setAsTable((v) => !v)}>
+          {asTable ? <ChartColumnIcon aria-hidden="true" /> : <TableIcon aria-hidden="true" />}
           {asTable ? '차트로 보기' : '표로 보기'}
-        </button>
+        </Button>
       }
     >
       {asTable ? (
-        <div className="table-wrap">
-          <table className="table" aria-label="날짜별 작업">
-            <thead>
-              <tr>
-                <th>날짜</th>
-                <th style={{ textAlign: 'right' }}>전체</th>
-                <th style={{ textAlign: 'right' }}>완료</th>
-                <th style={{ textAlign: 'right' }}>실패</th>
-                <th style={{ textAlign: 'right' }}>무단 Tool 호출</th>
-              </tr>
-            </thead>
-            <tbody>
-              {daily.map((d) => (
-                <tr key={d.date}>
-                  <td>{d.date}</td>
-                  <td className="num">{formatNumber(d.tasksTotal)}</td>
-                  <td className="num">{formatNumber(d.tasksSucceeded)}</td>
-                  <td className="num">{formatNumber(d.tasksFailed)}</td>
-                  <td className="num">{formatNumber(d.toolDenied)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <Table aria-label="날짜별 작업">
+          <TableHeader className="bg-muted/50 [&_th]:text-xs [&_th]:text-muted-foreground">
+            <TableRow>
+              <TableHead>날짜</TableHead>
+              <TableHead className="text-right">전체</TableHead>
+              <TableHead className="text-right">완료</TableHead>
+              <TableHead className="text-right">실패</TableHead>
+              <TableHead className="text-right">무단 Tool 호출</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {daily.map((d) => (
+              <TableRow key={d.date}>
+                <TableCell>{d.date}</TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {formatNumber(d.tasksTotal)}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {formatNumber(d.tasksSucceeded)}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {formatNumber(d.tasksFailed)}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {formatNumber(d.toolDenied)}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
       ) : (
         <>
-          <ul className="dash-legend" aria-label="범례">
+          <ul className="mb-3 flex flex-wrap gap-4 text-xs text-muted-foreground" aria-label="범례">
             {SERIES.map((s) => (
-              <li key={s.key}>
-                <span className="dash-swatch" style={{ background: s.color }} aria-hidden="true" />
+              <li key={s.key} className="inline-flex items-center gap-1.5">
+                <Swatch className={s.swatch} />
                 {s.label}
               </li>
             ))}
           </ul>
           <div
-            className="dash-chart"
+            className="grid h-[200px] grid-cols-[36px_minmax(0,1fr)] gap-2"
             role="img"
             aria-label={`날짜별 작업 수, 기간 합계 ${total}건`}
           >
-            <div className="dash-yaxis" aria-hidden="true">
+            <div
+              className="flex flex-col justify-between pb-5 text-right text-[11.5px] text-muted-foreground tabular-nums"
+              aria-hidden="true"
+            >
               {[...ticks].reverse().map((t) => (
-                <span key={t}>{formatNumber(t)}</span>
+                <span key={t} className="leading-[0]">
+                  {formatNumber(t)}
+                </span>
               ))}
             </div>
-            <div className="dash-plot" onMouseLeave={() => setHover(null)}>
+            <div className="relative" onMouseLeave={() => setHover(null)}>
               {ticks.map((t) => (
                 <div
                   key={t}
-                  className={t === 0 ? 'dash-grid base' : 'dash-grid'}
+                  className={cn('absolute inset-x-0 h-px', t === 0 ? 'bg-border' : 'bg-border/60')}
                   style={{ bottom: `calc(20px + (100% - 20px) * ${t / max})` }}
                 />
               ))}
-              <div className="dash-bars">
+              <div className="absolute inset-x-0 top-0 bottom-5 flex">
                 {daily.map((d, i) => {
                   const p = parts(d);
                   return (
                     <div
                       key={d.date}
-                      className={hover === i ? 'dash-col hover' : 'dash-col'}
+                      className={cn(
+                        'relative flex min-w-0 flex-1 flex-col items-center justify-end rounded',
+                        hover === i && 'bg-primary/5',
+                      )}
                       onMouseEnter={() => setHover(i)}
                     >
                       <div
-                        className="dash-stack"
+                        className="flex w-[min(28px,60%)] flex-col-reverse gap-0.5"
                         style={{ height: `${(d.tasksTotal / max) * 100}%` }}
                       >
                         {SERIES.map((s) =>
                           p[s.key] > 0 ? (
                             <div
                               key={s.key}
-                              className="dash-seg-bar"
-                              style={{ flexGrow: p[s.key], background: s.color }}
+                              className={cn('min-h-0.5 basis-0 last:rounded-t', s.swatch)}
+                              style={{ flexGrow: p[s.key] }}
                             />
                           ) : null,
                         )}
                       </div>
-                      <span className="dash-xlabel" aria-hidden="true">
+                      <span
+                        className="absolute -bottom-5 h-4 text-[11.5px] whitespace-nowrap text-muted-foreground"
+                        aria-hidden="true"
+                      >
                         {i % labelEvery === 0 || i === daily.length - 1
                           ? d.date.slice(5).replace('-', '.')
                           : ''}
@@ -487,7 +529,7 @@ function TrendCard({ daily }: { daily: DailyPoint[] }) {
               </div>
               {h && hover !== null && (
                 <div
-                  className="dash-tip"
+                  className="pointer-events-none absolute top-0 z-10 min-w-36 space-y-0.5 rounded-md border bg-popover px-2.5 py-2 text-xs text-popover-foreground shadow-md"
                   style={{
                     left: `${((hover + 0.5) / daily.length) * 100}%`,
                     transform:
@@ -496,17 +538,13 @@ function TrendCard({ daily }: { daily: DailyPoint[] }) {
                         : 'translateX(12px)',
                   }}
                 >
-                  <p className="dash-tip-title">{h.date}</p>
+                  <p className="font-semibold">{h.date}</p>
                   <p>
                     전체 <b>{formatNumber(h.tasksTotal)}</b>
                   </p>
                   {SERIES.map((s) => (
-                    <p key={s.key}>
-                      <span
-                        className="dash-swatch"
-                        style={{ background: s.color }}
-                        aria-hidden="true"
-                      />
+                    <p key={s.key} className="flex items-center gap-1.5">
+                      <Swatch className={s.swatch} />
                       {s.label} <b>{formatNumber(parts(h)[s.key])}</b>
                     </p>
                   ))}
@@ -542,11 +580,11 @@ function ActiveTasksCard({ agentId }: { agentId: string }) {
       key: 'title',
       header: '작업',
       render: (r) => (
-        <div className="tk-task-cell">
-          <span className="cell-title" title={r.title}>
+        <div className="flex min-w-0 flex-col">
+          <span className="max-w-[420px] truncate font-medium" title={r.title}>
             {r.title}
           </span>
-          <span className="cell-sub">
+          <span className="text-xs text-muted-foreground">
             {r.agentName} · {r.endUserPseudonym}
           </span>
         </div>
@@ -564,7 +602,7 @@ function ActiveTasksCard({ agentId }: { agentId: string }) {
       header: '경과',
       width: '80px',
       align: 'right',
-      render: (r) => <span className="num tk-nowrap-text">{formatElapsed(r.elapsedMs)}</span>,
+      render: (r) => <span className="tabular-nums">{formatElapsed(r.elapsedMs)}</span>,
     },
   ];
 
@@ -572,16 +610,19 @@ function ActiveTasksCard({ agentId }: { agentId: string }) {
   return (
     <Card
       title={
-        <>
-          진행 중인 작업{' '}
+        <span className="inline-flex items-center gap-2">
+          진행 중인 작업
           {active.data && <Badge tone={rows.length ? 'info' : 'neutral'}>{rows.length}</Badge>}
-        </>
+        </span>
       }
       description="5초마다 새로 고침"
       actions={
-        <Link to="/tasks" className="btn btn-sm btn-ghost">
-          전체 보기 →
-        </Link>
+        <Button asChild size="sm" variant="ghost">
+          <Link to="/tasks">
+            전체 보기
+            <ArrowRightIcon aria-hidden="true" />
+          </Link>
+        </Button>
       }
       flush
     >
@@ -596,8 +637,10 @@ function ActiveTasksCard({ agentId }: { agentId: string }) {
         empty="지금 실행 중인 작업이 없어요."
       />
       {active.data?.more && (
-        <p className="dash-card-foot">
-          <Link to="/tasks?status=running">더 많은 진행 중 작업 보기</Link>
+        <p className="border-t px-4 py-2.5 text-sm">
+          <Link to="/tasks?status=running" className="text-primary hover:underline">
+            더 많은 진행 중 작업 보기
+          </Link>
         </p>
       )}
     </Card>
@@ -611,11 +654,11 @@ function FailuresCard({ failures }: { failures: MetricsResponse['recentFailures'
       key: 'title',
       header: '작업',
       render: (f) => (
-        <div className="tk-task-cell">
-          <span className="cell-title" title={f.title}>
+        <div className="flex min-w-0 flex-col">
+          <span className="max-w-[420px] truncate font-medium" title={f.title}>
             {f.title}
           </span>
-          <span className="cell-sub">
+          <span className="text-xs text-muted-foreground">
             {f.failedStep ? `실패 단계 ${f.failedStep}` : '실패 단계 기록 없음'}
           </span>
         </div>
@@ -626,9 +669,9 @@ function FailuresCard({ failures }: { failures: MetricsResponse['recentFailures'
       header: '원인',
       width: '170px',
       render: (f) => (
-        <div className="tk-task-cell">
+        <div className="flex flex-col">
           <span>{CAUSE_LABEL[f.cause]}</span>
-          {f.code && <span className="cell-sub">{failureLabel(f.code)}</span>}
+          {f.code && <span className="text-xs text-muted-foreground">{failureLabel(f.code)}</span>}
         </div>
       ),
     },
@@ -636,7 +679,9 @@ function FailuresCard({ failures }: { failures: MetricsResponse['recentFailures'
       key: 'recovery',
       header: '복구',
       width: '190px',
-      render: (f) => <span className="cell-sub tk-wrap">{f.recovery}</span>,
+      render: (f) => (
+        <span className="text-xs whitespace-normal text-muted-foreground">{f.recovery}</span>
+      ),
     },
     { key: 'at', header: '시각', width: '90px', render: (f) => <Time iso={f.at} /> },
   ];
@@ -645,9 +690,12 @@ function FailuresCard({ failures }: { failures: MetricsResponse['recentFailures'
       title="최근 실패"
       description="기간 안에 실패한 작업 (최근 10건)"
       actions={
-        <Link to="/tasks?status=failed" className="btn btn-sm btn-ghost">
-          실패 작업 →
-        </Link>
+        <Button asChild size="sm" variant="ghost">
+          <Link to="/tasks?status=failed">
+            실패 작업
+            <ArrowRightIcon aria-hidden="true" />
+          </Link>
+        </Button>
       }
       flush
     >
@@ -675,20 +723,23 @@ function PendingApprovalsCard() {
   return (
     <Card
       title={
-        <>
-          승인 대기{' '}
+        <span className="inline-flex items-center gap-2">
+          승인 대기
           {pending.data && (
             <Badge tone={items.length ? 'warning' : 'neutral'}>
               {items.length}
               {pending.data.nextCursor ? '+' : ''}
             </Badge>
           )}
-        </>
+        </span>
       }
       actions={
-        <Link to="/approvals" className="btn btn-sm btn-ghost">
-          승인 큐 →
-        </Link>
+        <Button asChild size="sm" variant="ghost">
+          <Link to="/approvals">
+            승인 큐
+            <ArrowRightIcon aria-hidden="true" />
+          </Link>
+        </Button>
       }
       flush
     >
@@ -696,26 +747,27 @@ function PendingApprovalsCard() {
       {!pending.data && pending.loading ? (
         <Loading />
       ) : items.length === 0 ? (
-        <p className="muted tk-pad">기다리는 승인 요청이 없어요.</p>
+        <p className="px-4 py-6 text-sm text-muted-foreground">기다리는 승인 요청이 없어요.</p>
       ) : (
-        <ul className="dash-list">
+        <ul className="divide-y">
           {items.slice(0, 6).map((a) => {
             const risk = RISK[a.riskLevel];
             return (
               <li key={a.id}>
-                <Link to="/approvals" className="dash-list-item">
-                  <span className="row">
-                    <code className="mono">{a.toolName}</code>
+                <Link
+                  to="/approvals"
+                  className="flex flex-col gap-1 px-4 py-3 text-foreground transition-colors hover:bg-muted/50 hover:no-underline"
+                >
+                  <span className="flex flex-wrap items-center gap-2">
+                    <Mono>{a.toolName}</Mono>
                     {risk && (
-                      <span className="badge" style={{ background: risk.bg, color: risk.fg }}>
-                        위험도 {risk.label}
-                      </span>
+                      <Badge tone={RISK_TONE[a.riskLevel] ?? 'neutral'}>위험도 {risk.label}</Badge>
                     )}
                   </span>
-                  <span className="dash-list-title" title={a.taskTitle}>
+                  <span className="truncate font-medium" title={a.taskTitle}>
                     {a.taskTitle}
                   </span>
-                  <span className="cell-sub">
+                  <span className="text-xs text-muted-foreground">
                     {a.waitingFor ? WAITING_LABEL[a.waitingFor] : ''} ·{' '}
                     {formatRemaining(a.expiresAt)}
                   </span>
@@ -735,32 +787,45 @@ function FeedbackCard({ feedback }: { feedback: MetricsResponse['feedback'] }) {
   return (
     <Card title="사용자 피드백" description="결과 카드의 👍 · 👎">
       {total === 0 ? (
-        <p className="muted">이 기간에 받은 피드백이 없어요.</p>
+        <p className="text-sm text-muted-foreground">이 기간에 받은 피드백이 없어요.</p>
       ) : (
         <>
-          <p className="dash-fb-value">
-            {formatPercent(ratio, 0)} <span className="dash-fb-label">도움됨</span>
+          <p className="text-2xl font-bold tabular-nums">
+            {formatPercent(ratio, 0)}{' '}
+            <span className="text-sm font-medium text-muted-foreground">도움됨</span>
           </p>
           <div
-            className="dash-fb-bar"
+            className="my-2.5 flex h-2 gap-0.5"
             role="img"
             aria-label={`도움됨 ${feedback.helpful}건, 아쉬움 ${feedback.notHelpful}건`}
           >
             {feedback.helpful > 0 && (
-              <span className="dash-fb-good" style={{ flexGrow: feedback.helpful }} />
+              <span
+                className="min-w-1 rounded-l-full bg-emerald-500 only:rounded-full dark:bg-emerald-400"
+                style={{ flexGrow: feedback.helpful }}
+              />
             )}
             {feedback.notHelpful > 0 && (
-              <span className="dash-fb-bad" style={{ flexGrow: feedback.notHelpful }} />
+              <span
+                className="min-w-1 rounded-r-full bg-red-500 only:rounded-full dark:bg-red-400"
+                style={{ flexGrow: feedback.notHelpful }}
+              />
             )}
           </div>
-          <div className="dash-fb-legend">
-            <span>
-              <i className="dash-fb-swatch dash-fb-good" aria-hidden="true" /> 👍 도움됨{' '}
-              {formatNumber(feedback.helpful)}
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
+            <span className="inline-flex items-center gap-1.5">
+              <ThumbsUpIcon
+                className="size-3.5 text-emerald-600 dark:text-emerald-400"
+                aria-hidden="true"
+              />
+              도움됨 {formatNumber(feedback.helpful)}
             </span>
-            <span>
-              <i className="dash-fb-swatch dash-fb-bad" aria-hidden="true" /> 👎 아쉬움{' '}
-              {formatNumber(feedback.notHelpful)}
+            <span className="inline-flex items-center gap-1.5">
+              <ThumbsDownIcon
+                className="size-3.5 text-red-600 dark:text-red-400"
+                aria-hidden="true"
+              />
+              아쉬움 {formatNumber(feedback.notHelpful)}
             </span>
           </div>
         </>
