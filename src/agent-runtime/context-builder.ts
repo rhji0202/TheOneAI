@@ -2,7 +2,13 @@ import { Injectable, Logger } from '@nestjs/common';
 import { z } from 'zod';
 import { contentBlockSchema } from '../conversations/message-views.js';
 import { PrismaService } from '../infrastructure/database/prisma.service.js';
-import { addUsage, emptyUsage, type LlmMessage, type LlmUsage } from '../llm/llm.types.js';
+import {
+  addUsage,
+  emptyUsage,
+  type LlmImage,
+  type LlmMessage,
+  type LlmUsage,
+} from '../llm/llm.types.js';
 import { type MemoryHit, MemoryRetriever } from '../memory/memory-retriever.service.js';
 import { ArtifactsService } from '../artifacts/artifacts.service.js';
 import { ContextCompressor } from './context-compressor.js';
@@ -21,6 +27,8 @@ export interface AgentContext {
   /** 이번 요청 이전의 최근 대화 (오래된 것 → 최신) */
   history: LlmMessage[];
   request: string;
+  /** 요청에 첨부한 이미지 — 요청을 보여 주는 모든 프롬프트의 사용자 메시지에 함께 싣는다 */
+  images: LlmImage[];
   /** 관련 기억 (프롬프트용 목록, 없으면 빈 문자열) */
   memories: string;
   memoryHits: MemoryHit[];
@@ -118,15 +126,16 @@ export class ContextBuilder {
     }
 
     const memoryHits = await this.recall(task);
-    // 첨부 파일 — 텍스트(CSV · JSON · 텍스트)는 내용을, 나머지는 이름 · 형식을 요청 뒤에 데이터로 붙인다
+    // 첨부 파일 — 텍스트(CSV · JSON · 텍스트)는 내용을, 이미지는 이미지 입력으로, 나머지는 이름 · 형식만 데이터로 붙인다
     const attachments = task.triggerMessageId
       ? await this.artifacts.attachmentContext(task.tenantId, task.triggerMessageId)
-      : '';
+      : { text: '', images: [] };
     return {
       context: {
         tenantPrompt: task.systemPrompt,
         history,
-        request: task.triggerText + attachments,
+        request: task.triggerText + attachments.text,
+        images: attachments.images,
         memories: renderMemories(memoryHits),
         memoryHits,
         conversationSummary: summary,

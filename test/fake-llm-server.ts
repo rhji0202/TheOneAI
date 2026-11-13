@@ -46,8 +46,13 @@ import type { AddressInfo } from 'node:net';
 export interface RecordedRequest {
   role: string;
   headers: IncomingMessage['headers'];
+  /** content 배열(텍스트 + 이미지)은 텍스트로 합쳐 둔다 — 이미지는 images 에 */
   body: ChatBody;
+  /** 요청에 실린 이미지 (image_url 의 data URL) */
+  images: string[];
 }
+
+type WirePart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } };
 
 export interface WireToolCall {
   id: string;
@@ -211,12 +216,18 @@ export async function startFakeLlm(options: { chunkDelayMs?: number } = {}): Pro
     req.on('data', (c: Buffer) => (raw += c.toString()));
     req.on('end', () => {
       const body = JSON.parse(raw) as ChatBody;
+      const images: string[] = [];
+      for (const m of body.messages as Array<{ content: string | null | WirePart[] }>) {
+        if (!Array.isArray(m.content)) continue;
+        images.push(...m.content.flatMap((p) => (p.type === 'image_url' ? [p.image_url.url] : [])));
+        m.content = m.content.flatMap((p) => (p.type === 'text' ? [p.text] : [])).join('\n');
+      }
       const system = body.messages[0]?.content ?? '';
       const lastUser = [...body.messages].reverse().find((m) => m.role === 'user')?.content ?? '';
       const allText = body.messages.map((m) => m.content ?? '').join('\n');
       const role = /# Role: ([^\n]+)/.exec(system)?.[1]?.trim() ?? 'unknown';
       const mode = /Mode: (\w+)/.exec(system)?.[1];
-      requests.push({ role: mode ? `${role}:${mode}` : role, headers: req.headers, body });
+      requests.push({ role: mode ? `${role}:${mode}` : role, headers: req.headers, body, images });
 
       const reply = (content: string | null, toolCalls: WireToolCall[] = []) =>
         res.writeHead(200, { 'Content-Type': 'application/json' }).end(

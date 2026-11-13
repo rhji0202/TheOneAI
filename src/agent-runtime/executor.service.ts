@@ -114,6 +114,7 @@ export class ExecutorService {
               `Working notes from earlier steps:\n${renderNotes(notes)}`,
               `Current step ${stepIndex}: ${step.title}${step.tool ? `\nSuggested tool: ${step.tool}` : ''}${step.skill ? `\nSkill: ${step.skill}` : ''}\nInstructions: ${step.instructions || '(none)'}`,
             ].join('\n\n'),
+            images: context.images,
           },
         ];
 
@@ -242,7 +243,7 @@ export class ExecutorService {
           ) + (guidance.length ? `\n\n${guidance.join('\n\n')}` : ''),
       },
       ...context.history,
-      { role: 'user', content: context.request },
+      { role: 'user', content: context.request, images: context.images },
     ];
     return router.stream('executor', { messages }, signal);
   }
@@ -275,6 +276,7 @@ export class ExecutorService {
           `Problems found:\n${issues.map((i) => `- ${i}`).join('\n')}`,
           'Write the correction message now.',
         ].join('\n\n'),
+        images: context.images,
       },
     ];
     return router.stream('executor', { messages }, signal);

@@ -402,6 +402,50 @@ describe('첨부 · 산출물 (W-01 · W-04)', () => {
     });
   });
 
+  it('이미지 첨부는 모델에 이미지로 — 계획 · 답변 · 검증 요청에 함께 실린다', async () => {
+    const pixel =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    const png = Buffer.from(pixel, 'base64');
+    const ok = await upload(png, {
+      fileName: 'pixel.png',
+      mimeType: 'image/png',
+      sizeBytes: png.length,
+      sha256: createHash('sha256').update(png).digest('hex'),
+    });
+    expect(ok.put?.status).toBe(200);
+
+    const run = await send('', [
+      { type: 'text', text: '[분석] 이 이미지 설명해 줘 #image' },
+      { type: 'attachment', artifactId: ok.created.body.artifactId },
+    ]);
+    expect(run.events!.at(-1)!.event).toBe('task.completed');
+    const forTask = ctx.llm.requests.filter((r) => JSON.stringify(r.body).includes('#image'));
+    for (const role of ['Planner', 'Executor (respond step)', 'Evaluator:verify']) {
+      expect(forTask.find((r) => r.role === role)?.images, role).toEqual([
+        `data:image/png;base64,${pixel}`,
+      ]);
+    }
+    const planner = forTask.find((r) => r.role === 'Planner')!;
+    const userMessage = planner.body.messages.at(-1)!.content!;
+    expect(userMessage).toContain('File "pixel.png" (image/png');
+    expect(userMessage).not.toContain('not readable');
+
+    // 위젯이 이미지 미리보기와 파일을 구분하도록 첨부 블록에 이름 · 형식 · 크기를 채워 준다
+    const listed = await api<{
+      items: Array<{ role: string; content: Array<Record<string, unknown>> }>;
+    }>(ctx.baseUrl, 'GET', `/v1/conversations/${run.conversationId}/messages`, { token });
+    const block = listed.body.items
+      .find((m) => m.role === 'user')!
+      .content.find((b) => b.type === 'attachment');
+    expect(block).toEqual({
+      type: 'attachment',
+      artifactId: ok.created.body.artifactId,
+      fileName: 'pixel.png',
+      mimeType: 'image/png',
+      sizeBytes: png.length,
+    });
+  });
+
   it('Agent 가 만든 파일은 작업 산출물 — task.completed · 목록 · 내려받기 · 콘솔 트레이스', async () => {
     const run = await send('[파일] 3월 리포트를 파일로 만들어 줘 #file');
     const done = run.events!.at(-1)! as SseEvent & {

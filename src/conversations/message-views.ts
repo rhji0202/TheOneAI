@@ -29,11 +29,21 @@ export const idempotencyKeySchema = z
   .regex(/^[A-Za-z0-9_.:-]{8,200}$/, 'Idempotency-Key 는 8~200자의 영문 · 숫자 · _ . : - 입니다')
   .optional();
 
+/** 응답의 첨부 블록 — 파일 이름 · 형식 · 크기를 채워 보낸다 (이미지 미리보기 · 파일 구분용) */
+export interface AttachmentInfo {
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+}
+export type ContentBlockView =
+  | Extract<ContentBlock, { type: 'text' }>
+  | (Extract<ContentBlock, { type: 'attachment' }> & Partial<AttachmentInfo>);
+
 /** docs/api-spec.md §0 MessageView */
 export interface MessageView {
   id: string;
   role: 'user' | 'assistant' | 'system';
-  content: ContentBlock[];
+  content: ContentBlockView[];
   taskId: string | null;
   createdAt: string;
 }

@@ -94,7 +94,34 @@ export class ConversationsService {
         take: page.limit + 1,
       });
     });
-    return toPage(rows, page.limit, toMessageView);
+    const result = toPage(rows, page.limit, toMessageView);
+    return { ...result, items: await this.withAttachmentInfo(session.tenantId, result.items) };
+  }
+
+  /** 첨부 블록에 파일 이름 · 형식 · 크기를 채운다 — 위젯이 이미지는 미리보기로, 나머지는 파일로 보여 준다 */
+  private async withAttachmentInfo(tenantId: string, views: MessageView[]): Promise<MessageView[]> {
+    const ids = views.flatMap((v) =>
+      v.content.flatMap((b) => (b.type === 'attachment' ? [b.artifactId] : [])),
+    );
+    if (ids.length === 0) return views;
+    const rows = await this.prisma.withTenant(tenantId, (tx) =>
+      tx.artifact.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, fileName: true, mimeType: true, sizeBytes: true },
+      }),
+    );
+    const info = new Map(
+      rows.map((a) => [
+        a.id,
+        { fileName: a.fileName, mimeType: a.mimeType, sizeBytes: Number(a.sizeBytes) },
+      ]),
+    );
+    return views.map((v) => ({
+      ...v,
+      content: v.content.map((b) =>
+        b.type === 'attachment' ? { ...b, ...info.get(b.artifactId) } : b,
+      ),
+    }));
   }
 
   /**
@@ -237,8 +264,9 @@ export class ConversationsService {
       await this.enqueue(tenantId, result.task.id);
     }
 
+    const [message] = await this.withAttachmentInfo(tenantId, [toMessageView(result.message)]);
     return {
-      message: toMessageView(result.message),
+      message: message!,
       task: toTaskSummary(result.task),
       eventsUrl: `/v1/tasks/${result.task.id}/events`,
     };

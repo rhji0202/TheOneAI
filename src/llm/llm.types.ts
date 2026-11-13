@@ -10,8 +10,14 @@ export interface LlmToolCall {
   arguments: string;
 }
 
+/** 사용자 메시지에 싣는 이미지 (base64) — provider 형식(data URL 등)은 보낼 때 만든다 */
+export interface LlmImage {
+  mimeType: string;
+  data: string;
+}
+
 export type LlmMessage =
-  | { role: 'system' | 'user'; content: string }
+  | { role: 'system' | 'user'; content: string; images?: LlmImage[] }
   | { role: 'assistant'; content: string | null; toolCalls?: LlmToolCall[] }
   | { role: 'tool'; toolCallId: string; content: string };
 

@@ -31,7 +31,10 @@ type Page<T> = { items: T[]; nextCursor: string | null };
 
 type ContentBlock =
   | { type: 'text'; text: string }
-  | { type: 'attachment'; artifactId: string };
+  | { type: 'attachment'; artifactId: string;
+      // 응답에서만 — 서버가 채운다 (이미지 미리보기 · 파일 구분). 보낼 때는 artifactId 만
+      fileName?: string; mimeType?: string; sizeBytes?: number };
+// 첨부 이미지(PNG · JPEG · WebP · GIF)는 모델에 이미지 입력으로, 텍스트 · CSV · JSON 은 내용으로 전달된다.
 
 interface MessageView {
   id: string;

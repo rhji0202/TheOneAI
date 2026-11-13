@@ -108,7 +108,7 @@ export class PlannerService {
         ),
       },
       ...context.history,
-      { role: 'user', content: this.userMessage(context, revision) },
+      { role: 'user', content: this.userMessage(context, revision), images: context.images },
     ];
 
     let usage = emptyUsage();

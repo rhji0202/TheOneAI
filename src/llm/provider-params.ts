@@ -90,6 +90,17 @@ function toWireMessage(message: LlmMessage): Record<string, unknown> {
     case 'tool':
       return { role: 'tool', tool_call_id: message.toolCallId, content: message.content };
     default:
-      return { role: message.role, content: message.content };
+      return {
+        role: message.role,
+        content: message.images?.length
+          ? [
+              { type: 'text', text: message.content },
+              ...message.images.map((image) => ({
+                type: 'image_url',
+                image_url: { url: `data:${image.mimeType};base64,${image.data}` },
+              })),
+            ]
+          : message.content,
+      };
   }
 }
