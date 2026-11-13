@@ -44,7 +44,15 @@ export interface Bootstrap {
 }
 
 export type ContentBlock =
-  { type: 'text'; text: string } | { type: 'attachment'; artifactId: string };
+  | { type: 'text'; text: string }
+  | {
+      type: 'attachment';
+      artifactId: string;
+      /** 서버가 응답에 채운다 */
+      fileName?: string;
+      mimeType?: string;
+      sizeBytes?: number;
+    };
 
 export interface MessageView {
   id: string;
@@ -218,12 +226,17 @@ export class WidgetApi {
     return this.parse<ArtifactView>(res);
   }
 
-  async download(artifact: ArtifactView): Promise<void> {
-    const res = await fetch(`${this.base}/v1/artifacts/${artifact.id}/download`, {
+  /** 파일 내용 — 내려받기 · 이미지 미리보기 (인증 헤더가 필요해 img src 로 바로 쓸 수 없다) */
+  async blob(artifactId: string): Promise<Blob> {
+    const res = await fetch(`${this.base}/v1/artifacts/${artifactId}/download`, {
       headers: this.token ? { Authorization: `Bearer ${this.token}` } : {},
     });
     if (!res.ok) throw new ApiError(res.status, 'DOWNLOAD_FAILED', '파일을 내려받지 못했어요');
-    const url = URL.createObjectURL(await res.blob());
+    return res.blob();
+  }
+
+  async download(artifact: ArtifactView): Promise<void> {
+    const url = URL.createObjectURL(await this.blob(artifact.id));
     const a = document.createElement('a');
     a.href = url;
     a.download = artifact.fileName;

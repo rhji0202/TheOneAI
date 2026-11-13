@@ -369,7 +369,7 @@ export function ChatView({
 
   const message = (m: MessageView) => (
     <MessageScrollerItem key={m.id} messageId={m.id} scrollAnchor={m.role === 'user'}>
-      <ChatMessage message={m} />
+      <ChatMessage message={m} api={api} />
     </MessageScrollerItem>
   );
 

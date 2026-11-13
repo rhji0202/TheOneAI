@@ -13,7 +13,10 @@ import {
   ClockIcon,
   DownloadIcon,
   FileIcon,
+  FileJsonIcon,
+  FileSpreadsheetIcon,
   FileTextIcon,
+  ImageIcon,
   type LucideIcon,
   PaperclipIcon,
   RouteIcon,
@@ -32,6 +35,7 @@ import {
   AttachmentGroup,
   AttachmentMedia,
   AttachmentTitle,
+  AttachmentTrigger,
 } from '@/components/ui/attachment';
 import { Badge } from '@/components/ui/badge';
 import { Bubble, BubbleContent } from '@/components/ui/bubble';
@@ -96,7 +100,91 @@ const MARKDOWN = cn(
   '[&_:is(th,td)]:border [&_:is(th,td)]:px-2 [&_:is(th,td)]:py-1 [&_:is(th,td)]:text-left [&_:is(th,td)]:align-top [&_th]:bg-muted [&_th]:font-semibold',
 );
 
-export function ChatMessage({ message }: { message: MessageView }) {
+/** 첨부 형식 — 이미지는 미리보기, 나머지는 형식별 아이콘으로 구분한다 */
+const PREVIEW_IMAGE = /^image\/(png|jpeg|webp|gif)$/;
+
+function fileIcon(mimeType: string | undefined, name: string): LucideIcon {
+  if (mimeType?.startsWith('image/')) return ImageIcon;
+  if (mimeType === 'text/csv' || /\.(csv|tsv|xlsx?)$/i.test(name)) return FileSpreadsheetIcon;
+  if (mimeType === 'application/json' || /\.json$/i.test(name)) return FileJsonIcon;
+  if (mimeType?.startsWith('text/') || mimeType === 'application/pdf') return FileTextIcon;
+  return FileIcon;
+}
+
+/** 첨부 이미지를 받아 object URL 로 — 화면에서 빠지면 해제한다 */
+function useArtifactImage(api: WidgetApi, artifactId: string, enabled: boolean) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    if (!enabled) return;
+    let objectUrl: string | null = null;
+    let alive = true;
+    api
+      .blob(artifactId)
+      .then((blob) => {
+        if (!alive) return;
+        objectUrl = URL.createObjectURL(blob);
+        setUrl(objectUrl);
+      })
+      .catch(() => alive && setFailed(true));
+    return () => {
+      alive = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [api, artifactId, enabled]);
+  return { url, failed };
+}
+
+function MessageAttachment({
+  block,
+  api,
+}: {
+  block: Extract<ContentBlock, { type: 'attachment' }>;
+  api: WidgetApi;
+}) {
+  const name = block.fileName ?? '첨부 파일';
+  const isImage = PREVIEW_IMAGE.test(block.mimeType ?? '');
+  const { url, failed } = useArtifactImage(api, block.artifactId, isImage);
+  const size = block.sizeBytes === undefined ? '' : formatBytes(block.sizeBytes);
+  if (isImage && !failed) {
+    return (
+      <Attachment orientation="vertical" className="w-48" state={url ? 'done' : 'processing'}>
+        <AttachmentMedia
+          variant="image"
+          className="aspect-auto min-h-16 w-full *:[img]:aspect-auto *:[img]:max-h-48 *:[img]:object-contain"
+        >
+          {url ? <img src={url} alt={name} /> : <ImageIcon />}
+        </AttachmentMedia>
+        <AttachmentContent>
+          <AttachmentTitle>{name}</AttachmentTitle>
+          {size && <AttachmentDescription>{size}</AttachmentDescription>}
+        </AttachmentContent>
+        {url && (
+          <AttachmentTrigger
+            aria-label={`${name} 크게 보기`}
+            onClick={() => window.open(url, '_blank', 'noopener')}
+          />
+        )}
+      </Attachment>
+    );
+  }
+  const Icon = fileIcon(block.mimeType, name);
+  return (
+    <Attachment size="sm">
+      <AttachmentMedia>
+        <Icon />
+      </AttachmentMedia>
+      <AttachmentContent>
+        <AttachmentTitle>{name}</AttachmentTitle>
+        <AttachmentDescription>
+          {[(name.split('.').pop() ?? '').toUpperCase(), size].filter(Boolean).join(' · ')}
+        </AttachmentDescription>
+      </AttachmentContent>
+    </Attachment>
+  );
+}
+
+export function ChatMessage({ message, api }: { message: MessageView; api: WidgetApi }) {
   const text = message.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n');
   const attachments = message.content.filter(
     (b): b is Extract<ContentBlock, { type: 'attachment' }> => b.type === 'attachment',
@@ -105,21 +193,18 @@ export function ChatMessage({ message }: { message: MessageView }) {
     return (
       <Message align="end">
         <MessageContent>
+          {attachments.length > 0 && (
+            <div className="flex flex-wrap items-start justify-end gap-1.5">
+              {attachments.map((a) => (
+                <MessageAttachment key={a.artifactId} block={a} api={api} />
+              ))}
+            </div>
+          )}
           {text && (
             <Bubble align="end">
               <BubbleContent className="whitespace-pre-wrap">{text}</BubbleContent>
             </Bubble>
           )}
-          {attachments.map((a) => (
-            <Attachment key={a.artifactId} size="xs">
-              <AttachmentMedia>
-                <FileIcon />
-              </AttachmentMedia>
-              <AttachmentContent>
-                <AttachmentTitle>첨부 파일</AttachmentTitle>
-              </AttachmentContent>
-            </Attachment>
-          ))}
         </MessageContent>
       </Message>
     );
@@ -585,6 +670,9 @@ interface PendingFile {
   id: string;
   name: string;
   size: number;
+  mimeType: string;
+  /** 이미지면 고른 파일의 object URL — 올리기 전에도 미리보기를 보여 준다 */
+  previewUrl?: string;
   status: 'uploading' | 'done' | 'error';
   error?: string;
 }
@@ -615,23 +703,33 @@ export function Composer({
   const [files, setFiles] = useState<PendingFile[]>([]);
   const [sending, setSending] = useState(false);
 
+  const previews = useRef(new Set<string>());
+  useEffect(() => {
+    const urls = previews.current;
+    return () => urls.forEach((u) => URL.revokeObjectURL(u));
+  }, []);
+  const release = (removed: PendingFile[]) => {
+    for (const f of removed) {
+      if (!f.previewUrl) continue;
+      URL.revokeObjectURL(f.previewUrl);
+      previews.current.delete(f.previewUrl);
+    }
+  };
+
   const pick = async (list: FileList | null) => {
     for (const file of Array.from(list ?? [])) {
       const temp = `tmp-${Math.random().toString(36).slice(2)}`;
+      const base = { id: temp, name: file.name, size: file.size, mimeType: file.type };
       if (file.size > maxMb * 1024 * 1024) {
-        setFiles((f) => [
-          ...f,
-          {
-            id: temp,
-            name: file.name,
-            size: file.size,
-            status: 'error',
-            error: `${maxMb}MB 를 넘어요`,
-          },
-        ]);
+        setFiles((f) => [...f, { ...base, status: 'error', error: `${maxMb}MB 를 넘어요` }]);
         continue;
       }
-      setFiles((f) => [...f, { id: temp, name: file.name, size: file.size, status: 'uploading' }]);
+      let previewUrl: string | undefined;
+      if (PREVIEW_IMAGE.test(file.type)) {
+        previewUrl = URL.createObjectURL(file);
+        previews.current.add(previewUrl);
+      }
+      setFiles((f) => [...f, { ...base, previewUrl, status: 'uploading' }]);
       try {
         const uploaded = await api.upload(file);
         setFiles((f) =>
@@ -665,6 +763,7 @@ export function Composer({
         value.trim(),
         ready.map((f) => f.id),
       );
+      release(files);
       setFiles([]);
     } finally {
       setSending(false);
@@ -688,31 +787,43 @@ export function Composer({
         {files.length > 0 && (
           <InputGroupAddon align="block-start">
             <AttachmentGroup className="w-full">
-              {files.map((f) => (
-                <Attachment key={f.id} size="sm" state={f.status}>
-                  <AttachmentMedia>
-                    <FileIcon />
-                  </AttachmentMedia>
-                  <AttachmentContent>
-                    <AttachmentTitle>{f.name}</AttachmentTitle>
-                    <AttachmentDescription>
-                      {f.status === 'uploading'
-                        ? '올리는 중…'
-                        : f.status === 'error'
-                          ? f.error
-                          : formatBytes(f.size)}
-                    </AttachmentDescription>
-                  </AttachmentContent>
-                  <AttachmentActions>
-                    <AttachmentAction
-                      aria-label={`${f.name} 빼기`}
-                      onClick={() => setFiles((list) => list.filter((x) => x.id !== f.id))}
-                    >
-                      <XIcon />
-                    </AttachmentAction>
-                  </AttachmentActions>
-                </Attachment>
-              ))}
+              {files.map((f) => {
+                const Icon = fileIcon(f.mimeType, f.name);
+                return (
+                  <Attachment key={f.id} size="sm" state={f.status}>
+                    {f.previewUrl && f.status !== 'error' ? (
+                      <AttachmentMedia variant="image">
+                        <img src={f.previewUrl} alt="" />
+                      </AttachmentMedia>
+                    ) : (
+                      <AttachmentMedia>
+                        <Icon />
+                      </AttachmentMedia>
+                    )}
+                    <AttachmentContent>
+                      <AttachmentTitle>{f.name}</AttachmentTitle>
+                      <AttachmentDescription>
+                        {f.status === 'uploading'
+                          ? '올리는 중…'
+                          : f.status === 'error'
+                            ? f.error
+                            : formatBytes(f.size)}
+                      </AttachmentDescription>
+                    </AttachmentContent>
+                    <AttachmentActions>
+                      <AttachmentAction
+                        aria-label={`${f.name} 빼기`}
+                        onClick={() => {
+                          release([f]);
+                          setFiles((list) => list.filter((x) => x.id !== f.id));
+                        }}
+                      >
+                        <XIcon />
+                      </AttachmentAction>
+                    </AttachmentActions>
+                  </Attachment>
+                );
+              })}
             </AttachmentGroup>
           </InputGroupAddon>
         )}
