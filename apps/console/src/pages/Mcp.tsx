@@ -967,7 +967,10 @@ function RegistryVersionDetailView({
                     key: 'name',
                     header: 'Skill',
                     render: (s: SnapshotSkill) => (
-                      <Link to={`/skills/${s.skillId}?version=${s.versionId}`}>
+                      <Link
+                        to={`/skills/${s.skillId}?version=${s.versionId}`}
+                        className="text-primary hover:underline"
+                      >
                         <Mono>{s.name}</Mono>
                       </Link>
                     ),

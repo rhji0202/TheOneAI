@@ -79,7 +79,7 @@ import {
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
 /* ───────────── 타입 (src/approvals/admin/*, src/tasks/approval-views.ts) ───────────── */
@@ -1832,7 +1832,7 @@ function ClauseEditor({
         </>
       )}
       {onRemove && (
-        <TooltipProvider>
+        <>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -1847,7 +1847,7 @@ function ClauseEditor({
             </TooltipTrigger>
             <TooltipContent>조건 삭제</TooltipContent>
           </Tooltip>
-        </TooltipProvider>
+        </>
       )}
     </div>
   );

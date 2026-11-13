@@ -45,7 +45,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
 /* ───────────── 타입 (src/billing/admin/billing-admin.service.ts) ───────────── */
@@ -220,8 +220,8 @@ function UsageSection({ report, range }: { report: UsageReport; range: Range }) 
             <strong>월 한도를 넘었어요.</strong> 이번 달{' '}
             {money(budget.monthToDate, budget.currency)} / 한도{' '}
             {money(budget.monthlyBudget ?? 0, budget.currency)} — 새 작업 요청은{' '}
-            <code>BUDGET_EXCEEDED</code>(402)로 거부됩니다. Owner 가 한도를 올리거나 풀면 바로
-            재개돼요.
+            <code className="rounded bg-muted px-1 font-mono text-xs">BUDGET_EXCEEDED</code>(402)로
+            거부됩니다. Owner 가 한도를 올리거나 풀면 바로 재개돼요.
           </span>
         </Notice>
       )}
@@ -850,7 +850,7 @@ function PricesCard({
       {prices.loading && !prices.data ? (
         <Loading />
       ) : (
-        <TooltipProvider>
+        <>
           <ErrorNotice error={prices.error} onRetry={() => void prices.reload()} />
           {editable && missing.length > 0 && (
             <Notice tone="warn">
@@ -996,7 +996,7 @@ function PricesCard({
               />
             </p>
           )}
-        </TooltipProvider>
+        </>
       )}
     </Card>
   );

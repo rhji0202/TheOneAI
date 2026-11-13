@@ -49,7 +49,7 @@ import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Toggle as ToggleChip } from '@/components/ui/toggle';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
 /* ───────────── API 타입 (src/widget/admin/widget-configs-admin.service.ts) ───────────── */
@@ -366,7 +366,7 @@ export function WidgetSettingsPage() {
   const welcome = (agent.data?.published ?? agent.data?.draft)?.welcomeMessage ?? '';
 
   return (
-    <TooltipProvider>
+    <>
       <PageHeader
         title="위젯 설치 · 테마"
         description="고객사 페이지에 로더 한 줄을 넣으면 위젯이 열립니다. 저장한 설정은 위젯을 새로 열 때 바로 반영돼요."
@@ -559,7 +559,7 @@ export function WidgetSettingsPage() {
         onClose={() => setRotateOpen(false)}
       />
       <SecretModal result={newSecret} onClose={() => setNewSecret(null)} />
-    </TooltipProvider>
+    </>
   );
 }
 

@@ -225,7 +225,7 @@ Reflection · Context Compression 은 [test/reflection.e2e-spec.ts](test/reflect
 ```
 apps/
 ├── widget/                        위젯(W-01 ~ W-05) — loader.tsx(Shadow DOM 마운트 · 공개 API) · App · views · components · run(SSE → 실행 상태) · api
-├── console/                       콘솔 SPA — auth(로그인 · 역할) · api(Admin API 클라이언트) · ui(공용 컴포넌트 · 데이터 훅) · Layout · pages/(화면별 · 화면 CSS)
+├── console/                       콘솔 SPA (shadcn/ui · Tailwind · lucide) — auth(로그인 · 역할) · api(Admin API 클라이언트) · ui(공용 조각 · 데이터 훅) · components/ui(shadcn) · Layout · pages/(화면별)
 └── shared/                        위젯 · 콘솔 공용 — 상태 색 · 라벨, 날짜 · 숫자 형식, fetch SSE(Last-Event-ID 재연결), 안전한 마크다운
 src/
 ├── main.ts · worker.ts            API 서버 · Agent Worker 진입점 (별도 프로세스)

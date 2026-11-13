@@ -585,7 +585,7 @@ export function Field({
   return (
     <div className="mb-4 flex flex-col gap-1.5">
       <label className="flex flex-col gap-1.5">
-        <span className="text-sm font-medium text-muted-foreground">{labelText}</span>
+        <span className="text-sm leading-none font-medium text-muted-foreground">{labelText}</span>
         {children}
       </label>
       {note}

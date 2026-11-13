@@ -1,18 +1,5 @@
-@layer theme, base, legacy, components, utilities;
-
 @import 'tailwindcss';
 @import 'tw-animate-css';
-@import './console.css' layer(legacy);
-@import './pages/agents.css' layer(legacy);
-@import './pages/approvals.css' layer(legacy);
-@import './pages/billing.css' layer(legacy);
-@import './pages/dashboard.css' layer(legacy);
-@import './pages/marketplace.css' layer(legacy);
-@import './pages/mcp.css' layer(legacy);
-@import './pages/memory.css' layer(legacy);
-@import './pages/skills.css' layer(legacy);
-@import './pages/tasks.css' layer(legacy);
-@import './pages/widget-settings.css' layer(legacy);
 
 @custom-variant dark (@media (prefers-color-scheme: dark));
 
