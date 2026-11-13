@@ -2,7 +2,19 @@
  * C-07 승인 · 권한 정책 — 승인 대기 큐(대리 결정) · 처리 이력 · 등급별 기본 정책 · 조건 규칙.
  * API: docs/api-spec.md §4.7 (GET/POST /v1/admin/approvals…, tool-policies, tool-policy-rules)
  */
-import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import {
+  CheckIcon,
+  ChevronRightIcon,
+  ClockIcon,
+  EllipsisIcon,
+  FilterIcon,
+  PencilIcon,
+  PlusIcon,
+  RotateCcwIcon,
+  Trash2Icon,
+  XIcon,
+} from 'lucide-react';
+import { type ReactNode, type SyntheticEvent, useEffect, useId, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { formatDateTime, formatRemaining } from '../../../shared/format';
 import { LEVEL, RISK } from '../../../shared/status';
@@ -29,6 +41,7 @@ import {
   Tabs,
   Time,
   Toggle,
+  type Tone,
   Toolbar,
   useAction,
   usePaged,
@@ -36,6 +49,38 @@ import {
   useToast,
 } from '../ui';
 import { Button } from '@/components/ui/button';
+import {
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  Card as UiCard,
+} from '@/components/ui/card';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { Switch } from '@/components/ui/switch';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { Textarea } from '@/components/ui/textarea';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { cn } from '@/lib/utils';
 
 /* ───────────── 타입 (src/approvals/admin/*, src/tasks/approval-views.ts) ───────────── */
 
@@ -157,6 +202,19 @@ const STATUS_LABEL: Record<ApprovalRow['status'], string> = {
   expired: '만료',
   cancelled: '취소됨',
 };
+/** 위험도 배지 색 · 카드 왼쪽 강조선 — 모르는 값은 중간으로 */
+const RISK_STYLE: Record<ApprovalRow['riskLevel'], { tone: Tone; accent: string }> = {
+  low: { tone: 'success', accent: 'border-l-emerald-500 dark:border-l-emerald-400' },
+  medium: { tone: 'warning', accent: 'border-l-amber-500 dark:border-l-amber-400' },
+  high: { tone: 'danger', accent: 'border-l-red-500 dark:border-l-red-400' },
+};
+
+const LINK_CLASS = 'font-medium text-primary underline-offset-4 hover:underline';
+const SUB_CLASS = 'mt-0.5 text-xs text-muted-foreground';
+
+/** 표 행 안의 컨트롤 — 클릭 · Enter 가 행 열기로 번지지 않게 */
+const stop = (e: SyntheticEvent) => e.stopPropagation();
+const STOP_ROW = { onClick: stop, onKeyDown: stop };
 
 /* ───────────── 페이지 ───────────── */
 
@@ -267,7 +325,7 @@ function PendingTab({ onChanged }: { onChanged: () => void }) {
           </Empty>
         </Card>
       ) : (
-        <div className="approval-queue">
+        <div className="grid gap-3">
           {list.items.map((row) => (
             <PendingCard
               key={row.id}
@@ -297,7 +355,7 @@ function PendingTab({ onChanged }: { onChanged: () => void }) {
         onConfirm={(reason) => void submit(reason)}
         body={
           deciding && (
-            <div className="decide-summary">
+            <div className="mb-4 grid gap-2 text-sm [&_[data-slot=alert]]:mb-0">
               <p>
                 <Mono>{deciding.row.toolName}</Mono> — {deciding.row.summary}
               </p>
@@ -318,7 +376,7 @@ function PendingTab({ onChanged }: { onChanged: () => void }) {
                 </Notice>
               )}
               {deciding.decision === 'reject' && (
-                <p className="muted">
+                <p className="text-muted-foreground">
                   거절 사유는 Agent 에게 데이터로 전달돼 다른 방법을 찾게 해요.
                 </p>
               )}
@@ -369,107 +427,140 @@ function PendingCard({
   onDecide: (decision: 'approve' | 'reject') => void;
 }) {
   const { can } = useAuth();
-  const risk = RISK[row.riskLevel] ?? { label: row.riskLevel, bg: '', fg: '' };
+  const risk = RISK_STYLE[row.riskLevel] ?? RISK_STYLE.medium;
   const remainingMs = new Date(row.expiresAt).getTime() - now;
   const urgent = remainingMs < 3 * 60_000;
   const needsOperator = row.waitingFor === 'operator' || row.waitingFor === 'user_and_operator';
   const shownArgs = row.args.slice(0, 6);
   return (
-    <article
-      className={`approval-item risk-${row.riskLevel}${needsOperator ? ' needs-operator' : ''}`}
+    <UiCard
+      role="article"
       aria-label={`${row.toolName} 승인 요청`}
+      className={cn('min-w-0 gap-4 border-l-4 py-4', risk.accent)}
     >
-      <header className="approval-item-head">
-        <div className="row">
-          <span className="badge" style={{ background: risk.bg, color: risk.fg }}>
-            위험도 {risk.label}
-          </span>
-          <Badge tone="neutral">{LEVEL[row.permissionLevel] ?? row.permissionLevel}</Badge>
-          <Badge tone="neutral">{SOURCE_LABEL[row.toolSource]}</Badge>
+      <CardHeader className="gap-2 px-5">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge tone={risk.tone}>위험도 {RISK[row.riskLevel]?.label ?? row.riskLevel}</Badge>
+          <Badge>{LEVEL[row.permissionLevel] ?? row.permissionLevel}</Badge>
+          <Badge>{SOURCE_LABEL[row.toolSource]}</Badge>
           <Mono>{row.toolName}</Mono>
         </div>
-        <span
-          className={`approval-expiry${urgent ? ' urgent' : ''}`}
-          title={`만료 ${formatDateTime(row.expiresAt)}`}
-        >
-          {formatRemaining(row.expiresAt, now)}
-        </span>
-      </header>
-      <h3 className="approval-item-title">{row.summary}</h3>
-      {row.reason && row.reason !== row.summary && <p className="approval-reason">{row.reason}</p>}
-      <div className="approval-item-body">
-        <div className="approval-args">
+        <CardAction>
+          <span
+            className={cn(
+              'inline-flex items-center gap-1 text-sm whitespace-nowrap tabular-nums',
+              urgent ? 'font-semibold text-destructive' : 'text-muted-foreground',
+            )}
+            title={`만료 ${formatDateTime(row.expiresAt)}`}
+          >
+            <ClockIcon className="size-3.5" aria-hidden="true" />
+            {formatRemaining(row.expiresAt, now)}
+          </span>
+        </CardAction>
+        <h3 className="text-base leading-snug font-semibold">{row.summary}</h3>
+        {row.reason && row.reason !== row.summary && (
+          <CardDescription>{row.reason}</CardDescription>
+        )}
+      </CardHeader>
+      <CardContent className="grid gap-4 px-5 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+        <div className="min-w-0">
           {shownArgs.length > 0 ? (
-            <dl>
+            <dl className="divide-y rounded-lg border text-sm">
               {shownArgs.map((a) => (
-                <div key={a.label}>
-                  <dt>{a.label}</dt>
-                  <dd>{a.value}</dd>
+                <div key={a.label} className="grid grid-cols-[120px_minmax(0,1fr)] gap-2 px-3 py-2">
+                  <dt
+                    className="truncate font-mono text-xs leading-5 text-muted-foreground"
+                    title={a.label}
+                  >
+                    {a.label}
+                  </dt>
+                  <dd className="break-words whitespace-pre-wrap">{a.value}</dd>
                 </div>
               ))}
             </dl>
           ) : (
-            <p className="muted">인자 없음</p>
+            <p className="text-sm text-muted-foreground">인자 없음</p>
           )}
           {row.args.length > shownArgs.length && (
-            <p className="muted small">외 {row.args.length - shownArgs.length}개 인자</p>
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              외 {row.args.length - shownArgs.length}개 인자
+            </p>
           )}
-          <details className="raw-args">
-            <summary>실행 인자 원문 (JSON)</summary>
-            <Json value={row.rawArgs} />
-          </details>
+          <Collapsible className="mt-2">
+            <CollapsibleTrigger asChild>
+              <Button variant="link" size="xs" className="group px-0 has-[>svg]:px-0">
+                <ChevronRightIcon
+                  className="transition-transform group-data-[state=open]:rotate-90"
+                  aria-hidden="true"
+                />
+                실행 인자 원문 (JSON)
+              </Button>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="mt-1.5">
+              <Json value={row.rawArgs} />
+            </CollapsibleContent>
+          </Collapsible>
         </div>
-        <dl className="approval-meta">
-          <div>
-            <dt>작업</dt>
-            <dd>
-              <Link to={`/tasks/${row.taskId}`}>{row.taskTitle || '제목 없음'}</Link>
-            </dd>
-          </div>
-          <div>
-            <dt>요청 사용자</dt>
-            <dd>
-              <Mono>{row.endUserPseudonym}</Mono>
-            </dd>
-          </div>
-          <div>
-            <dt>결정</dt>
-            <dd>
-              <span className={needsOperator ? 'waiting operator' : 'waiting'}>
-                {waitingLabel(row)}
-              </span>
-            </dd>
-          </div>
-          {row.user && (
-            <div>
-              <dt>사용자 결정</dt>
-              <dd>
-                {row.user.decision === 'approve' ? '승인' : '거절'} · <Time iso={row.user.at} />
-                {row.user.comment && <p className="muted">“{row.user.comment}”</p>}
-              </dd>
-            </div>
-          )}
-          <div>
-            <dt>요청 시각</dt>
-            <dd>
-              <Time iso={row.createdAt} />
-            </dd>
-          </div>
-        </dl>
-      </div>
-      <footer className="approval-item-foot">
+        <div className="min-w-0 text-sm">
+          <KeyValue
+            items={[
+              [
+                '작업',
+                <Link to={`/tasks/${row.taskId}`} className={LINK_CLASS}>
+                  {row.taskTitle || '제목 없음'}
+                </Link>,
+              ],
+              ['요청 사용자', <Mono>{row.endUserPseudonym}</Mono>],
+              [
+                '결정',
+                <span
+                  className={
+                    needsOperator
+                      ? 'font-semibold text-amber-700 dark:text-amber-400'
+                      : 'text-muted-foreground'
+                  }
+                >
+                  {waitingLabel(row)}
+                </span>,
+              ],
+              ...(row.user
+                ? ([
+                    [
+                      '사용자 결정',
+                      <>
+                        {row.user.decision === 'approve' ? '승인' : '거절'} ·{' '}
+                        <Time iso={row.user.at} />
+                        {row.user.comment && (
+                          <p className="text-muted-foreground">“{row.user.comment}”</p>
+                        )}
+                      </>,
+                    ],
+                  ] as [ReactNode, ReactNode][])
+                : []),
+              ['요청 시각', <Time iso={row.createdAt} />],
+            ]}
+          />
+        </div>
+      </CardContent>
+      <CardFooter className="justify-end gap-2 border-t px-5 [.border-t]:pt-4">
         {can('operator') ? (
           <>
             <Button variant="destructive" onClick={() => onDecide('reject')}>
+              <XIcon aria-hidden="true" />
               거절
             </Button>
-            <Button onClick={() => onDecide('approve')}>운영자로 승인</Button>
+            <Button onClick={() => onDecide('approve')}>
+              <CheckIcon aria-hidden="true" />
+              운영자로 승인
+            </Button>
           </>
         ) : (
-          <span className="muted small">대리 결정은 Operator 이상만 할 수 있어요</span>
+          <span className="text-xs text-muted-foreground">
+            대리 결정은 Operator 이상만 할 수 있어요
+          </span>
         )}
-      </footer>
-    </article>
+      </CardFooter>
+    </UiCard>
   );
 }
 
@@ -501,9 +592,9 @@ function HistoryTab() {
       key: 'tool',
       header: 'Tool',
       render: (r) => (
-        <div className="ident">
+        <div>
           <Mono>{r.toolName}</Mono>
-          <div className="cell-sub">
+          <div className={SUB_CLASS}>
             {LEVEL[r.permissionLevel] ?? r.permissionLevel} · 위험도{' '}
             {RISK[r.riskLevel]?.label ?? r.riskLevel}
           </div>
@@ -514,11 +605,15 @@ function HistoryTab() {
       key: 'task',
       header: '작업',
       render: (r) => (
-        <div className="cell-title">
-          <Link to={`/tasks/${r.taskId}`} onClick={(e) => e.stopPropagation()}>
+        <div>
+          <Link
+            to={`/tasks/${r.taskId}`}
+            className={LINK_CLASS}
+            onClick={(e) => e.stopPropagation()}
+          >
             {r.taskTitle || '제목 없음'}
           </Link>
-          <div className="cell-sub">{r.endUserPseudonym}</div>
+          <div className={SUB_CLASS}>{r.endUserPseudonym}</div>
         </div>
       ),
     },
@@ -533,24 +628,24 @@ function HistoryTab() {
 
   return (
     <Card flush>
-      <div className="card-toolbar">
+      <div className="px-4 pt-3">
         <Toolbar>
           <form
-            className="row"
+            className="flex w-full flex-wrap items-center gap-2"
             onSubmit={(e) => {
               e.preventDefault();
               setToolName(toolInput.trim());
             }}
           >
-            <input
-              className="input"
+            <Input
               aria-label="Tool 이름으로 거르기"
               placeholder="Tool 이름 (정확히 일치)"
               value={toolInput}
               onChange={(e) => setToolInput(e.target.value)}
-              style={{ width: 320 }}
+              className="sm:w-80"
             />
             <Button variant="outline" type="submit">
+              <FilterIcon aria-hidden="true" />
               거르기
             </Button>
             {toolName && (
@@ -561,24 +656,23 @@ function HistoryTab() {
                   setToolName('');
                 }}
               >
+                <XIcon aria-hidden="true" />
                 전체 보기
               </Button>
             )}
           </form>
         </Toolbar>
+        <ErrorNotice error={list.error} onRetry={() => void list.reload()} />
       </div>
-      <ErrorNotice error={list.error} onRetry={() => void list.reload()} />
-      <div className="wide-table history-table">
-        <DataTable
-          label="승인 처리 이력"
-          columns={columns}
-          rows={list.items}
-          rowKey={(r) => r.id}
-          loading={list.loading}
-          onRowClick={setOpen}
-          empty={toolName ? `${toolName} 의 처리 이력이 없어요` : '처리된 승인 요청이 아직 없어요'}
-        />
-      </div>
+      <DataTable
+        label="승인 처리 이력"
+        columns={columns}
+        rows={list.items}
+        rowKey={(r) => r.id}
+        loading={list.loading}
+        onRowClick={setOpen}
+        empty={toolName ? `${toolName} 의 처리 이력이 없어요` : '처리된 승인 요청이 아직 없어요'}
+      />
       <MoreButton hasMore={list.hasMore} loading={list.moreLoading} onClick={list.loadMore} />
       <Modal
         open={open !== null}
@@ -603,7 +697,7 @@ function DecidedBy({ row }: { row: ApprovalRow }) {
     parts.push(
       <div key="u">
         사용자 {row.user.decision === 'approve' ? '승인' : '거절'}
-        {row.user.comment && <span className="muted"> — “{row.user.comment}”</span>}
+        {row.user.comment && <span className="text-muted-foreground"> — “{row.user.comment}”</span>}
       </div>,
     );
   if (row.operator)
@@ -611,12 +705,14 @@ function DecidedBy({ row }: { row: ApprovalRow }) {
       <div key="o">
         {row.operator.memberName ?? '운영자'}{' '}
         {row.operator.decision === 'approve' ? '승인' : '거절'}
-        {row.operator.comment && <span className="muted"> — “{row.operator.comment}”</span>}
+        {row.operator.comment && (
+          <span className="text-muted-foreground"> — “{row.operator.comment}”</span>
+        )}
       </div>,
     );
   if (parts.length === 0)
     return (
-      <span className="muted">
+      <span className="text-muted-foreground">
         {row.status === 'expired'
           ? '응답 없이 만료'
           : row.status === 'cancelled'
@@ -624,20 +720,25 @@ function DecidedBy({ row }: { row: ApprovalRow }) {
             : '—'}
       </span>
     );
-  return <div className="decided-by">{parts}</div>;
+  return <div className="grid gap-0.5 text-sm">{parts}</div>;
 }
 
 function ApprovalDetail({ row }: { row: ApprovalRow }) {
   return (
-    <div className="stack">
-      <div className="row">
+    <div className="grid gap-4 text-sm">
+      <div className="flex flex-wrap items-center gap-2">
         <Badge tone={STATUS_TONE[row.status]}>{STATUS_LABEL[row.status]}</Badge>
         <Mono>{row.toolName}</Mono>
       </div>
-      <p className="approval-item-title">{row.summary}</p>
+      <p className="text-base leading-snug font-semibold">{row.summary}</p>
       <KeyValue
         items={[
-          ['작업', <Link to={`/tasks/${row.taskId}`}>{row.taskTitle || '제목 없음'}</Link>],
+          [
+            '작업',
+            <Link to={`/tasks/${row.taskId}`} className={LINK_CLASS}>
+              {row.taskTitle || '제목 없음'}
+            </Link>,
+          ],
           ['요청 사용자', <Mono>{row.endUserPseudonym}</Mono>],
           ['권한 등급', LEVEL[row.permissionLevel] ?? row.permissionLevel],
           ['위험도', RISK[row.riskLevel]?.label ?? row.riskLevel],
@@ -764,6 +865,7 @@ function PoliciesTab() {
                 disabled={changes.size === 0 || save.pending}
                 onClick={() => setDraft(query.data!.map((p) => ({ ...p })))}
               >
+                <RotateCcwIcon aria-hidden="true" />
                 되돌리기
               </Button>
               <Button
@@ -777,120 +879,130 @@ function PoliciesTab() {
           ) : undefined
         }
       >
-        <ErrorNotice error={save.error} />
-        <div className="table-wrap">
-          <table className="table policy-table" aria-label="등급별 기본 정책">
-            <thead>
-              <tr>
-                <th>권한 등급</th>
-                <th>실행 방식</th>
-                <th>승인하는 사람</th>
-                <th>작업 동안 다시 묻지 않기</th>
-                <th>승인 대기 시간</th>
-              </tr>
-            </thead>
-            <tbody>
-              {draft.map((p) => {
-                const approvalMode = p.mode === 'require_approval' || p.mode === 'always_approval';
-                const scopeLocked = p.mode === 'always_approval' || ALWAYS_ASK.includes(p.level);
-                const change = changes.get(p.level);
-                return (
-                  <tr key={p.level}>
-                    <td>
-                      <div className="policy-level">
-                        <strong>{LEVEL[p.level] ?? p.level}</strong>
-                        <Mono>{p.level}</Mono>
-                        {p.isDefault && change === undefined && <Badge>기본값</Badge>}
-                        {change === 1 && <Badge tone="warning">강화 · 즉시 적용</Badge>}
-                        {change === -1 && <Badge tone="info">완화 · 새 작업부터</Badge>}
-                        {change === 2 && <Badge tone="neutral">변경됨</Badge>}
-                      </div>
-                      <div className="cell-sub">{LEVEL_HINT[p.level]}</div>
-                    </td>
-                    <td>
-                      <select
-                        className="input"
-                        aria-label={`${LEVEL[p.level]} 실행 방식`}
-                        value={p.mode}
-                        disabled={!editable}
-                        onChange={(e) => update(p.level, { mode: e.target.value as Mode })}
-                      >
-                        {(Object.keys(MODE_LABEL) as Mode[]).map((m) => (
-                          <option key={m} value={m}>
-                            {MODE_LABEL[m]}
-                          </option>
+        {save.error && (
+          <div className="px-4 pt-3">
+            <ErrorNotice error={save.error} />
+          </div>
+        )}
+        <Table aria-label="등급별 기본 정책">
+          <TableHeader className="bg-muted/50">
+            <TableRow>
+              {[
+                '권한 등급',
+                '실행 방식',
+                '승인하는 사람',
+                '작업 동안 다시 묻지 않기',
+                '승인 대기 시간',
+              ].map((h) => (
+                <TableHead key={h} className="px-4 text-xs text-muted-foreground">
+                  {h}
+                </TableHead>
+              ))}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {draft.map((p) => {
+              const approvalMode = p.mode === 'require_approval' || p.mode === 'always_approval';
+              const scopeLocked = p.mode === 'always_approval' || ALWAYS_ASK.includes(p.level);
+              const change = changes.get(p.level);
+              return (
+                <TableRow key={p.level}>
+                  <TableCell className="min-w-60 px-4 py-3 align-top whitespace-normal">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <strong className="font-semibold">{LEVEL[p.level] ?? p.level}</strong>
+                      <Mono>{p.level}</Mono>
+                      {p.isDefault && change === undefined && <Badge>기본값</Badge>}
+                      {change === 1 && <Badge tone="warning">강화 · 즉시 적용</Badge>}
+                      {change === -1 && <Badge tone="info">완화 · 새 작업부터</Badge>}
+                      {change === 2 && <Badge tone="neutral">변경됨</Badge>}
+                    </div>
+                    <div className={SUB_CLASS}>{LEVEL_HINT[p.level]}</div>
+                  </TableCell>
+                  <TableCell className="px-4 py-3 align-top">
+                    <NativeSelect
+                      containerClassName="min-w-40"
+                      aria-label={`${LEVEL[p.level]} 실행 방식`}
+                      value={p.mode}
+                      disabled={!editable}
+                      onChange={(e) => update(p.level, { mode: e.target.value as Mode })}
+                    >
+                      {(Object.keys(MODE_LABEL) as Mode[]).map((m) => (
+                        <NativeSelectOption key={m} value={m}>
+                          {MODE_LABEL[m]}
+                        </NativeSelectOption>
+                      ))}
+                    </NativeSelect>
+                  </TableCell>
+                  <TableCell className="px-4 py-3 align-top">
+                    <NativeSelect
+                      containerClassName="min-w-40"
+                      aria-label={`${LEVEL[p.level]} 승인하는 사람`}
+                      value={p.approver ?? ''}
+                      disabled={!editable || !approvalMode}
+                      onChange={(e) =>
+                        update(p.level, {
+                          approver: (e.target.value || null) as Approver | null,
+                        })
+                      }
+                    >
+                      {!approvalMode && <NativeSelectOption value="">—</NativeSelectOption>}
+                      {approvalMode && (
+                        <NativeSelectOption value="">
+                          기본 ({p.mode === 'always_approval' ? '사용자 + 운영자' : '사용자'})
+                        </NativeSelectOption>
+                      )}
+                      {(Object.keys(APPROVER_LABEL) as Approver[]).map((a) => (
+                        <NativeSelectOption key={a} value={a}>
+                          {APPROVER_LABEL[a]}
+                        </NativeSelectOption>
+                      ))}
+                    </NativeSelect>
+                  </TableCell>
+                  <TableCell className="px-4 py-3 align-top">
+                    <Toggle
+                      checked={p.allowTaskScope}
+                      disabled={!editable || !approvalMode || scopeLocked}
+                      onChange={(v) => update(p.level, { allowTaskScope: v })}
+                      label={
+                        scopeLocked ? (
+                          <span className="text-xs">매번 묻는 등급</span>
+                        ) : p.allowTaskScope ? (
+                          '허용'
+                        ) : (
+                          '허용 안 함'
+                        )
+                      }
+                    />
+                  </TableCell>
+                  <TableCell className="px-4 py-3 align-top">
+                    <NativeSelect
+                      containerClassName="min-w-32"
+                      aria-label={`${LEVEL[p.level]} 승인 대기 시간`}
+                      value={p.ttlSeconds}
+                      disabled={!editable || !approvalMode}
+                      onChange={(e) => update(p.level, { ttlSeconds: Number(e.target.value) })}
+                    >
+                      {[...new Set([...TTL_OPTIONS, p.ttlSeconds])]
+                        .sort((a, b) => a - b)
+                        .map((s) => (
+                          <NativeSelectOption key={s} value={s}>
+                            {ttlLabel(s)}
+                          </NativeSelectOption>
                         ))}
-                      </select>
-                    </td>
-                    <td>
-                      <select
-                        className="input"
-                        aria-label={`${LEVEL[p.level]} 승인하는 사람`}
-                        value={p.approver ?? ''}
-                        disabled={!editable || !approvalMode}
-                        onChange={(e) =>
-                          update(p.level, {
-                            approver: (e.target.value || null) as Approver | null,
-                          })
-                        }
-                      >
-                        {!approvalMode && <option value="">—</option>}
-                        {approvalMode && (
-                          <option value="">
-                            기본 ({p.mode === 'always_approval' ? '사용자 + 운영자' : '사용자'})
-                          </option>
-                        )}
-                        {(Object.keys(APPROVER_LABEL) as Approver[]).map((a) => (
-                          <option key={a} value={a}>
-                            {APPROVER_LABEL[a]}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td>
-                      <Toggle
-                        checked={p.allowTaskScope}
-                        disabled={!editable || !approvalMode || scopeLocked}
-                        onChange={(v) => update(p.level, { allowTaskScope: v })}
-                        label={
-                          scopeLocked ? (
-                            <span className="muted small">매번 묻는 등급</span>
-                          ) : p.allowTaskScope ? (
-                            '허용'
-                          ) : (
-                            '허용 안 함'
-                          )
-                        }
-                      />
-                    </td>
-                    <td>
-                      <select
-                        className="input"
-                        aria-label={`${LEVEL[p.level]} 승인 대기 시간`}
-                        value={p.ttlSeconds}
-                        disabled={!editable || !approvalMode}
-                        onChange={(e) => update(p.level, { ttlSeconds: Number(e.target.value) })}
-                      >
-                        {[...new Set([...TTL_OPTIONS, p.ttlSeconds])]
-                          .sort((a, b) => a - b)
-                          .map((s) => (
-                            <option key={s} value={s}>
-                              {ttlLabel(s)}
-                            </option>
-                          ))}
-                      </select>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                    </NativeSelect>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+        <div className="grid gap-1 border-t px-4 py-3 text-xs text-muted-foreground">
+          {!editable && <p>정책은 Admin 이상만 바꿀 수 있어요.</p>}
+          <p>
+            승인 대기 시간이 지나면 요청은 만료되고 작업은 일시정지돼요. 재개하면 다시 승인을
+            요청합니다.
+          </p>
         </div>
-        {!editable && <p className="card-foot muted small">정책은 Admin 이상만 바꿀 수 있어요.</p>}
-        <p className="card-foot muted small">
-          승인 대기 시간이 지나면 요청은 만료되고 작업은 일시정지돼요. 재개하면 다시 승인을
-          요청합니다.
-        </p>
       </Card>
     </>
   );
@@ -969,15 +1081,15 @@ function RulesTab() {
       header: '우선순위',
       width: '80px',
       align: 'right',
-      render: (r) => r.priority,
+      render: (r) => <span className="tabular-nums">{r.priority}</span>,
     },
     {
       key: 'name',
       header: '규칙',
       render: (r) => (
-        <div>
-          <div className="rule-name">{r.name}</div>
-          {r.description && <div className="cell-sub">{r.description}</div>}
+        <div className="min-w-48 whitespace-normal">
+          <div className="font-semibold">{r.name}</div>
+          {r.description && <div className={SUB_CLASS}>{r.description}</div>}
         </div>
       ),
     },
@@ -985,7 +1097,7 @@ function RulesTab() {
       key: 'target',
       header: '대상',
       render: (r) => (
-        <div className="row ident">
+        <div className="flex flex-wrap items-center gap-1.5">
           {r.toolPattern && <Mono>{r.toolPattern}</Mono>}
           {r.level && <Badge>{LEVEL[r.level] ?? r.level} 등급</Badge>}
         </div>
@@ -994,7 +1106,11 @@ function RulesTab() {
     {
       key: 'condition',
       header: '조건',
-      render: (r) => <span className="rule-condition">{describeCondition(r.condition)}</span>,
+      render: (r) => (
+        <span className="block min-w-56 text-sm whitespace-normal text-muted-foreground">
+          {describeCondition(r.condition)}
+        </span>
+      ),
     },
     {
       key: 'effect',
@@ -1012,12 +1128,12 @@ function RulesTab() {
       header: '사용',
       width: '90px',
       render: (r) => (
-        <span onClick={(e) => e.stopPropagation()}>
-          <Toggle
+        <span className="inline-flex" {...STOP_ROW}>
+          <Switch
             checked={r.enabled}
             disabled={!editable || toggle.pending}
-            label={<span className="sr-only">{r.name} 사용</span>}
-            onChange={(v) => {
+            aria-label={`${r.name} 사용`}
+            onCheckedChange={(v) => {
               void toggle.run(r.id, v).then((updated) => {
                 if (!updated) return;
                 query.setData((prev) => (prev ?? []).map((x) => (x.id === r.id ? updated : x)));
@@ -1032,24 +1148,35 @@ function RulesTab() {
       ? [
           {
             key: 'actions',
-            header: '',
-            width: '150px',
+            header: <span className="sr-only">작업</span>,
+            width: '56px',
             align: 'right' as const,
             render: (r: ToolPolicyRule) => (
-              <span className="row nowrap" onClick={(e) => e.stopPropagation()}>
-                <Button size="sm" variant="ghost" onClick={() => setEditing(r)}>
-                  수정
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    remove.reset();
-                    setDeleting(r);
-                  }}
-                >
-                  삭제
-                </Button>
+              <span className="inline-flex" {...STOP_ROW}>
+                {/* 메뉴에서 대화상자를 열므로 modal 을 끈다 — 닫힌 뒤 body 포인터가 막히지 않게 */}
+                <DropdownMenu modal={false}>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon-sm" aria-label={`${r.name} 작업`}>
+                      <EllipsisIcon aria-hidden="true" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onSelect={() => setEditing(r)}>
+                      <PencilIcon aria-hidden="true" />
+                      수정
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      variant="destructive"
+                      onSelect={() => {
+                        remove.reset();
+                        setDeleting(r);
+                      }}
+                    >
+                      <Trash2Icon aria-hidden="true" />
+                      삭제
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </span>
             ),
           },
@@ -1057,6 +1184,7 @@ function RulesTab() {
       : []),
   ];
 
+  const listError = query.error ?? toggle.error;
   return (
     <>
       <Card
@@ -1064,25 +1192,32 @@ function RulesTab() {
         title="조건 규칙"
         description="인자 · 도메인 · 시간 조건에 맞으면 등급 정책보다 엄격하게 — 운영자 승인을 요구하거나 차단합니다. 규칙은 정책을 강화만 해요."
         actions={
-          editable ? <Button onClick={() => setEditing('new')}>규칙 추가</Button> : undefined
+          editable ? (
+            <Button onClick={() => setEditing('new')}>
+              <PlusIcon aria-hidden="true" />
+              규칙 추가
+            </Button>
+          ) : undefined
         }
       >
-        <ErrorNotice error={query.error ?? toggle.error} onRetry={() => void query.reload()} />
-        <div className="wide-table rules-table">
-          <DataTable
-            label="조건 규칙"
-            columns={columns}
-            rows={query.data ?? []}
-            rowKey={(r) => r.id}
-            loading={query.loading}
-            onRowClick={editable ? (r) => setEditing(r) : undefined}
-            empty={
-              <Empty title="조건 규칙이 없어요">
-                예: 금액이 100만 원을 넘는 결제 · 회사 밖 도메인으로 보내는 메일 · 업무 시간 밖 삭제
-              </Empty>
-            }
-          />
-        </div>
+        {listError && (
+          <div className="px-4 pt-3">
+            <ErrorNotice error={listError} onRetry={() => void query.reload()} />
+          </div>
+        )}
+        <DataTable
+          label="조건 규칙"
+          columns={columns}
+          rows={query.data ?? []}
+          rowKey={(r) => r.id}
+          loading={query.loading}
+          onRowClick={editable ? (r) => setEditing(r) : undefined}
+          empty={
+            <Empty title="조건 규칙이 없어요">
+              예: 금액이 100만 원을 넘는 결제 · 회사 밖 도메인으로 보내는 메일 · 업무 시간 밖 삭제
+            </Empty>
+          }
+        />
       </Card>
       {editing && (
         <RuleModal
@@ -1120,7 +1255,7 @@ function RulesTab() {
         }}
         body={
           deleting && (
-            <p>
+            <p className="mb-3 text-sm">
               <strong>{deleting.name}</strong> 규칙을 지울까요? 이미 실행 중인 작업에는 시작 때의
               규칙이 계속 적용될 수 있어요.
             </p>
@@ -1156,6 +1291,11 @@ const EMPTY_CLAUSE: Clause = {
   from: '09:00',
   to: '18:00',
   tz: 'Asia/Seoul',
+};
+
+const EFFECT_OPTION: Record<ToolPolicyRule['effect'], { label: string; hint: string }> = {
+  require_operator: { label: '운영자 승인 필요', hint: '사용자 승인만으로는 실행하지 않아요' },
+  block: { label: '차단', hint: '조건에 맞으면 실행하지 않아요' },
 };
 
 function toClause(c: RuleCondition): Clause | null {
@@ -1265,6 +1405,15 @@ interface FieldIssue {
   message: string;
 }
 
+function Section({ legend, children }: { legend: string; children: ReactNode }) {
+  return (
+    <fieldset className="mb-4 min-w-0 rounded-lg border px-4 pt-2">
+      <legend className="px-1 text-sm font-semibold text-muted-foreground">{legend}</legend>
+      {children}
+    </fieldset>
+  );
+}
+
 function RuleModal({
   rule,
   onClose,
@@ -1275,6 +1424,7 @@ function RuleModal({
   onSaved: (rule: ToolPolicyRule, created: boolean) => void;
 }) {
   const api = useApi();
+  const id = useId();
   const initialBuilder = rule
     ? fromCondition(rule.condition)
     : { combinator: 'all' as const, clauses: [{ ...EMPTY_CLAUSE }] };
@@ -1399,189 +1549,171 @@ function RuleModal({
         </>
       }
     >
-      <div className="rule-form">
-        <div className="grid grid-2">
-          <Field label="이름" required error={issueFor('name')}>
-            <input
-              className="input"
-              value={name}
-              maxLength={100}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="예: 고액 결제는 운영자 승인"
-            />
-          </Field>
-          <Field
-            label="우선순위"
-            hint="작을수록 먼저 평가해요 (0–10000)"
-            error={issueFor('priority')}
-          >
-            <input
-              className="input"
-              type="number"
-              min={0}
-              max={10000}
-              value={priority}
-              onChange={(e) => setPriority(e.target.value)}
-            />
-          </Field>
-        </div>
-        <Field label="설명" error={issueFor('description')}>
-          <input
-            className="input"
-            value={description}
-            maxLength={500}
-            onChange={(e) => setDescription(e.target.value)}
+      <div className="grid gap-x-4 gap-y-0 sm:grid-cols-2">
+        <Field label="이름" required error={issueFor('name')}>
+          <Input
+            value={name}
+            maxLength={100}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="예: 고액 결제는 운영자 승인"
           />
         </Field>
-        <fieldset className="rule-section">
-          <legend>대상 — 하나 이상</legend>
-          <div className="grid grid-2">
-            <Field
-              label="Tool 이름 또는 패턴"
-              hint="정확한 이름 또는 server.* (예: payments.*)"
-              error={issueFor('toolPattern')}
+        <Field
+          label="우선순위"
+          hint="작을수록 먼저 평가해요 (0–10000)"
+          error={issueFor('priority')}
+        >
+          <Input
+            type="number"
+            min={0}
+            max={10000}
+            value={priority}
+            onChange={(e) => setPriority(e.target.value)}
+          />
+        </Field>
+      </div>
+      <Field label="설명" error={issueFor('description')}>
+        <Input
+          value={description}
+          maxLength={500}
+          onChange={(e) => setDescription(e.target.value)}
+        />
+      </Field>
+      <Section legend="대상 — 하나 이상">
+        <div className="grid gap-x-4 gap-y-0 sm:grid-cols-2">
+          <Field
+            label="Tool 이름 또는 패턴"
+            hint="정확한 이름 또는 server.* (예: payments.*)"
+            error={issueFor('toolPattern')}
+          >
+            <Input
+              className="font-mono"
+              value={toolPattern}
+              onChange={(e) => setToolPattern(e.target.value)}
+              placeholder="payments.refund"
+            />
+          </Field>
+          <Field label="권한 등급" error={issueFor('level')}>
+            <NativeSelect value={level} onChange={(e) => setLevel(e.target.value as Level | '')}>
+              <NativeSelectOption value="">선택 안 함</NativeSelectOption>
+              {LEVELS.map((l) => (
+                <NativeSelectOption key={l} value={l}>
+                  {LEVEL[l] ?? l}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </Field>
+        </div>
+      </Section>
+      <Section legend="조건">
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            aria-label="조건 편집 방식"
+            value={mode}
+            onValueChange={(v) => {
+              if (v) switchMode(v as 'builder' | 'json');
+            }}
+          >
+            <ToggleGroupItem value="builder">빌더</ToggleGroupItem>
+            <ToggleGroupItem value="json">JSON</ToggleGroupItem>
+          </ToggleGroup>
+          {mode === 'builder' && clauses.length > 1 && (
+            <NativeSelect
+              containerClassName="w-auto"
+              aria-label="조건 결합"
+              value={combinator}
+              onChange={(e) => setCombinator(e.target.value as 'all' | 'any')}
             >
-              <input
-                className="input mono-input"
-                value={toolPattern}
-                onChange={(e) => setToolPattern(e.target.value)}
-                placeholder="payments.refund"
+              <NativeSelectOption value="all">모두 만족할 때</NativeSelectOption>
+              <NativeSelectOption value="any">하나라도 만족할 때</NativeSelectOption>
+            </NativeSelect>
+          )}
+        </div>
+        {mode === 'builder' ? (
+          <div className="mb-4 grid gap-2">
+            {clauses.map((c, i) => (
+              <ClauseEditor
+                key={i}
+                clause={c}
+                onChange={(patch) => updateClause(i, patch)}
+                onRemove={
+                  clauses.length > 1
+                    ? () => setClauses((prev) => prev.filter((_, j) => j !== i))
+                    : undefined
+                }
               />
-            </Field>
-            <Field label="권한 등급" error={issueFor('level')}>
-              <select
-                className="input"
-                value={level}
-                onChange={(e) => setLevel(e.target.value as Level | '')}
-              >
-                <option value="">선택 안 함</option>
-                {LEVELS.map((l) => (
-                  <option key={l} value={l}>
-                    {LEVEL[l] ?? l}
-                  </option>
-                ))}
-              </select>
-            </Field>
-          </div>
-        </fieldset>
-        <fieldset className="rule-section">
-          <legend>조건</legend>
-          <div className="row rule-mode">
-            <div className="segmented" role="group" aria-label="조건 편집 방식">
-              <button
-                type="button"
-                aria-pressed={mode === 'builder'}
-                onClick={() => switchMode('builder')}
-              >
-                빌더
-              </button>
-              <button
-                type="button"
-                aria-pressed={mode === 'json'}
-                onClick={() => switchMode('json')}
-              >
-                JSON
-              </button>
-            </div>
-            {mode === 'builder' && clauses.length > 1 && (
-              <select
-                className="input combinator"
-                aria-label="조건 결합"
-                value={combinator}
-                onChange={(e) => setCombinator(e.target.value as 'all' | 'any')}
-              >
-                <option value="all">모두 만족할 때</option>
-                <option value="any">하나라도 만족할 때</option>
-              </select>
+            ))}
+            <Button
+              size="sm"
+              variant="ghost"
+              className="justify-self-start"
+              onClick={() => setClauses((prev) => [...prev, { ...EMPTY_CLAUSE }])}
+            >
+              <PlusIcon aria-hidden="true" />
+              조건 추가
+            </Button>
+            <p className="text-xs text-muted-foreground">
+              미리 보기:{' '}
+              {(() => {
+                const c = buildCondition();
+                return typeof c === 'string' ? c : describeCondition(c);
+              })()}
+            </p>
+            {issueFor('condition') && (
+              <p className="text-xs text-destructive">{issueFor('condition')}</p>
             )}
           </div>
-          {mode === 'builder' ? (
-            <div className="clauses">
-              {clauses.map((c, i) => (
-                <ClauseEditor
-                  key={i}
-                  clause={c}
-                  onChange={(patch) => updateClause(i, patch)}
-                  onRemove={
-                    clauses.length > 1
-                      ? () => setClauses((prev) => prev.filter((_, j) => j !== i))
-                      : undefined
-                  }
-                />
-              ))}
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setClauses((prev) => [...prev, { ...EMPTY_CLAUSE }])}
-              >
-                + 조건 추가
-              </Button>
-              <p className="muted small">
-                미리 보기:{' '}
-                {(() => {
-                  const c = buildCondition();
-                  return typeof c === 'string' ? c : describeCondition(c);
-                })()}
-              </p>
-            </div>
-          ) : (
-            <Field
-              label="조건 JSON"
-              hint="all · any · {arg, op, value} · {argDomainNotIn, domains} · {timeOutside} 를 조합합니다"
-              error={issueFor('condition')}
+        ) : (
+          <Field
+            label="조건 JSON"
+            hint="all · any · {arg, op, value} · {argDomainNotIn, domains} · {timeOutside} 를 조합합니다"
+            error={issueFor('condition')}
+          >
+            <Textarea
+              className="font-mono"
+              rows={8}
+              value={json}
+              onChange={(e) => setJson(e.target.value)}
+              spellCheck={false}
+            />
+          </Field>
+        )}
+      </Section>
+      <Section legend="효과">
+        <RadioGroup
+          aria-label="효과"
+          value={effect}
+          onValueChange={(v) => setEffect(v as ToolPolicyRule['effect'])}
+          className="mb-4 grid gap-2 sm:grid-cols-2"
+        >
+          {(Object.keys(EFFECT_OPTION) as ToolPolicyRule['effect'][]).map((value) => (
+            <Label
+              key={value}
+              htmlFor={`${id}-${value}`}
+              className="flex cursor-pointer items-start gap-2.5 rounded-lg border p-3 font-normal has-data-[state=checked]:border-primary has-data-[state=checked]:bg-primary/5"
             >
-              <textarea
-                className="input code"
-                rows={8}
-                value={json}
-                onChange={(e) => setJson(e.target.value)}
-                spellCheck={false}
-              />
-            </Field>
-          )}
-          {mode === 'builder' && issueFor('condition') && (
-            <p className="field-error">{issueFor('condition')}</p>
-          )}
-        </fieldset>
-        <fieldset className="rule-section">
-          <legend>효과</legend>
-          <div className="effect-options">
-            <label className={effect === 'require_operator' ? 'effect selected' : 'effect'}>
-              <input
-                type="radio"
-                name="effect"
-                checked={effect === 'require_operator'}
-                onChange={() => setEffect('require_operator')}
-              />
-              <span>
-                <strong>운영자 승인 필요</strong>
-                <span className="muted small">사용자 승인만으로는 실행하지 않아요</span>
+              <RadioGroupItem id={`${id}-${value}`} value={value} className="mt-0.5" />
+              <span className="grid gap-0.5">
+                <span className="font-semibold">{EFFECT_OPTION[value].label}</span>
+                <span className="text-xs text-muted-foreground">{EFFECT_OPTION[value].hint}</span>
               </span>
-            </label>
-            <label className={effect === 'block' ? 'effect selected' : 'effect'}>
-              <input
-                type="radio"
-                name="effect"
-                checked={effect === 'block'}
-                onChange={() => setEffect('block')}
-              />
-              <span>
-                <strong>차단</strong>
-                <span className="muted small">조건에 맞으면 실행하지 않아요</span>
-              </span>
-            </label>
-          </div>
-        </fieldset>
+            </Label>
+          ))}
+        </RadioGroup>
+      </Section>
+      <div className="mb-3">
         <Toggle checked={enabled} onChange={setEnabled} label="규칙 사용" />
-        {localError && <Notice tone="error">{localError}</Notice>}
-        {otherIssues.map((i) => (
-          <Notice key={i.path + i.message} tone="error">
-            {i.path ? `${i.path}: ` : ''}
-            {i.message}
-          </Notice>
-        ))}
-        {save.error && issues.length === 0 && <ErrorNotice error={save.error} />}
       </div>
+      {localError && <Notice tone="error">{localError}</Notice>}
+      {otherIssues.map((i) => (
+        <Notice key={i.path + i.message} tone="error">
+          {i.path ? `${i.path}: ` : ''}
+          {i.message}
+        </Notice>
+      ))}
+      {save.error && issues.length === 0 && <ErrorNotice error={save.error} />}
     </Modal>
   );
 }
@@ -1596,40 +1728,42 @@ function ClauseEditor({
   onRemove?: () => void;
 }) {
   return (
-    <div className="clause">
-      <select
-        className="input clause-kind"
+    <div className="flex flex-wrap items-center gap-1.5 rounded-lg border bg-muted/40 p-2">
+      <NativeSelect
+        containerClassName="w-40 flex-none"
+        className="bg-background"
         aria-label="조건 종류"
         value={clause.kind}
         onChange={(e) => onChange({ kind: e.target.value as ClauseKind })}
       >
-        <option value="arg">인자 값 비교</option>
-        <option value="domain">허용 도메인 밖</option>
-        <option value="time">업무 시간 밖</option>
-      </select>
+        <NativeSelectOption value="arg">인자 값 비교</NativeSelectOption>
+        <NativeSelectOption value="domain">허용 도메인 밖</NativeSelectOption>
+        <NativeSelectOption value="time">업무 시간 밖</NativeSelectOption>
+      </NativeSelect>
       {clause.kind === 'arg' && (
         <>
-          <input
-            className="input mono-input"
+          <Input
+            className="min-w-0 grow basis-30 bg-background font-mono"
             aria-label="인자 이름"
             placeholder="amount 또는 customer.tier"
             value={clause.arg}
             onChange={(e) => onChange({ arg: e.target.value })}
           />
-          <select
-            className="input clause-op"
+          <NativeSelect
+            containerClassName="w-30 flex-none"
+            className="bg-background"
             aria-label="비교"
             value={clause.op}
             onChange={(e) => onChange({ op: e.target.value as CompareOp })}
           >
             {(Object.keys(OP_LABEL) as CompareOp[]).map((op) => (
-              <option key={op} value={op}>
+              <NativeSelectOption key={op} value={op}>
                 {OP_LABEL[op]}
-              </option>
+              </NativeSelectOption>
             ))}
-          </select>
-          <input
-            className="input"
+          </NativeSelect>
+          <Input
+            className="min-w-0 grow basis-30 bg-background"
             aria-label="값"
             placeholder={clause.op === 'in' ? 'a, b, c' : '1000000'}
             value={clause.value}
@@ -1639,15 +1773,15 @@ function ClauseEditor({
       )}
       {clause.kind === 'domain' && (
         <>
-          <input
-            className="input mono-input"
+          <Input
+            className="min-w-0 grow basis-30 bg-background font-mono"
             aria-label="인자 이름"
             placeholder="to"
             value={clause.arg}
             onChange={(e) => onChange({ arg: e.target.value })}
           />
-          <input
-            className="input clause-wide"
+          <Input
+            className="min-w-0 grow-3 basis-55 bg-background"
             aria-label="허용 도메인"
             placeholder="example.com, corp.example.com"
             value={clause.domains}
@@ -1657,41 +1791,40 @@ function ClauseEditor({
       )}
       {clause.kind === 'time' && (
         <>
-          <span className="days" role="group" aria-label="업무 요일">
+          <ToggleGroup
+            type="multiple"
+            variant="outline"
+            aria-label="업무 요일"
+            value={clause.days.map(String)}
+            onValueChange={(v) => onChange({ days: v.map(Number) })}
+          >
             {DAY_LABEL.map((d, i) => (
-              <label key={d} className={clause.days.includes(i) ? 'day on' : 'day'}>
-                <input
-                  type="checkbox"
-                  checked={clause.days.includes(i)}
-                  onChange={(e) =>
-                    onChange({
-                      days: e.target.checked
-                        ? [...clause.days, i]
-                        : clause.days.filter((x) => x !== i),
-                    })
-                  }
-                />
+              <ToggleGroupItem
+                key={d}
+                value={String(i)}
+                className="bg-background data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
+              >
                 {d}
-              </label>
+              </ToggleGroupItem>
             ))}
-          </span>
-          <input
-            className="input clause-time"
+          </ToggleGroup>
+          <Input
+            className="w-33 flex-none bg-background"
             type="time"
             aria-label="시작"
             value={clause.from}
             onChange={(e) => onChange({ from: e.target.value })}
           />
-          <span className="muted">–</span>
-          <input
-            className="input clause-time"
+          <span className="text-muted-foreground">–</span>
+          <Input
+            className="w-33 flex-none bg-background"
             type="time"
             aria-label="끝"
             value={clause.to}
             onChange={(e) => onChange({ to: e.target.value })}
           />
-          <input
-            className="input clause-tz"
+          <Input
+            className="min-w-0 grow basis-30 bg-background"
             aria-label="시간대"
             value={clause.tz}
             onChange={(e) => onChange({ tz: e.target.value })}
@@ -1699,9 +1832,22 @@ function ClauseEditor({
         </>
       )}
       {onRemove && (
-        <button type="button" className="clause-remove" aria-label="조건 삭제" onClick={onRemove}>
-          ×
-        </button>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="ml-auto"
+                aria-label="조건 삭제"
+                onClick={onRemove}
+              >
+                <XIcon aria-hidden="true" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>조건 삭제</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       )}
     </div>
   );
