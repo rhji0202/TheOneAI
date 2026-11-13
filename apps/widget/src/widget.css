@@ -834,8 +834,7 @@ code {
   height: 18px;
   accent-color: var(--brand);
 }
-.comment,
-.feedback-comment textarea {
+.comment {
   width: 100%;
   border: 1px solid var(--input-line);
   border-radius: 8px;
@@ -923,48 +922,6 @@ code {
   flex-direction: column;
   gap: 10px;
 }
-.verify {
-  border-radius: 10px;
-  padding: 10px 12px;
-}
-.verify-ok {
-  background: var(--ok-bg);
-  color: var(--ok-text);
-}
-.verify-warn {
-  background: var(--warn-bg);
-  color: var(--warn-text);
-}
-.verify-title {
-  margin: 0 0 6px;
-  font-weight: 700;
-  font-size: 13px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.verify ul {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  font-size: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.verify li {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.verify li.fail {
-  font-weight: 600;
-}
-.run-summary {
-  margin: 0;
-  font-size: 12px;
-  color: var(--text-3);
-}
 .artifacts ul {
   margin: 6px 0 0;
   padding: 0;
@@ -1002,21 +959,6 @@ code {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.feedback {
-  border-top: 1px solid var(--line-soft);
-  padding-top: 10px;
-  font-size: 13px;
-}
-.feedback .actions {
-  margin-top: 6px;
-}
-.feedback-comment {
-  margin-top: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  align-items: flex-end;
 }
 .failure {
   padding: 12px;

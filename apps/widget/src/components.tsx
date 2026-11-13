@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
-import { formatBytes, formatDuration, formatRemaining } from '../../shared/format';
+import { formatBytes, formatRemaining } from '../../shared/format';
 import { Markdown } from '../../shared/markdown';
 import { LEVEL, RISK, statusOf } from '../../shared/status';
 import type {
@@ -11,18 +11,7 @@ import type {
   TaskResult,
   WidgetApi,
 } from './api';
-import {
-  Alert,
-  Check,
-  Clip,
-  Close,
-  Download,
-  File,
-  Send,
-  Shield,
-  ThumbDown,
-  ThumbUp,
-} from './icons';
+import { Alert, Check, Clip, Close, Download, File, Send, Shield } from './icons';
 import type { RunState, ToolChip } from './run';
 
 export function StatusBadge({ status }: { status: string }) {
@@ -127,9 +116,14 @@ function stepDetail(step: PlanStep, tools: ToolChip[]): string | null {
   return null;
 }
 
+/** 답변 단계만 있는 계획(인사 · 간단한 질문) — 실행 계획을 보여 주지 않는다 */
+export function isSimplePlan(plan: RunState['plan']): boolean {
+  return Boolean(plan?.steps.every((s) => s.kind === 'respond'));
+}
+
 export function PlanCard({ run }: { run: RunState }) {
   const [showRevision, setShowRevision] = useState(false);
-  if (!run.plan) return null;
+  if (!run.plan || isSimplePlan(run.plan)) return null;
   const steps = run.plan.steps;
   const revised = run.plan.version > 1;
   return (
@@ -349,95 +343,11 @@ export function ApprovalCard({
   );
 }
 
-export function ResultCard({
-  taskId,
-  result,
-  api,
-}: {
-  taskId: string;
-  result: TaskResult;
-  api: WidgetApi;
-}) {
-  const passed = result.verification.every((c) => c.passed);
-  const [rating, setRating] = useState<'helpful' | 'not_helpful' | null>(null);
-  const [comment, setComment] = useState('');
-  const [sent, setSent] = useState(false);
-  const s = result.summary;
-  const send = async (value: 'helpful' | 'not_helpful', text?: string) => {
-    setRating(value);
-    try {
-      await api.feedback(taskId, value, text);
-      setSent(value === 'helpful' || Boolean(text));
-    } catch {
-      setSent(false);
-    }
-  };
+export function ResultCard({ result, api }: { result: TaskResult; api: WidgetApi }) {
+  if (result.artifacts.length === 0) return null;
   return (
     <section className="card result" aria-label="결과">
-      <div className={passed ? 'verify verify-ok' : 'verify verify-warn'}>
-        <p className="verify-title">
-          {passed ? <Check size={14} /> : <Alert />}{' '}
-          {passed ? '결과 검증 완료' : '확인이 필요한 항목이 있어요'}
-        </p>
-        <ul>
-          {result.verification.map((c) => (
-            <li key={c.label} className={c.passed ? '' : 'fail'}>
-              {c.passed ? <Check size={12} /> : <Alert size={12} />} {c.label}
-            </li>
-          ))}
-        </ul>
-      </div>
-      <p className="run-summary">
-        {s.steps}단계 · Tool {s.toolCalls}회{s.retries ? ` · 재시도 ${s.retries}` : ''}
-        {s.replans ? ` · 재계획 ${s.replans}` : ''} · {formatDuration(s.durationMs)}
-      </p>
-      {result.artifacts.length > 0 && <Artifacts api={api} artifacts={result.artifacts} />}
-      <div className="feedback">
-        {sent ? (
-          <p className="muted">의견 고마워요.</p>
-        ) : (
-          <>
-            <span>결과가 도움이 됐나요?</span>
-            <div className="actions">
-              <button
-                type="button"
-                className={rating === 'helpful' ? 'btn btn-sm active' : 'btn btn-sm'}
-                onClick={() => void send('helpful')}
-              >
-                <ThumbUp /> 도움됨
-              </button>
-              <button
-                type="button"
-                className={rating === 'not_helpful' ? 'btn btn-sm active' : 'btn btn-sm'}
-                onClick={() => setRating('not_helpful')}
-              >
-                <ThumbDown /> 개선 필요
-              </button>
-            </div>
-            {rating === 'not_helpful' && (
-              <div className="feedback-comment">
-                <label className="sr-only" htmlFor={`fb-${taskId}`}>
-                  개선할 점
-                </label>
-                <textarea
-                  id={`fb-${taskId}`}
-                  rows={2}
-                  placeholder="어떤 점이 아쉬웠나요?"
-                  value={comment}
-                  onChange={(e) => setComment(e.target.value)}
-                />
-                <button
-                  type="button"
-                  className="btn btn-sm btn-primary"
-                  onClick={() => void send('not_helpful', comment.trim() || undefined)}
-                >
-                  보내기
-                </button>
-              </div>
-            )}
-          </>
-        )}
-      </div>
+      <Artifacts api={api} artifacts={result.artifacts} />
     </section>
   );
 }

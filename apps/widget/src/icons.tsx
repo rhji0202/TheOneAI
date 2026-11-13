@@ -88,16 +88,6 @@ export const Shield = () => (
     <path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z" />
   </svg>
 );
-export const ThumbUp = () => (
-  <svg {...base} width={18} height={18}>
-    <path d="M7 11v9H4v-9zM7 11l4-8a2.5 2.5 0 0 1 2.5 2.5V9h5.3a2 2 0 0 1 2 2.3l-1.3 7A2 2 0 0 1 17.5 20H7" />
-  </svg>
-);
-export const ThumbDown = () => (
-  <svg {...base} width={18} height={18}>
-    <path d="M17 13V4h3v9zM17 13l-4 8a2.5 2.5 0 0 1-2.5-2.5V15H5.2a2 2 0 0 1-2-2.3l1.3-7A2 2 0 0 1 6.5 4H17" />
-  </svg>
-);
 export const Refresh = () => (
   <svg {...base} width={18} height={18}>
     <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />

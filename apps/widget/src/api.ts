@@ -185,13 +185,6 @@ export class WidgetApi {
     return this.request<ApprovalView>('POST', `/v1/approvals/${approvalId}/decision`, body);
   }
 
-  feedback(taskId: string, rating: 'helpful' | 'not_helpful', comment?: string) {
-    return this.request('POST', `/v1/tasks/${taskId}/feedback`, {
-      rating,
-      ...(comment ? { comment } : {}),
-    });
-  }
-
   artifacts(taskId: string) {
     return this.request<ArtifactView[]>('GET', `/v1/tasks/${taskId}/artifacts`);
   }

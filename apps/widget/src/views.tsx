@@ -14,6 +14,7 @@ import {
   Bubble,
   Composer,
   FailureCard,
+  isSimplePlan,
   PlanCard,
   ResultCard,
   StatusBadge,
@@ -219,7 +220,7 @@ export function ChatView({
   );
 
   const active = ACTIVE_STATUSES.includes(run.status as never) && run.loaded;
-  const total = run.plan?.steps.length ?? 0;
+  const total = isSimplePlan(run.plan) ? 0 : (run.plan?.steps.length ?? 0);
   const done = run.plan?.steps.filter((s) => s.status === 'succeeded').length ?? 0;
   useEffect(() => {
     onHeader({
@@ -307,6 +308,9 @@ export function ChatView({
         {taskId && run.status === 'running' && !run.plan && (
           <p className="thinking">어떻게 진행할지 계획하고 있어요…</p>
         )}
+        {taskId && run.status === 'running' && isSimplePlan(run.plan) && !run.stream && (
+          <p className="thinking">답변을 준비하고 있어요…</p>
+        )}
         {run.status === 'recovering' && (
           <p className="notice">
             실행 서버가 바뀌어 마지막 체크포인트부터 자동으로 이어서 진행해요.
@@ -316,7 +320,7 @@ export function ChatView({
           <ApprovalCard approval={run.approval} api={api} onDecided={(a) => setApproval(a)} />
         )}
         {run.status === 'completed' && run.result && taskId && (
-          <ResultCard taskId={taskId} result={run.result} api={api} />
+          <ResultCard result={run.result} api={api} />
         )}
         {(run.status === 'failed' || run.status === 'paused') && (
           <FailureCard

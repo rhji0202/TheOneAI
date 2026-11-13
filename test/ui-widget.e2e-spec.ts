@@ -70,10 +70,13 @@ describe('위젯 (W-01 ~ W-05)', () => {
     await snap(page, 'w01-home');
   });
 
-  it('W-02 · W-04 요청 → 실행 계획 · 스트리밍 답변 → 결과 검증 · 피드백', async () => {
+  it('W-02 · W-04 요청 → 실행 계획 · 스트리밍 답변 → 완료', async () => {
     await sendFromHome('[분석] 할인 방식 정리해 줘 #ui-run');
     await panel().getByText('실행 계획 · 2단계').waitFor({ timeout: 15_000 });
-    await panel().getByText('결과 검증 완료').waitFor({ timeout: 15_000 });
+    await panel()
+      .getByRole('banner')
+      .getByText('완료', { exact: true })
+      .waitFor({ timeout: 15_000 });
     expect(
       await panel()
         .getByText(/요청하신 내용에 대한 답변입니다/)
@@ -81,12 +84,6 @@ describe('위젯 (W-01 ~ W-05)', () => {
     ).toBe(1);
     expect(await panel().getByText('요구사항 분석').count()).toBe(1);
     await snap(page, 'w04-result');
-    await panel()
-      .getByRole('button', { name: /도움됨/ })
-      .click();
-    await panel().getByText('의견 고마워요.').waitFor();
-    const feedback = await ctx.owner.feedback.findMany({ where: { rating: 'helpful' } });
-    expect(feedback).toHaveLength(1);
   });
 
   it('W-03 승인 필요 Tool → 승인 카드(인자 · 위험도) → 승인하고 계속 → 실행 후 완료', async () => {
@@ -100,7 +97,10 @@ describe('위젯 (W-01 ~ W-05)', () => {
     expect(await card.getByText('위험도 중간').count()).toBe(1);
     await snap(page, 'w03-approval');
     await card.getByRole('button', { name: '승인하고 계속' }).click();
-    await panel().getByText('결과 검증 완료').waitFor({ timeout: 15_000 });
+    await panel()
+      .getByRole('banner')
+      .getByText('완료', { exact: true })
+      .waitFor({ timeout: 15_000 });
     expect(sent).toEqual([{ to: 'ops@example.com', text: '안녕하세요' }]);
   });
 
@@ -110,7 +110,10 @@ describe('위젯 (W-01 ~ W-05)', () => {
     await panel().getByText('작업을 끝내지 못했어요').waitFor({ timeout: 20_000 });
     await snap(page, 'w05-failed-in-chat');
     await panel().getByRole('button', { name: '멈춘 단계부터 재개' }).click();
-    await panel().getByText('결과 검증 완료').waitFor({ timeout: 20_000 });
+    await panel()
+      .getByRole('banner')
+      .getByText('완료', { exact: true })
+      .waitFor({ timeout: 20_000 });
   });
 
   it('W-05 작업 목록 — 상태 탭 · 항목을 누르면 그 대화로', async () => {
@@ -121,7 +124,7 @@ describe('위젯 (W-01 ~ W-05)', () => {
     await snap(page, 'w05-tasks');
     await panel().getByRole('tab', { name: '완료' }).click();
     await panel().getByText('[승인필요] 담당자에게 메모 보내줘 #ui-approval').first().click();
-    await panel().getByText('결과 검증 완료').waitFor();
+    await panel().getByRole('banner').getByText('완료', { exact: true }).waitFor();
   });
 
   it('모바일 폭에서는 전체 화면, 최소화하면 런처만', async () => {

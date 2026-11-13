@@ -94,7 +94,7 @@ open "http://localhost:3000/widget/v1/demo.html?key=wk_pub_demo&token=$ID"
 <!-- 로그인 · 로그아웃 뒤: window.TheOneAI.identify({ token }) / window.TheOneAI.destroy() -->
 ```
 
-- 화면: 런처(승인 대기 배지) · 홈(인사 · 진행 중 작업 · 추천 · 첨부) · 대화(실행 계획 카드 · 재계획 표시 · Tool 진행 · 스트리밍 답변 · 결과 검증 · 산출물 다운로드 · 피드백) · 승인 카드(인자 · 위험도 · 원문 JSON · task 범위 · 수정 요청 · 만료 시간) · 실패 · 일시정지 카드(재개 · 처음부터) · 실행 중 추가 지시 · 중지 · 작업 목록(상태 탭).
+- 화면: 런처(승인 대기 배지) · 홈(인사 · 진행 중 작업 · 추천 · 첨부) · 대화(실행 계획 카드 · 재계획 표시 · Tool 진행 · 스트리밍 답변 · 산출물 다운로드) · 승인 카드(인자 · 위험도 · 원문 JSON · task 범위 · 수정 요청 · 만료 시간) · 실패 · 일시정지 카드(재개 · 처음부터) · 실행 중 추가 지시 · 중지 · 작업 목록(상태 탭).
 - 테마는 콘솔 위젯 설정(C-09)의 브랜드 색 · 위치 · 다크 모드를 따른다 — 브랜드 색 위 글자색은 대비(WCAG 4.5:1)로 자동. 폭 480px 이하에서는 전체 화면.
 - SSE 는 `fetch` 스트림으로 받고(세션 토큰을 헤더로), 끊기면 `Last-Event-ID` 로 이어 받는다. 마크다운은 HTML 을 쓰지 않고 React 요소로만 그린다(링크는 http(s) 만).
 - 개발: `npm run dev:widget`(변경 시 다시 빌드). 위젯 소스는 `apps/widget`, 위젯 · 콘솔 공용 코드는 `apps/shared`.
@@ -188,7 +188,7 @@ Tool 은 [test/tools.e2e-spec.ts](test/tools.e2e-spec.ts) 가 확인한다: tool
 
 Reflection · Context Compression 은 [test/reflection.e2e-spec.ts](test/reflection.e2e-spec.ts) 가 확인한다: 긴 대화 → 창 밖 메시지 8개 요약 · 저장 · 계획 · 작업 · 답변 프롬프트에 포함, 다음 작업은 새로 밀려난 2개만 이전 요약에 합침, 짧은 대화는 요약 안 함, 작업 노트가 길면 앞 단계 노트 압축(단계 기록 · 토큰) · 답변은 줄인 노트 사용, 재계획에 거부된 Tool 호출 전달, 작업의 실패 · 재계획 사유가 기억 추출로, 검증 오류 → 정정 메시지(두 번째 assistant 메시지) → 다시 검증, `selfCorrection` 끄면 정정 안 함.
 
-위젯 화면은 [test/ui-widget.e2e-spec.ts](test/ui-widget.e2e-spec.ts) 가 빌드한 `loader.js` 를 데모 페이지에 넣고 브라우저로 확인한다: 런처 → 홈(인사 · 고지 문구), 요청 → 실행 계획 · 스트리밍 답변 → 결과 검증 · 피드백 저장, 승인 카드(설명 · 인자 · 위험도) → 승인 → 같은 인자로 Tool 실행 → 완료, 실패 카드 → 멈춘 단계부터 재개 → 완료, 작업 목록 탭 → 항목을 누르면 그 대화, 모바일 폭 전체 화면 · 최소화. 콘솔용 API(초안 편집 · 버전 복원 · 위젯 설정 · Secret 교체 · 업로드 · 산출물 · 대화 보기)는 [test/console-api.e2e-spec.ts](test/console-api.e2e-spec.ts).
+위젯 화면은 [test/ui-widget.e2e-spec.ts](test/ui-widget.e2e-spec.ts) 가 빌드한 `loader.js` 를 데모 페이지에 넣고 브라우저로 확인한다: 런처 → 홈(인사 · 고지 문구), 요청 → 실행 계획 · 스트리밍 답변 → 완료, 승인 카드(설명 · 인자 · 위험도) → 승인 → 같은 인자로 Tool 실행 → 완료, 실패 카드 → 멈춘 단계부터 재개 → 완료, 작업 목록 탭 → 항목을 누르면 그 대화, 모바일 폭 전체 화면 · 최소화. 콘솔용 API(초안 편집 · 버전 복원 · 위젯 설정 · Secret 교체 · 업로드 · 산출물 · 대화 보기)는 [test/console-api.e2e-spec.ts](test/console-api.e2e-spec.ts).
 
 콘솔 화면은 [test/ui-console.e2e-spec.ts](test/ui-console.e2e-spec.ts) 가 빌드한 콘솔을 브라우저로 확인한다: 로그인(틀린 비밀번호 오류 · 로그인 전에 열려던 화면으로), 대시보드 KPI · 최근 실패, 작업 목록 → 트레이스 → 단계 상세 → 대화 보기, 실패 작업 checkpoint 재개 → 완료, Agent 초안 저장 → 배포 → 새 버전, 위젯 허용 도메인 검사 · 저장, MCP 연결 마법사(가짜 MCP 서버 · 보안 실패 Tool 제외) → 등록, Skill zip 업로드 → 활성화, 승인 대기 → 운영자 대리 승인 → Tool 실행 · 완료, 등급별 정책, Memory · 마켓플레이스 · 사용량 화면, Viewer 는 배포 · 업로드 · 연결 버튼이 없음.
 
@@ -197,7 +197,7 @@ Reflection · Context Compression 은 [test/reflection.e2e-spec.ts](test/reflect
 | 범위 | 상태 |
 |---|---|
 | 프로젝트 · DB 기반 (스키마, RLS, 마이그레이션, 시드) | 완료 |
-| 위젯 화면 W-01 ~ W-05 (`apps/widget` → `/widget/v1/loader.js`): 런처 · 홈 · 대화(계획 · 스트리밍 · 결과 검증 · 산출물 · 피드백) · 승인 카드 · 실패 · 재개 · 추가 지시 · 작업 목록, 첨부 업로드, 테마 · 다크 모드 · 모바일 전체 화면, Shadow DOM 격리 | 완료 |
+| 위젯 화면 W-01 ~ W-05 (`apps/widget` → `/widget/v1/loader.js`): 런처 · 홈 · 대화(계획 · 스트리밍 · 산출물) · 승인 카드 · 실패 · 재개 · 추가 지시 · 작업 목록, 첨부 업로드, 테마 · 다크 모드 · 모바일 전체 화면, Shadow DOM 격리 | 완료 |
 | Widget API: `POST /v1/widget/bootstrap`, 대화 · 메시지, 작업 목록 · 상세 · 중지, SSE (`Last-Event-ID` 재전송, 응답 스트림 스냅샷) | 완료 |
 | 비동기 실행: BullMQ `agent-tasks`, Worker heartbeat, 단계 · checkpoint 저장, 최대 단계 · 시간 제한, 중지 처리 | 완료 |
 | LLM 연동: OpenAI 호환 클라이언트(OpenAI · DeepSeek · Gemini), 스트리밍 · tool call 파싱 · 재시도 · 대체 모델 · 역할별 추론 강도 | 완료 — DeepSeek 는 실제 API 로 확인, OpenAI · Gemini 는 키가 없어 단위 테스트(요청 형식)까지만 |
