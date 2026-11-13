@@ -35,8 +35,6 @@ import {
   useToast,
 } from '../ui';
 import { DiffView, type FieldIssue, issuesOf, type PublishedVersion, registryMessage } from './Mcp';
-import './mcp.css';
-import './skills.css';
 
 /* ───────────── 타입 ───────────── */
 

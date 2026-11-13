@@ -32,7 +32,6 @@ import {
   TaskStatusCell,
   useAgents,
 } from './Tasks';
-import './dashboard.css';
 
 /* ───────────── 타입 (src/metrics/metrics.service.ts) ───────────── */
 

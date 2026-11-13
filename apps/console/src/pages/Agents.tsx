@@ -29,7 +29,6 @@ import {
   useQuery,
   useToast,
 } from '../ui';
-import './agents.css';
 
 /* ───────────── API 타입 (src/agents/admin/agents-admin.service.ts) ───────────── */
 

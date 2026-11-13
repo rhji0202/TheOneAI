@@ -1,3 +1,4 @@
+import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
@@ -5,7 +6,8 @@ import { defineConfig } from 'vite';
 export default defineConfig({
   root: import.meta.dirname,
   base: '/console/',
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
+  resolve: { alias: { '@': `${import.meta.dirname}/src` } },
   build: { outDir: 'dist', emptyOutDir: true, target: 'es2022', sourcemap: true },
   server: {
     port: 5174,

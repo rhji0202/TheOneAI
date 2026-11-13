@@ -50,7 +50,6 @@ import {
   ServerStatusBadge,
   TestResultView,
 } from './Mcp';
-import './mcp.css';
 
 type Step = 1 | 2 | 3 | 4;
 

@@ -28,8 +28,6 @@ import {
   useQuery,
   useToast,
 } from '../ui';
-import './agents.css';
-import './widget-settings.css';
 
 /* ───────────── API 타입 (src/widget/admin/widget-configs-admin.service.ts) ───────────── */
 

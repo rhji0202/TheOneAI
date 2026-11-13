@@ -33,7 +33,6 @@ import {
   useQuery,
   useToast,
 } from '../ui';
-import './memory.css';
 
 /* ───────────── 타입 (src/memory/admin/memories-admin.service.ts) ───────────── */
 

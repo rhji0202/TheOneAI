@@ -28,7 +28,6 @@ import {
   useQuery,
   useToast,
 } from '../ui';
-import './marketplace.css';
 
 /* ───────────── 타입 (src/marketplace/marketplace.service.ts) ───────────── */
 

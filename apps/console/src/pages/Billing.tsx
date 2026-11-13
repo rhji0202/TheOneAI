@@ -24,7 +24,6 @@ import {
   useQuery,
   useToast,
 } from '../ui';
-import './billing.css';
 
 /* ───────────── 타입 (src/billing/admin/billing-admin.service.ts) ───────────── */
 

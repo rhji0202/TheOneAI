@@ -28,7 +28,6 @@ import {
   useToast,
 } from '../ui';
 import { type AdminTaskRow, failureLabel, formatElapsed, isLive, Progress } from './Tasks';
-import './tasks.css';
 
 /* ───────────── 타입 (src/tasks/admin/tasks-admin.service.ts · trace / step) ───────────── */
 

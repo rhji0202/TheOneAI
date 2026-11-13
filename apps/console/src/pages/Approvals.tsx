@@ -36,7 +36,6 @@ import {
   useQuery,
   useToast,
 } from '../ui';
-import './approvals.css';
 
 /* ───────────── 타입 (src/approvals/admin/*, src/tasks/approval-views.ts) ───────────── */
 

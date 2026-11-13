@@ -36,7 +36,6 @@ import {
   useQuery,
   useToast,
 } from '../ui';
-import './mcp.css';
 
 /* ───────────── 타입 (서버 응답) ───────────── */
 

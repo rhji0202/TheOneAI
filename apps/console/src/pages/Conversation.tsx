@@ -20,7 +20,6 @@ import {
   useToast,
 } from '../ui';
 import { isLive, type TaskStatus } from './Tasks';
-import './tasks.css';
 
 /* ───────────── 타입 (TasksAdminService.conversation) ───────────── */
 
