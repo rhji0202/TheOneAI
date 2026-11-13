@@ -3,7 +3,12 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import yazl from 'yazl';
 import { buildDocx, buildPdf, buildPptx, buildXlsx } from '../../test/document-fixtures.js';
-import { DocumentUnreadableError, documentKind, extractDocument } from './document-extract.js';
+import {
+  DocumentUnreadableError,
+  documentKind,
+  extractDocument,
+  queryTable,
+} from './document-extract.js';
 
 const options = {
   python: process.env.PYTHON_BIN || (process.platform === 'win32' ? 'python' : 'python3'),
@@ -99,5 +104,52 @@ describe('extractDocument', () => {
     );
     expect(err).toBeInstanceOf(DocumentUnreadableError);
     expect((err as Error).message).toMatch(/not a valid Office file/);
+  });
+});
+
+describe('queryTable', () => {
+  const stock = () =>
+    buildXlsx({
+      재고: [
+        ['품목', '수량', '단가'],
+        ['볼트', 1200, 30],
+        ['너트', 340, 20],
+        ['볼트', 100, 30],
+      ],
+    });
+
+  it('시트를 테이블로 올려 SELECT 로 집계한다', async () => {
+    const result = await queryTable(
+      'xlsx',
+      await stock(),
+      'SELECT 품목, SUM(수량) AS 합계, SUM(수량 * 단가) AS 금액 FROM 재고 GROUP BY 품목 ORDER BY 합계 DESC',
+      '',
+      options,
+    );
+    expect(result).toEqual({
+      tables: [{ name: '재고', columns: ['품목', '수량', '단가'], rows: 3 }],
+      columns: ['품목', '합계', '금액'],
+      rows: [
+        ['볼트', 1300, 39000],
+        ['너트', 340, 6800],
+      ],
+      truncated: false,
+    });
+  });
+
+  it('CSV 는 파일 이름을 테이블로, 천 단위 쉼표 숫자도 숫자로', async () => {
+    const csv = Buffer.from(['지역,매출', '서울,"1,200"', '부산,80', ''].join('\n'));
+    const result = await queryTable('csv', csv, 'SELECT SUM(매출) FROM 매출표', '매출표', options);
+    expect(result.rows).toEqual([[1280]]);
+  });
+
+  it('읽기 전용 — ATTACH · 쓰기는 거부하고, SQL 오류는 이유를 알려 준다', async () => {
+    const xlsx = await stock();
+    for (const sql of ["ATTACH DATABASE 'x.db' AS x", 'DELETE FROM 재고']) {
+      await expect(queryTable('xlsx', xlsx, sql, '', options)).rejects.toThrow('not authorized');
+    }
+    await expect(queryTable('xlsx', xlsx, 'SELECT 없는열 FROM 재고', '', options)).rejects.toThrow(
+      /no such column/,
+    );
   });
 });

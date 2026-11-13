@@ -50,12 +50,43 @@ export interface ExtractedDocument {
 /** 읽을 수 없는 문서 — message 는 모델에게 그대로 보여 준다 */
 export class DocumentUnreadableError extends Error {}
 
+export interface ScriptOptions {
+  python: string;
+  popplerPath: string | null;
+}
+
 export function extractDocument(
   kind: DocumentKind,
   data: Buffer,
-  options: { python: string; popplerPath: string | null },
+  options: ScriptOptions,
 ): Promise<ExtractedDocument> {
-  const args = [SCRIPT, kind, ...(options.popplerPath ? ['--poppler', options.popplerPath] : [])];
+  return runScript(
+    [kind, ...(options.popplerPath ? ['--poppler', options.popplerPath] : [])],
+    data,
+    options,
+  );
+}
+
+export interface TableQueryResult {
+  tables: Array<{ name: string; columns: string[]; rows: number }>;
+  columns: string[];
+  rows: unknown[][];
+  truncated: boolean;
+}
+
+/** 표(XLSX 시트 · CSV)를 메모리 SQLite 에 올리고 읽기 전용 SELECT 하나를 실행한다 */
+export function queryTable(
+  kind: 'xlsx' | 'csv',
+  data: Buffer,
+  sql: string,
+  table: string,
+  options: ScriptOptions,
+): Promise<TableQueryResult> {
+  return runScript([kind, '--sql', sql, '--table', table], data, options);
+}
+
+function runScript<T>(scriptArgs: string[], data: Buffer, options: ScriptOptions): Promise<T> {
+  const args = [SCRIPT, ...scriptArgs];
   return new Promise((resolve, reject) => {
     const child = spawn(options.python, args, { windowsHide: true });
     const out: Buffer[] = [];
@@ -85,7 +116,7 @@ export function extractDocument(
       if (stopped) return reject(new DocumentUnreadableError(stopped));
       if (code === 2) return reject(new DocumentUnreadableError(stderr.split('\n').at(-1)!));
       if (code !== 0) return reject(new Error(`문서 추출 실패 (exit ${code}): ${stderr}`));
-      resolve(JSON.parse(Buffer.concat(out).toString('utf8')) as ExtractedDocument);
+      resolve(JSON.parse(Buffer.concat(out).toString('utf8')) as T);
     });
     child.stdin.end(data);
   });

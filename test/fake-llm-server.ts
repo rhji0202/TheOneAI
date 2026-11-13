@@ -20,6 +20,7 @@ import type { AddressInfo } from 'node:net';
  *   [규칙차단]   정책 규칙(식에 666 포함 차단)에 걸리는 calculate
  *   [잘못된인자] 인자 오류 → 고쳐서 다시 호출
  *   [도구한도]   Tool 을 끝없이 호출 → 왕복 한도 후 tool_choice=none 으로 정리
+ *   [대량계산]   한 응답에 calculate 8개씩 끝없이 → 단계당 호출 상한에서 멈추고 정리
  *   [재시도]     첫 시도에 실패하는 멱등 Tool (테스트가 등록) → 재시도 후 성공
  *   [시간초과]   시간 제한을 넘기는 Tool (테스트가 등록)
  * MCP 시나리오 (test/fake-mcp-server.ts 의 shop 서버)
@@ -91,6 +92,13 @@ type Call = [name: string, args: unknown];
 
 /** 작업 단계에서 시나리오별로 부를 Tool — round 는 이 단계에서 이미 끝난 Tool 왕복 수 */
 function scripted(text: string, round: number, toolsOffered: boolean): Call[] | null {
+  if (text.includes('[대량계산]'))
+    return toolsOffered
+      ? Array.from({ length: 8 }, (_, i): Call => [
+          'builtin__calculate',
+          { expression: `${round}*10+${i}` },
+        ])
+      : null;
   if (text.includes('[도구한도]'))
     return toolsOffered ? [['builtin__calculate', { expression: `${round}+1` }]] : null;
   if (text.includes('[MCP인자]')) {
@@ -187,18 +195,24 @@ function toolPlan(text: string, lastUser: string): Record<string, unknown> | nul
       steps: [{ title: '파일 확인', kind: 'reason', instructions: '' }, respond],
     };
   for (const tag of ['[MCP조회]', '[MCP인자]', '[MCP오류]']) {
-    // 허용 목록에 없을 때도 모델이 Tool 을 부르도록 reason 단계로 계획한다
-    if (text.includes(tag))
-      return {
-        goal: '주문 확인',
-        steps: [{ title: '주문 확인', kind: 'reason', instructions: '' }, respond],
-      };
+    if (!text.includes(tag)) continue;
+    const name = tag === '[MCP오류]' ? 'shop__search_faq' : 'shop__lookup_order';
+    // 계획에 보이는 Tool 이면 tool 단계, 허용 목록 밖이면 reason 단계 — 그래도 모델이 부르는 경우를 시험한다
+    return {
+      goal: '주문 확인',
+      steps: [
+        text.includes(`- ${name} (`)
+          ? tool('주문 확인', name)
+          : { title: '주문 확인', kind: 'reason', instructions: '' },
+        respond,
+      ],
+    };
   }
   if (text.includes('[재시도]'))
     return { goal: '재고 조회', steps: [tool('재고 조회', 'test__flaky'), respond] };
   if (text.includes('[시간초과]'))
     return { goal: '느린 조회', steps: [tool('느린 조회', 'test__slow'), respond] };
-  for (const tag of ['[도구]', '[규칙차단]', '[잘못된인자]', '[도구한도]']) {
+  for (const tag of ['[도구]', '[규칙차단]', '[잘못된인자]', '[도구한도]', '[대량계산]']) {
     if (text.includes(tag))
       return { goal: '계산', steps: [tool('계산', 'builtin__calculate'), respond] };
   }

@@ -11,7 +11,13 @@ import { ObjectStorage } from '../infrastructure/storage/object-storage.js';
 import { behaviorSchema } from '../widget/widget-bootstrap.service.js';
 import type { WidgetSession } from '../widget/widget-session.js';
 import { type ArtifactView, toArtifactView } from './artifact-views.js';
-import { DocumentUnreadableError, documentKind, extractDocument } from './document-extract.js';
+import {
+  DocumentUnreadableError,
+  documentKind,
+  extractDocument,
+  queryTable,
+  type TableQueryResult,
+} from './document-extract.js';
 
 /** 업로드를 시작한 뒤 내용을 올려야 하는 기한 */
 const UPLOAD_WINDOW_MS = 15 * 60_000;
@@ -261,7 +267,11 @@ export class ArtifactsService {
         text.length > ATTACHMENT_TEXT_CHARS
           ? `${text.slice(0, ATTACHMENT_TEXT_CHARS)}\n…(truncated)`
           : text;
-      parts.push(`${head}:\n<file_content>\n${clipped}\n</file_content>`);
+      // 표는 행을 옮겨 적어 계산하지 말고 SQL 로 집계하게 한다
+      const query = tableKind(a.mimeType, a.fileName)
+        ? `\n(For totals, counts, averages or grouping, call the query_table tool with file "${a.fileName}" and a SELECT over ${kind === 'xlsx' ? 'the sheet names as tables' : `table "${csvTableName(a.fileName)}"`}; the first row holds the column names.)`
+        : '';
+      parts.push(`${head}:${query}\n<file_content>\n${clipped}\n</file_content>`);
     }
     return {
       text: parts.length
@@ -269,6 +279,55 @@ export class ArtifactsService {
         : '',
       images,
     };
+  }
+
+  /**
+   * builtin.query_table — 이 대화에서 사용자가 올린 표(XLSX · CSV)에 읽기 전용 SQL 을 실행한다.
+   * 잘못된 SQL · 파일 이름은 오류로 돌려줘 모델이 고쳐 다시 부르게 한다.
+   */
+  async queryAttachment(input: {
+    tenantId: string;
+    taskId: string;
+    fileName: string;
+    sql: string;
+  }): Promise<TableQueryResult | { error: string; files?: string[] }> {
+    const uploads = await this.prisma.withTenant(input.tenantId, async (tx) => {
+      const task = await tx.task.findUnique({
+        where: { id: input.taskId },
+        select: { conversationId: true },
+      });
+      if (!task) return [];
+      return tx.artifact.findMany({
+        where: {
+          origin: 'user_upload',
+          uploadedAt: { not: null },
+          message: { conversationId: task.conversationId },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+    });
+    const tables = uploads.filter((a) => tableKind(a.mimeType, a.fileName));
+    const file = tables.find((a) => a.fileName === input.fileName);
+    if (!file) {
+      return {
+        error: `No attached XLSX or CSV file named "${input.fileName}".`,
+        files: [...new Set(tables.map((a) => a.fileName))],
+      };
+    }
+    const data = await this.storage.get(file.storageKey);
+    if (!data) return { error: 'The file content is missing.' };
+    try {
+      return await queryTable(
+        tableKind(file.mimeType, file.fileName)!,
+        data,
+        input.sql,
+        csvTableName(file.fileName),
+        this.config.documents,
+      );
+    } catch (err) {
+      if (err instanceof DocumentUnreadableError) return { error: err.message };
+      throw err;
+    }
   }
 
   private async read(artifact: Artifact | null) {
@@ -287,6 +346,17 @@ export function isSafeFileName(name: string): boolean {
     if (code < 0x20 || code === 0x7f) return false;
   }
   return true;
+}
+
+/** SQL 로 질의할 수 있는 표 파일 */
+function tableKind(mimeType: string, fileName: string): 'xlsx' | 'csv' | null {
+  if (documentKind(mimeType, fileName) === 'xlsx') return 'xlsx';
+  return mimeType === 'text/csv' || /\.csv$/i.test(fileName) ? 'csv' : null;
+}
+
+/** CSV 의 테이블 이름 — 확장자를 뺀 파일 이름 (XLSX 는 시트 이름) */
+function csvTableName(fileName: string): string {
+  return fileName.replace(/\.[^.]+$/, '');
 }
 
 /** "image/*" 같은 패턴 · 정확한 형식 */

@@ -1,6 +1,7 @@
-"""첨부 문서(XLSX · DOCX · PPTX · PDF)를 모델이 읽을 텍스트로 바꾼다 — 표준 라이브러리만 쓴다.
+"""첨부 문서(XLSX · DOCX · PPTX · PDF)를 모델이 읽을 텍스트로 바꾸고, 표(XLSX · CSV)에 SQL 을 실행한다 — 표준 라이브러리만 쓴다.
 
     python extract_text.py <xlsx|docx|pptx|pdf> [--poppler DIR] [--max-bytes N] [--max-pdf-images N]
+    python extract_text.py <xlsx|csv> --sql "SELECT ..." [--table NAME]   (표 질의: {tables, columns, rows, truncated})
 
 파일 내용은 stdin 으로 받고 stdout 에 JSON {"text": str, "images": [{"mimeType", "data", "page"}]} 을 쓴다.
 PDF 는 poppler 의 pdftotext · pdftoppm 이 필요하다. 텍스트가 없는(스캔한) 페이지는 PNG 로 그려 images 에 담는다.
@@ -18,9 +19,11 @@ import os
 import posixpath
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 from xml.etree import ElementTree as ET
 
@@ -197,7 +200,8 @@ def as_csv(rows):
     return buffer.getvalue().rstrip("\n")
 
 
-def extract_xlsx(data, args):
+def xlsx_sheets(data, args):
+    """보이는 시트마다 (이름, 행 목록)."""
     package = open_package(data, args.max_bytes)
     names = set(package.namelist())
     workbook = read_xml(package, "xl/workbook.xml")
@@ -206,7 +210,7 @@ def extract_xlsx(data, args):
     shared = [rich_text(si) for si in descendants(strings, "si")] if strings is not None else []
     dates = date_styles(read_xml(package, "xl/styles.xml", optional=True))
     rels = relationships(package, "xl/_rels/workbook.xml.rels")
-    out = []
+    sheets = []
     for sheet in descendants(workbook, "sheet"):
         if sheet.get("state") in ("hidden", "veryHidden"):
             continue
@@ -214,11 +218,16 @@ def extract_xlsx(data, args):
         if part not in names:
             continue
         root = read_xml(package, part, optional=True)
-        if root is None:
-            continue
-        rows = sheet_rows(root, shared, dates, date1904)
+        if root is not None:
+            sheets.append((sheet.get("name", "Sheet"), sheet_rows(root, shared, dates, date1904)))
+    return sheets
+
+
+def extract_xlsx(data, args):
+    out = []
+    for name, rows in xlsx_sheets(data, args):
         capped = " — first rows only" if len(rows) >= MAX_ROWS else ""
-        out += [f'Sheet "{sheet.get("name", "Sheet")}" ({len(rows)} rows{capped})', as_csv(rows), ""]
+        out += [f'Sheet "{name}" ({len(rows)} rows{capped})', as_csv(rows), ""]
     text = "\n".join(out).rstrip("\n")
     if not text:
         raise Unreadable("the workbook has no visible sheets")
@@ -360,18 +369,106 @@ def extract_pdf(data, args):
 EXTRACTORS = {"xlsx": extract_xlsx, "docx": extract_docx, "pptx": extract_pptx, "pdf": extract_pdf}
 
 
+# ── 표 질의 (XLSX · CSV → 메모리 SQLite, 읽기 전용 SELECT 하나) ───────────
+
+QUERY_MAX_ROWS = 200
+QUERY_TIMEOUT_SECONDS = 10
+NUMBER = re.compile(r"-?(\d{1,3}(,\d{3})+|\d+)(\.\d+)?")
+
+
+def table_value(value):
+    text = value.strip()
+    if not text:
+        return None
+    if NUMBER.fullmatch(text):
+        plain = text.replace(",", "")
+        return float(plain) if "." in plain else int(plain)
+    return text
+
+
+def column_names(header, width):
+    names, seen = [], {}
+    for i in range(width):
+        base = (header[i].strip() if i < len(header) else "") or f"col{i + 1}"
+        seen[base] = seen.get(base, 0) + 1
+        names.append(base if seen[base] == 1 else f"{base}_{seen[base]}")
+    return names
+
+
+def quote(identifier):
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+def load_tables(db, tables):
+    described = []
+    for name, rows in tables:
+        if not rows:
+            continue
+        width = max(len(r) for r in rows)
+        columns = column_names(rows[0], width)
+        db.execute(f"CREATE TABLE {quote(name)} ({', '.join(quote(c) for c in columns)})")
+        body = [[table_value(r[i]) if i < len(r) else None for i in range(width)] for r in rows[1:]]
+        db.executemany(f"INSERT INTO {quote(name)} VALUES ({', '.join('?' * width)})", body)
+        described.append({"name": name, "columns": columns, "rows": len(body)})
+    return described
+
+
+def read_only(action, *_):
+    allowed = (sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION)
+    return sqlite3.SQLITE_OK if action in allowed else sqlite3.SQLITE_DENY
+
+
+def query_tables(kind, data, args):
+    if kind == "xlsx":
+        tables = xlsx_sheets(data, args)
+    elif kind == "csv":
+        text = data.decode("utf-8-sig", "replace")
+        tables = [(args.table or "data", list(itertools.islice(csv.reader(io.StringIO(text)), MAX_ROWS)))]
+    else:
+        raise Unreadable(f"{kind} files cannot be queried; only XLSX and CSV can")
+    db = sqlite3.connect(":memory:")
+    described = load_tables(db, tables)
+    db.set_authorizer(read_only)
+    deadline = [None]
+
+    def too_slow():
+        deadline[0] = deadline[0] or time.monotonic() + QUERY_TIMEOUT_SECONDS
+        return 1 if time.monotonic() > deadline[0] else 0
+
+    db.set_progress_handler(too_slow, 10_000)
+    try:
+        cursor = db.execute(args.sql)
+        rows = cursor.fetchmany(QUERY_MAX_ROWS + 1)
+    except sqlite3.Error as exc:
+        raise Unreadable(f"SQL error: {exc}")
+    columns = [d[0] for d in cursor.description or []]
+    return {
+        "tables": described,
+        "columns": columns,
+        "rows": [list(r) for r in rows[:QUERY_MAX_ROWS]],
+        "truncated": len(rows) > QUERY_MAX_ROWS,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("kind", choices=sorted(EXTRACTORS))
+    parser.add_argument("kind", choices=sorted([*EXTRACTORS, "csv"]))
     parser.add_argument("--poppler", default="", help="directory that holds pdftotext / pdftoppm")
     parser.add_argument("--max-bytes", type=int, default=50 * 1024 * 1024)
     parser.add_argument("--max-pdf-images", type=int, default=5)
+    parser.add_argument("--sql", help="query mode: run one read-only SELECT over the file's tables")
+    parser.add_argument("--table", default="", help="query mode: table name for a CSV file")
     args = parser.parse_args()
     data = sys.stdin.buffer.read()
     try:
         if len(data) > args.max_bytes:
             raise Unreadable(f"file is too large ({len(data)} bytes)")
-        result = EXTRACTORS[args.kind](data, args)
+        if args.sql is not None:
+            result = query_tables(args.kind, data, args)
+        elif args.kind in EXTRACTORS:
+            result = EXTRACTORS[args.kind](data, args)
+        else:
+            raise Unreadable(f"{args.kind} needs --sql")
     except Unreadable as exc:
         sys.stderr.write(f"{exc}\n")
         return 2

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { BuiltinToolCatalog } from '../tools/builtin-tool.catalog.js';
 import type { BuiltinTool } from '../tools/tool.types.js';
 import { ArtifactsService, isSafeFileName } from './artifacts.service.js';
+import { queryTableTool } from './query-table.tool.js';
 
 export const CREATE_FILE = 'builtin.create_file';
 
@@ -67,5 +68,6 @@ export class ArtifactToolsRegistrar implements OnModuleInit {
 
   onModuleInit(): void {
     this.catalog.register(createFileTool(this.artifacts) as BuiltinTool);
+    this.catalog.register(queryTableTool(this.artifacts) as BuiltinTool);
   }
 }

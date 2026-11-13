@@ -148,6 +148,7 @@ describe('내장 Tool', () => {
       'builtin__calculate',
       'builtin__create_file',
       'builtin__current_time',
+      'builtin__query_table',
     ]);
     expect(second!.body.messages.at(-1)).toMatchObject({ role: 'tool', tool_call_id: 'call_0_0' });
     expect(second!.body.messages.at(-1)!.content).toContain('7006652');
@@ -204,6 +205,62 @@ describe('내장 Tool', () => {
     expect(work.at(-1)!.body).toMatchObject({ tool_choice: 'none' });
     expect(offeredTools(work.at(-1)!)).toContain('builtin__calculate');
     expect(steps.find((s) => s.name === 'executor.tool')!.output).toMatchObject({ toolCalls: 6 });
+    expect(detail.status).toBe('completed');
+  });
+
+  it('[대량계산] 한 응답에 여러 호출을 몰아도 단계당 12번까지만 실행하고, 넘친 호출은 not_run 으로 알려 정리한다', async () => {
+    const { steps, detail } = await run('[대량계산] 열마다 합계 #bulk');
+    expect(steps.filter((s) => s.type === 'tool')).toHaveLength(12);
+    const wrapUp = workRequests('#bulk').at(-1)!;
+    expect(wrapUp.body).toMatchObject({ tool_choice: 'none' });
+    const notRun = wrapUp.body.messages.filter(
+      (m) => m.role === 'tool' && m.content?.includes('"not_run"'),
+    );
+    expect(notRun).toHaveLength(4);
+    expect(detail.status).toBe('completed');
+  });
+
+  it('작업 단계 상한이 가까우면 실패하지 않고 남은 몫(답변 · 검증)을 남긴 채 Tool 을 멈춘다', async () => {
+    const versionId = (
+      await tenantRows((tx) => tx.agent.findUniqueOrThrow({ where: { id: ctx.tenantA.agentId } }))
+    ).publishedVersionId!;
+    const original = await tenantRows((tx) =>
+      tx.agentVersion.findUniqueOrThrow({ where: { id: versionId } }),
+    );
+    await tenantRows((tx) =>
+      tx.agentVersion.update({
+        where: { id: versionId },
+        data: {
+          executionPolicy: {
+            ...(original.executionPolicy as Record<string, unknown> | null),
+            maxSteps: 12,
+          },
+        },
+      }),
+    );
+    try {
+      const { steps, detail } = await run('[대량계산] 상한 가까이 #budget');
+      // context · plan · 작업 단계 뒤 남은 9 단계 중 답변 몫 5 를 남기고 4 번만 실행
+      expect(steps.filter((s) => s.type === 'tool')).toHaveLength(4);
+      expect(steps.map((s) => s.name)).toEqual(
+        expect.arrayContaining(['evaluator.assess', 'executor.respond', 'evaluator.verify']),
+      );
+      expect(detail.status).toBe('completed');
+    } finally {
+      await tenantRows((tx) =>
+        tx.agentVersion.update({
+          where: { id: versionId },
+          data: { executionPolicy: original.executionPolicy ?? {} },
+        }),
+      );
+    }
+  });
+
+  it('reason 단계에는 Tool 을 주지 않는다 (계획에서 Tool 없는 분석으로 정한 단계)', async () => {
+    const { detail } = await run('[분석] 첨부 내용 요약 #reason');
+    const work = workRequests('#reason');
+    expect(work).toHaveLength(1);
+    expect(offeredTools(work[0]!)).toEqual([]);
     expect(detail.status).toBe('completed');
   });
 });
@@ -322,6 +379,7 @@ describe('Registry 버전 · 승인 · 재시도 · 시간 제한', () => {
       'builtin.calculate',
       'builtin.create_file',
       'builtin.current_time',
+      'builtin.query_table',
       'skill.read_file',
     ]);
     expect(after.tools.map((t) => t.name)).toContain('test.send_note');
