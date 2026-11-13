@@ -32,9 +32,9 @@ const envSchema = z.object({
    * openai · gemini = 각 사의 OpenAI 호환 /embeddings (1536차원으로 요청)
    */
   EMBEDDING_PROVIDER: z.enum(['local', 'openai', 'gemini']).default('local'),
-  EMBEDDING_MODEL: z.string().optional(),
+  EMBEDDING_MODEL: z.preprocess(emptyToUndefined, z.string().optional()),
   EMBEDDING_BASE_URL: z.preprocess(emptyToUndefined, z.url().optional()),
-  EMBEDDING_SECRET_REF: z.string().optional(),
+  EMBEDDING_SECRET_REF: z.preprocess(emptyToUndefined, z.string().optional()),
   /** 이 점수(1 - cosine 거리) 미만인 기억은 Context 에 넣지 않는다 */
   MEMORY_MIN_SCORE: z.coerce.number().min(0).max(1).default(0.15),
   /** heartbeat 가 끊긴 작업 확인 주기 (0 이면 주기 잡을 등록하지 않는다) · 끊겼다고 볼 시간 */
