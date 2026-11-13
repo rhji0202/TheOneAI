@@ -4,7 +4,16 @@
  *          → PUT :id/tool-selection → POST :id/register(connected, 새 Registry 버전).
  * /mcp/new?server=<id> 로 등록을 마치지 않은 서버(draft · pending_review · disabled)를 이어서 한다.
  */
-import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { ArrowLeftIcon, ArrowRightIcon, CheckIcon, CircleCheckIcon } from 'lucide-react';
+import {
+  type FormEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router';
 import { LEVEL } from '../../../shared/status';
 import { ApiError } from '../api';
@@ -20,11 +29,27 @@ import {
   Mono,
   Notice,
   PageHeader,
+  TONE_CLASS,
   Toggle,
   useAction,
   useToast,
 } from '../ui';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { Textarea } from '@/components/ui/textarea';
+import { cn } from '@/lib/utils';
 import {
   ApiErrorNotice,
   APPROVAL_MODES,
@@ -228,12 +253,18 @@ export function McpWizardPage() {
       <>
         <PageHeader title="MCP 서버 연결" back={{ to: '/mcp', label: 'MCP 서버' }} />
         <Notice tone="info">
-          <span>
-            {server.name} 은(는) 이미 등록된 서버예요. 변경은 서버 상세에서 다시 탐색 · 검토하세요.
-          </span>
-          <Link className="btn btn-primary btn-sm" to={`/mcp/${server.id}`}>
-            서버 상세
-          </Link>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <span className="min-w-0 flex-1">
+              {server.name} 은(는) 이미 등록된 서버예요. 변경은 서버 상세에서 다시 탐색 ·
+              검토하세요.
+            </span>
+            <Button asChild size="sm">
+              <Link to={`/mcp/${server.id}`}>
+                서버 상세
+                <ArrowRightIcon aria-hidden="true" />
+              </Link>
+            </Button>
+          </div>
         </Notice>
       </>
     );
@@ -340,7 +371,7 @@ export function McpWizardPage() {
         open={confirmCancel}
         title="연결 작성 취소"
         body={
-          <p className="confirm-body">
+          <p className="mb-3 text-muted-foreground">
             작성 중인 서버({server?.name})와 저장한 API Key 를 지웁니다.
           </p>
         }
@@ -355,6 +386,18 @@ export function McpWizardPage() {
   );
 }
 
+type StepState = 'current' | 'done' | 'todo';
+
+const STEP_STYLE: Record<StepState, { box: string; num: string; title: string }> = {
+  current: {
+    box: 'border-primary ring-[3px] ring-primary/15',
+    num: 'bg-primary text-primary-foreground',
+    title: '',
+  },
+  done: { box: 'enabled:hover:bg-muted', num: TONE_CLASS.success, title: '' },
+  todo: { box: '', num: 'bg-muted text-muted-foreground', title: 'text-muted-foreground' },
+};
+
 function Stepper({
   step,
   reached,
@@ -367,28 +410,39 @@ function Stepper({
   onGo: (n: Step) => void;
 }) {
   return (
-    <ol className="stepper" aria-label="연결 단계">
+    <ol className="mb-5 grid grid-cols-2 gap-2 md:grid-cols-4" aria-label="연결 단계">
       {STEPS.map((s) => {
-        const state =
+        const state: StepState =
           s.n === step
             ? 'current'
             : s.n < reached || (s.n <= reached && s.n < step)
               ? 'done'
               : 'todo';
+        const style = STEP_STYLE[state];
         const clickable = !locked && s.n < step;
         return (
-          <li
-            key={s.n}
-            className={`step ${state}`}
-            aria-current={s.n === step ? 'step' : undefined}
-          >
-            <button type="button" disabled={!clickable} onClick={() => onGo(s.n)}>
-              <span className="step-num" aria-hidden="true">
-                {state === 'done' ? '✓' : s.n}
+          <li key={s.n} aria-current={s.n === step ? 'step' : undefined}>
+            <button
+              type="button"
+              className={cn(
+                'flex h-full w-full items-center gap-2.5 rounded-lg border bg-card px-3 py-2.5 text-left transition-colors disabled:cursor-default',
+                style.box,
+              )}
+              disabled={!clickable}
+              onClick={() => onGo(s.n)}
+            >
+              <span
+                className={cn(
+                  'grid size-7 shrink-0 place-items-center rounded-full text-sm font-semibold',
+                  style.num,
+                )}
+                aria-hidden="true"
+              >
+                {state === 'done' ? <CheckIcon className="size-4" /> : s.n}
               </span>
-              <span className="step-text">
-                <span className="step-title">{s.title}</span>
-                <span className="step-sub">{s.sub}</span>
+              <span className="flex min-w-0 flex-col">
+                <span className={cn('truncate text-sm font-semibold', style.title)}>{s.title}</span>
+                <span className="truncate text-xs text-muted-foreground">{s.sub}</span>
               </span>
             </button>
           </li>
@@ -396,6 +450,44 @@ function Stepper({
       })}
     </ol>
   );
+}
+
+function Choice({
+  value,
+  title,
+  sub,
+  disabled,
+  hint,
+}: {
+  value: string;
+  title: string;
+  sub: string;
+  disabled?: boolean;
+  hint?: string;
+}) {
+  const id = useId();
+  return (
+    <Label
+      htmlFor={id}
+      title={hint}
+      className={cn(
+        'items-start gap-2.5 rounded-lg border p-3 leading-normal font-normal has-[[data-state=checked]]:border-primary has-[[data-state=checked]]:bg-primary/5',
+        disabled ? 'cursor-not-allowed opacity-55' : 'cursor-pointer hover:bg-muted/50',
+      )}
+    >
+      <RadioGroupItem id={id} value={value} disabled={disabled} className="mt-0.5" />
+      <span className="flex flex-col gap-0.5">
+        <span className="font-semibold">{title}</span>
+        <span className="text-xs text-muted-foreground">{sub}</span>
+      </span>
+    </Label>
+  );
+}
+
+const GUARD_LIST = 'flex list-disc flex-col gap-1.5 pl-5 text-sm text-muted-foreground';
+
+function ActionBar({ children }: { children: ReactNode }) {
+  return <div className="mt-1 mb-6 flex flex-wrap items-center gap-2">{children}</div>;
 }
 
 /* ① 연결 정보 */
@@ -487,7 +579,7 @@ function ConnectionStep({
 
   return (
     <form onSubmit={(e) => void submit(e)} noValidate>
-      <div className="grid grid-main-side">
+      <div className="grid items-start gap-4 min-[1100px]:grid-cols-[minmax(0,1fr)_340px]">
         <Card
           title="① 연결 정보"
           description="Agent 가 Tool 을 부를 MCP 서버의 주소와 인증을 입력합니다."
@@ -502,8 +594,8 @@ function ConnectionStep({
             }
             error={nameError ?? nameTaken ?? issueFor(err, 'name')}
           >
-            <input
-              className="input mono-input"
+            <Input
+              className="font-mono"
               value={form.name}
               disabled={Boolean(server)}
               placeholder="crm-internal"
@@ -512,31 +604,24 @@ function ConnectionStep({
             />
           </Field>
           <Field label="설명" hint="콘솔에서만 보여요" error={issueFor(err, 'description')}>
-            <input
-              className="input"
+            <Input
               value={form.description}
               placeholder="사내 CRM 주문 · 고객 조회"
               onChange={(e) => set('description', e.target.value)}
             />
           </Field>
-          <fieldset className="choice-group">
-            <legend className="field-label">전송 방식</legend>
-            <label className="choice selected">
-              <input type="radio" name="transport" checked readOnly />
-              <span>
-                <strong>Streamable HTTP</strong>
-                <span className="choice-sub">원격 MCP 서버 (HTTPS)</span>
-              </span>
-            </label>
-            <label className="choice disabled" title="Sandbox 단계에서 지원">
-              <input type="radio" name="transport" disabled />
-              <span>
-                <strong>stdio · Docker Sandbox</strong>
-                <span className="choice-sub">
-                  이미지 서명 검증 후 격리 실행 — 다음 단계에서 지원
-                </span>
-              </span>
-            </label>
+          <fieldset className="mb-4 flex min-w-0 flex-col gap-1.5">
+            <legend className="mb-1.5 text-sm font-medium text-muted-foreground">전송 방식</legend>
+            <RadioGroup value="streamable_http" className="gap-2 sm:grid-cols-2">
+              <Choice value="streamable_http" title="Streamable HTTP" sub="원격 MCP 서버 (HTTPS)" />
+              <Choice
+                value="stdio_sandbox"
+                disabled
+                hint="Sandbox 단계에서 지원"
+                title="stdio · Docker Sandbox"
+                sub="이미지 서명 검증 후 격리 실행 — 다음 단계에서 지원"
+              />
+            </RadioGroup>
           </fieldset>
           <Field
             label="엔드포인트 URL"
@@ -547,8 +632,8 @@ function ConnectionStep({
             }
             error={urlError ?? issueFor(err, 'endpointUrl')}
           >
-            <input
-              className="input mono-input"
+            <Input
+              className="font-mono"
               type="url"
               inputMode="url"
               value={form.endpointUrl}
@@ -557,34 +642,17 @@ function ConnectionStep({
               onChange={(e) => set('endpointUrl', e.target.value)}
             />
           </Field>
-          <fieldset className="choice-group">
-            <legend className="field-label">인증</legend>
-            {(
-              [
-                ['none', '인증 없음', '공개 · 사내망 전용 서버'],
-                ['api_key', 'API Key', 'Authorization 헤더로 전달'],
-              ] as const
-            ).map(([value, label, sub]) => (
-              <label key={value} className={form.authType === value ? 'choice selected' : 'choice'}>
-                <input
-                  type="radio"
-                  name="authType"
-                  checked={form.authType === value}
-                  onChange={() => set('authType', value)}
-                />
-                <span>
-                  <strong>{label}</strong>
-                  <span className="choice-sub">{sub}</span>
-                </span>
-              </label>
-            ))}
-            <label className="choice disabled">
-              <input type="radio" name="authType" disabled />
-              <span>
-                <strong>OAuth</strong>
-                <span className="choice-sub">지원 예정</span>
-              </span>
-            </label>
+          <fieldset className="mb-4 flex min-w-0 flex-col gap-1.5">
+            <legend className="mb-1.5 text-sm font-medium text-muted-foreground">인증</legend>
+            <RadioGroup
+              value={form.authType}
+              onValueChange={(v) => set('authType', v as FormState['authType'])}
+              className="gap-2 sm:grid-cols-3"
+            >
+              <Choice value="none" title="인증 없음" sub="공개 · 사내망 전용 서버" />
+              <Choice value="api_key" title="API Key" sub="Authorization 헤더로 전달" />
+              <Choice value="oauth" disabled title="OAuth" sub="지원 예정" />
+            </RadioGroup>
           </fieldset>
           {form.authType === 'api_key' && (
             <Field
@@ -601,8 +669,7 @@ function ConnectionStep({
                   : issueFor(err, 'secret')
               }
             >
-              <input
-                className="input"
+              <Input
                 type="password"
                 autoComplete="new-password"
                 value={form.secret}
@@ -616,8 +683,8 @@ function ConnectionStep({
             hint="서버가 다른 호스트로 연결해야 할 때만 — 한 줄에 하나 (api.example.com, *.example.com)"
             error={issueFor(err, 'allowedHosts')}
           >
-            <textarea
-              className="input code"
+            <Textarea
+              className="font-mono text-[13px]"
               rows={2}
               value={form.hosts}
               onChange={(e) => set('hosts', e.target.value)}
@@ -645,9 +712,9 @@ function ConnectionStep({
             skipPaths={['name', 'description', 'endpointUrl', 'secret', 'allowedHosts']}
           />
         </Card>
-        <div className="stack">
+        <div className="min-w-0">
           <Card title="연결 보안 (SSRF 방어)">
-            <ul className="guard-list">
+            <ul className={GUARD_LIST}>
               <li>https 주소만 연결합니다 (개발 환경 제외).</li>
               <li>엔드포인트 호스트와 추가 허용 호스트로만 나갑니다.</li>
               <li>
@@ -663,23 +730,22 @@ function ConnectionStep({
             </ul>
           </Card>
           <Card title="다음 단계">
-            <p className="muted small">
-              저장하면 서버가 <strong>작성 중</strong> 상태로 만들어지고, 연결 테스트 → Tool 탐색 ·
-              보안 검사 → 등록을 거쳐야 Agent 가 쓸 수 있어요. 중간에 나가도 서버 상세에서 이어서 할
-              수 있어요.
+            <p className="text-sm text-muted-foreground">
+              저장하면 서버가 <strong className="text-foreground">작성 중</strong> 상태로
+              만들어지고, 연결 테스트 → Tool 탐색 · 보안 검사 → 등록을 거쳐야 Agent 가 쓸 수 있어요.
+              중간에 나가도 서버 상세에서 이어서 할 수 있어요.
             </p>
           </Card>
         </div>
       </div>
-      <div className="wizard-actions">
-        <Link className="btn btn-ghost" to="/mcp">
-          나가기
-        </Link>
-        <span className="spacer" />
-        <Button type="submit" loading={save.pending}>
+      <ActionBar>
+        <Button asChild variant="ghost">
+          <Link to="/mcp">나가기</Link>
+        </Button>
+        <Button type="submit" className="ml-auto" loading={save.pending}>
           {server ? '저장하고 연결 테스트' : '저장하고 연결 테스트'}
         </Button>
-      </div>
+      </ActionBar>
     </form>
   );
 }
@@ -736,26 +802,33 @@ function TestStep({
           <>
             <TestResultView result={result} />
             {result.handshake === 'failed' && (
-              <Notice tone="info">
-                <span>
-                  {result.ssrf.allowed
-                    ? 'URL · 인증 정보를 확인하고 연결 정보를 고친 뒤 다시 테스트하세요.'
-                    : '네트워크 정책에 막혔어요. 연결 정보에서 허용 호스트 · 사설 네트워크 설정을 확인하세요.'}
-                </span>
-              </Notice>
+              <div className="mt-3">
+                <Notice tone="info">
+                  <span>
+                    {result.ssrf.allowed
+                      ? 'URL · 인증 정보를 확인하고 연결 정보를 고친 뒤 다시 테스트하세요.'
+                      : '네트워크 정책에 막혔어요. 연결 정보에서 허용 호스트 · 사설 네트워크 설정을 확인하세요.'}
+                  </span>
+                </Notice>
+              </div>
             )}
           </>
         ) : null}
       </Card>
-      <div className="wizard-actions">
+      <ActionBar>
         <Button variant="outline" onClick={onBack}>
-          ← 연결 정보 수정
+          <ArrowLeftIcon aria-hidden="true" />
+          연결 정보 수정
         </Button>
-        <span className="spacer" />
-        <Button disabled={result?.handshake !== 'ok' || run.pending} onClick={onNext}>
-          Tool 탐색하기 →
+        <Button
+          className="ml-auto"
+          disabled={result?.handshake !== 'ok' || run.pending}
+          onClick={onNext}
+        >
+          Tool 탐색하기
+          <ArrowRightIcon aria-hidden="true" />
         </Button>
-      </div>
+      </ActionBar>
     </>
   );
 }
@@ -826,15 +899,15 @@ function DiscoverStep({
         <>
           <ApiErrorNotice error={discover.error} />
           {!candidates && (
-            <div className="wizard-actions">
+            <ActionBar>
               <Button variant="outline" onClick={onBack}>
-                ← 연결 테스트
+                <ArrowLeftIcon aria-hidden="true" />
+                연결 테스트
               </Button>
-              <span className="spacer" />
-              <Button variant="outline" onClick={() => void run()}>
+              <Button variant="outline" className="ml-auto" onClick={() => void run()}>
                 다시 탐색
               </Button>
-            </div>
+            </ActionBar>
           )}
         </>
       )}
@@ -875,131 +948,159 @@ function DiscoverStep({
             }
             flush
           >
-            <div className="discover-summary">
-              <span>
-                발견 <strong>{list.length}</strong>
-              </span>
-              <span>
-                포함 <strong>{included.length}</strong>
-              </span>
-              <span className={excluded.length ? 'bad' : undefined}>
-                검사 실패 · 제외 <strong>{excluded.length}</strong>
-              </span>
-              <span className={warned.length ? 'warn' : undefined}>
-                경고 <strong>{warned.length}</strong>
-              </span>
-            </div>
+            <dl className="flex flex-wrap gap-x-5 gap-y-1 border-b px-4 py-2.5 text-sm text-muted-foreground">
+              {(
+                [
+                  ['발견', list.length, ''],
+                  ['포함', included.length, ''],
+                  [
+                    '검사 실패 · 제외',
+                    excluded.length,
+                    excluded.length ? 'text-red-700 dark:text-red-400' : '',
+                  ],
+                  [
+                    '경고',
+                    warned.length,
+                    warned.length ? 'text-amber-700 dark:text-amber-400' : '',
+                  ],
+                ] as const
+              ).map(([label, n, tone]) => (
+                <div key={label} className="flex items-baseline gap-1.5">
+                  <dt>{label}</dt>
+                  <dd className={cn('font-semibold text-foreground tabular-nums', tone)}>{n}</dd>
+                </div>
+              ))}
+            </dl>
             {list.length === 0 ? (
               <Empty title="서버가 알려 준 Tool 이 없어요">
                 서버 구현을 확인한 뒤 다시 탐색하세요.
               </Empty>
             ) : (
-              <div className="table-wrap">
-                <table className="table discover-table" aria-label="탐색된 Tool">
-                  <thead>
-                    <tr>
-                      <th style={{ width: 52 }}>포함</th>
-                      <th>Tool</th>
-                      <th>검사</th>
-                      <th style={{ width: 150 }}>권한 등급</th>
-                      <th style={{ width: 190 }}>승인 정책</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {list.map((c) => {
-                      const isBlocked = blocked(c);
-                      const expanded = open === c.name;
-                      const hasIssues = c.schema.issues.length + c.security.issues.length > 0;
-                      return (
-                        <tr key={c.name} className={isBlocked ? 'row-blocked' : undefined}>
-                          <td>
-                            <input
-                              type="checkbox"
-                              className="big-check"
-                              aria-label={`${c.name} 포함`}
-                              checked={c.include}
-                              disabled={isBlocked}
-                              onChange={(e) => update(c.name, { include: e.target.checked })}
-                            />
-                          </td>
-                          <td>
-                            <div className="tool-cell">
-                              <Mono>
-                                {server.name}.{c.name}
-                              </Mono>
-                              {c.description && <p className="cell-sub clamp-2">{c.description}</p>}
-                              {isBlocked && (
-                                <p className="blocked-note">검사 실패 — 포함할 수 없어요</p>
-                              )}
-                              {hasIssues && (
-                                <button
-                                  type="button"
-                                  className="link-btn"
-                                  aria-expanded={expanded}
-                                  onClick={() => setOpen(expanded ? null : c.name)}
-                                >
-                                  {expanded
-                                    ? '검사 결과 접기'
-                                    : `검사 결과 ${c.schema.issues.length + c.security.issues.length}건 보기`}
-                                </button>
-                              )}
-                              {expanded && <CheckIssues schema={c.schema} security={c.security} />}
-                            </div>
-                          </td>
-                          <td>
-                            <CheckBadges schema={c.schema} security={c.security} />
-                          </td>
-                          <td>
-                            <select
-                              className="input input-sm"
-                              aria-label={`${c.name} 권한 등급`}
-                              value={c.level}
-                              disabled={isBlocked}
-                              onChange={(e) =>
-                                update(c.name, { level: e.target.value as PermissionLevel })
-                              }
-                            >
-                              {LEVELS.map((l) => (
-                                <option key={l} value={l}>
-                                  {LEVEL[l]}
-                                  {l === c.suggestedLevel ? ' (제안)' : ''}
-                                </option>
-                              ))}
-                            </select>
-                          </td>
-                          <td>
-                            <select
-                              className="input input-sm"
-                              aria-label={`${c.name} 승인 정책`}
-                              value={c.mode}
-                              disabled={isBlocked}
-                              onChange={(e) =>
-                                update(c.name, { mode: e.target.value as ApprovalMode | '' })
-                              }
-                            >
-                              <option value="">등급 기본값</option>
-                              {APPROVAL_MODES.map((m) => (
-                                <option key={m.value} value={m.value}>
-                                  {m.label}
-                                </option>
-                              ))}
-                            </select>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              <Table aria-label="탐색된 Tool">
+                <TableHeader className="bg-muted/50">
+                  <TableRow>
+                    <TableHead className="w-[52px] px-3.5 text-xs text-muted-foreground">
+                      포함
+                    </TableHead>
+                    <TableHead className="px-3.5 text-xs text-muted-foreground">Tool</TableHead>
+                    <TableHead className="px-3.5 text-xs text-muted-foreground">검사</TableHead>
+                    <TableHead className="w-[150px] px-3.5 text-xs text-muted-foreground">
+                      권한 등급
+                    </TableHead>
+                    <TableHead className="w-[190px] px-3.5 text-xs text-muted-foreground">
+                      승인 정책
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {list.map((c) => {
+                    const isBlocked = blocked(c);
+                    const expanded = open === c.name;
+                    const hasIssues = c.schema.issues.length + c.security.issues.length > 0;
+                    return (
+                      <TableRow
+                        key={c.name}
+                        className={cn(
+                          '[&>td]:px-3.5 [&>td]:py-2.5 [&>td]:align-top',
+                          isBlocked &&
+                            'bg-red-50/60 hover:bg-red-50/60 dark:bg-red-950/30 dark:hover:bg-red-950/30',
+                        )}
+                      >
+                        <TableCell>
+                          <Checkbox
+                            className="mt-0.5 size-[18px]"
+                            aria-label={`${c.name} 포함`}
+                            checked={c.include}
+                            disabled={isBlocked}
+                            onCheckedChange={(v) => update(c.name, { include: v === true })}
+                          />
+                        </TableCell>
+                        <TableCell className="whitespace-normal">
+                          <div className="flex min-w-56 flex-col items-start gap-1">
+                            <Mono>
+                              {server.name}.{c.name}
+                            </Mono>
+                            {c.description && (
+                              <p className="line-clamp-2 text-xs text-muted-foreground">
+                                {c.description}
+                              </p>
+                            )}
+                            {isBlocked && (
+                              <p className="text-xs font-semibold text-red-700 dark:text-red-400">
+                                검사 실패 — 포함할 수 없어요
+                              </p>
+                            )}
+                            {hasIssues && (
+                              <Button
+                                variant="link"
+                                size="xs"
+                                className="h-auto px-0"
+                                aria-expanded={expanded}
+                                onClick={() => setOpen(expanded ? null : c.name)}
+                              >
+                                {expanded
+                                  ? '검사 결과 접기'
+                                  : `검사 결과 ${c.schema.issues.length + c.security.issues.length}건 보기`}
+                              </Button>
+                            )}
+                            {expanded && <CheckIssues schema={c.schema} security={c.security} />}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <CheckBadges schema={c.schema} security={c.security} />
+                        </TableCell>
+                        <TableCell>
+                          <NativeSelect
+                            size="sm"
+                            aria-label={`${c.name} 권한 등급`}
+                            value={c.level}
+                            disabled={isBlocked}
+                            onChange={(e) =>
+                              update(c.name, { level: e.target.value as PermissionLevel })
+                            }
+                          >
+                            {LEVELS.map((l) => (
+                              <NativeSelectOption key={l} value={l}>
+                                {LEVEL[l]}
+                                {l === c.suggestedLevel ? ' (제안)' : ''}
+                              </NativeSelectOption>
+                            ))}
+                          </NativeSelect>
+                        </TableCell>
+                        <TableCell>
+                          <NativeSelect
+                            size="sm"
+                            aria-label={`${c.name} 승인 정책`}
+                            value={c.mode}
+                            disabled={isBlocked}
+                            onChange={(e) =>
+                              update(c.name, { mode: e.target.value as ApprovalMode | '' })
+                            }
+                          >
+                            <NativeSelectOption value="">등급 기본값</NativeSelectOption>
+                            {APPROVAL_MODES.map((m) => (
+                              <NativeSelectOption key={m.value} value={m.value}>
+                                {m.label}
+                              </NativeSelectOption>
+                            ))}
+                          </NativeSelect>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
             )}
           </Card>
           <ApiErrorNotice error={select.error} />
-          <div className="wizard-actions">
+          <ActionBar>
             <Button variant="outline" onClick={onBack}>
-              ← 연결 테스트
+              <ArrowLeftIcon aria-hidden="true" />
+              연결 테스트
             </Button>
-            <span className="spacer" />
-            <span className="muted small">{included.length}개 Tool 포함</span>
+            <span className="ml-auto text-sm text-muted-foreground">
+              {included.length}개 Tool 포함
+            </span>
             <Button
               loading={select.pending}
               disabled={included.length === 0}
@@ -1009,9 +1110,10 @@ function DiscoverStep({
                 })
               }
             >
-              선택 저장 · 다음 →
+              선택 저장 · 다음
+              <ArrowRightIcon aria-hidden="true" />
             </Button>
-          </div>
+          </ActionBar>
         </>
       )}
     </>
@@ -1046,30 +1148,35 @@ function RegisterStep({
     const r = result.registry;
     return (
       <Card>
-        <div className="register-done" role="status">
-          <span className="done-icon" aria-hidden="true">
-            ✓
+        <div className="flex flex-col items-center gap-3 px-3 py-6 text-center" role="status">
+          <span
+            className={cn('grid size-13 place-items-center rounded-full', TONE_CLASS.success)}
+            aria-hidden="true"
+          >
+            <CircleCheckIcon className="size-7" />
           </span>
-          <h2>{result.server.name} 을(를) 등록했어요</h2>
-          <p className="muted">
+          <h2 className="text-xl font-semibold">{result.server.name} 을(를) 등록했어요</h2>
+          <p className="text-muted-foreground">
             {registryMessage(r)} — 새로 만드는 작업부터 이 서버의 Tool {included.length}개를 쓸 수
             있어요.
           </p>
-          <Notice tone="info">
-            <span>
-              Agent 가 실제로 쓰려면 Agent 설정의 MCP 허용 목록에서 이 서버를 켜고 배포하세요.
-            </span>
-          </Notice>
-          <div className="row center">
-            <Link className="btn btn-primary" to={`/mcp/${result.server.id}`}>
-              서버 상세 보기
-            </Link>
-            <Link className="btn" to="/agents">
-              Agent 설정에서 허용하기
-            </Link>
-            <Link className="btn btn-ghost" to={`/mcp?tab=registry&v=${r.version}`}>
-              Registry v{r.version} 보기
-            </Link>
+          <div className="w-full max-w-[560px] text-left">
+            <Notice tone="info">
+              <span>
+                Agent 가 실제로 쓰려면 Agent 설정의 MCP 허용 목록에서 이 서버를 켜고 배포하세요.
+              </span>
+            </Notice>
+          </div>
+          <div className="flex flex-wrap justify-center gap-2">
+            <Button asChild>
+              <Link to={`/mcp/${result.server.id}`}>서버 상세 보기</Link>
+            </Button>
+            <Button asChild variant="outline">
+              <Link to="/agents">Agent 설정에서 허용하기</Link>
+            </Button>
+            <Button asChild variant="ghost">
+              <Link to={`/mcp?tab=registry&v=${r.version}`}>Registry v{r.version} 보기</Link>
+            </Button>
           </div>
         </div>
       </Card>
@@ -1078,43 +1185,43 @@ function RegisterStep({
 
   return (
     <>
-      <div className="grid grid-main-side">
+      <div className="grid items-start gap-4 min-[1100px]:grid-cols-[minmax(0,1fr)_340px]">
         <Card title="④ 등록 — 마지막 확인" flush>
-          <div className="table-wrap">
-            <table className="table" aria-label="등록할 Tool">
-              <thead>
-                <tr>
-                  <th>등록할 Tool</th>
-                  <th>권한 등급</th>
-                  <th>승인 정책</th>
-                  <th>검사</th>
-                </tr>
-              </thead>
-              <tbody>
-                {included.map((c) => (
-                  <tr key={c.name}>
-                    <td>
-                      <Mono>
-                        {server.name}.{c.name}
-                      </Mono>
-                    </td>
-                    <td>
-                      <LevelBadge level={c.level} />
-                    </td>
-                    <td>{approvalLabel(c.mode || null)}</td>
-                    <td>
-                      <CheckBadges schema={c.schema} security={c.security} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {included.length === 0 && (
-              <div className="table-empty">포함한 Tool 이 없어요 — 이전 단계에서 고르세요</div>
-            )}
-          </div>
+          <Table aria-label="등록할 Tool">
+            <TableHeader className="bg-muted/50">
+              <TableRow className="[&>th]:px-3.5 [&>th]:text-xs [&>th]:text-muted-foreground">
+                <TableHead>등록할 Tool</TableHead>
+                <TableHead>권한 등급</TableHead>
+                <TableHead>승인 정책</TableHead>
+                <TableHead>검사</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {included.map((c) => (
+                <TableRow key={c.name} className="[&>td]:px-3.5 [&>td]:py-2.5">
+                  <TableCell>
+                    <Mono>
+                      {server.name}.{c.name}
+                    </Mono>
+                  </TableCell>
+                  <TableCell>
+                    <LevelBadge level={c.level} />
+                  </TableCell>
+                  <TableCell>{approvalLabel(c.mode || null)}</TableCell>
+                  <TableCell>
+                    <CheckBadges schema={c.schema} security={c.security} />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+          {included.length === 0 && (
+            <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+              포함한 Tool 이 없어요 — 이전 단계에서 고르세요
+            </div>
+          )}
         </Card>
-        <div className="stack">
+        <div className="min-w-0">
           <Card title="서버">
             <KeyValue
               items={[
@@ -1127,7 +1234,7 @@ function RegisterStep({
             />
           </Card>
           <Card title="등록하면">
-            <ul className="guard-list">
+            <ul className={GUARD_LIST}>
               <li>
                 새 Tool Registry 버전이 만들어지고, 그 뒤에 만드는 작업부터 적용돼요 (실행 중 작업은
                 그대로).
@@ -1139,12 +1246,13 @@ function RegisterStep({
         </div>
       </div>
       <ApiErrorNotice error={register.error} />
-      <div className="wizard-actions">
+      <ActionBar>
         <Button variant="outline" onClick={onBack}>
-          ← Tool 선택
+          <ArrowLeftIcon aria-hidden="true" />
+          Tool 선택
         </Button>
-        <span className="spacer" />
         <Button
+          className="ml-auto"
           loading={register.pending}
           disabled={included.length === 0}
           onClick={() =>
@@ -1155,7 +1263,7 @@ function RegisterStep({
         >
           등록하기
         </Button>
-      </div>
+      </ActionBar>
     </>
   );
 }

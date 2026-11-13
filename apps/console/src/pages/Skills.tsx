@@ -3,6 +3,15 @@
  * API: docs/api-spec.md §4.6 — src/skills/admin/skills-admin.{controller,service}.ts
  * 조회는 Viewer, 업로드 · 활성화 · 비활성화는 Admin.
  */
+import {
+  CircleCheckIcon,
+  CircleMinusIcon,
+  CircleXIcon,
+  type LucideIcon,
+  PlusIcon,
+  TriangleAlertIcon,
+  UploadIcon,
+} from 'lucide-react';
 import { type DragEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { formatBytes } from '../../../shared/format';
@@ -28,13 +37,29 @@ import {
   SearchInput,
   Tabs,
   Time,
+  TONE_CLASS,
   Toolbar,
   useAction,
   useQuery,
   useToast,
 } from '../ui';
+import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { DiffView, type FieldIssue, issuesOf, type PublishedVersion, registryMessage } from './Mcp';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { cn } from '@/lib/utils';
+import {
+  DiffView,
+  type FieldIssue,
+  FILTER_ITEM,
+  issuesOf,
+  LIST_ITEM,
+  NAME_DIFF_BORDER,
+  type PublishedVersion,
+  registryMessage,
+} from './Mcp';
 
 /* ───────────── 타입 ───────────── */
 
@@ -129,6 +154,12 @@ const VERIFICATION: Record<VerificationStatus, { label: string; tone: Tone }> = 
   failed: { label: '검증 실패', tone: 'danger' },
 };
 
+const VERIFICATION_TEXT: Record<VerificationStatus, string> = {
+  pending: '',
+  passed: 'text-emerald-700 dark:text-emerald-400',
+  failed: 'text-red-700 dark:text-red-400',
+};
+
 const SOURCE: Record<SkillView['source'], string> = {
   upload: '콘솔 업로드',
   git: 'Git',
@@ -144,11 +175,11 @@ const CHECK_LABEL: Record<CheckName, { title: string; hint: string }> = {
   tool_scope: { title: 'Tool 범위', hint: 'allowed-tools 가 Registry 에 있고 등급이 적절한지' },
 };
 
-const CHECK_STATUS: Record<CheckStatus, { label: string; icon: string; tone: Tone }> = {
-  passed: { label: '통과', icon: '✓', tone: 'success' },
-  warning: { label: '경고', icon: '!', tone: 'warning' },
-  failed: { label: '실패', icon: '✕', tone: 'danger' },
-  skipped: { label: '해당 없음', icon: '–', tone: 'neutral' },
+const CHECK_STATUS: Record<CheckStatus, { label: string; icon: LucideIcon; tone: Tone }> = {
+  passed: { label: '통과', icon: CircleCheckIcon, tone: 'success' },
+  warning: { label: '경고', icon: TriangleAlertIcon, tone: 'warning' },
+  failed: { label: '실패', icon: CircleXIcon, tone: 'danger' },
+  skipped: { label: '해당 없음', icon: CircleMinusIcon, tone: 'neutral' },
 };
 
 const FILE_KIND: Record<FileKind, string> = {
@@ -160,6 +191,26 @@ const FILE_KIND: Record<FileKind, string> = {
 };
 
 const MAX_ZIP = 20 * 1024 * 1024;
+
+/** 공용 Markdown 은 맨 태그만 내므로 글자 모양을 여기서 준다 (preflight 가 제목 크기 · 목록 기호를 지운다) */
+const MARKDOWN = cn(
+  'text-sm leading-relaxed break-words [&>*+*]:mt-2.5 [&>:first-child]:mt-0',
+  '[&_:is(h1,h2,h3,h4)]:mt-4.5 [&_:is(h1,h2,h3,h4)]:leading-snug [&_:is(h1,h2,h3,h4)]:font-semibold',
+  '[&_h1]:text-xl [&_h2]:text-[17px] [&_h3]:text-[15px]',
+  '[&_ol]:list-decimal [&_ol]:pl-5.5 [&_ul]:list-disc [&_ul]:pl-5.5 [&_li+li]:mt-0.5',
+  '[&_code]:rounded [&_code]:bg-muted [&_code]:px-1.5 [&_code]:py-px [&_code]:font-mono [&_code]:text-[12.5px]',
+  '[&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:bg-muted [&_pre]:p-3 [&_pre_code]:bg-transparent [&_pre_code]:p-0',
+  '[&_blockquote]:border-l-[3px] [&_blockquote]:px-3 [&_blockquote]:py-1 [&_blockquote]:text-muted-foreground',
+  '[&_hr]:border-t [&_div:has(>table)]:overflow-x-auto',
+  '[&_table]:border-collapse [&_table]:text-[13px] [&_:is(td,th)]:border [&_:is(td,th)]:px-2.5 [&_:is(td,th)]:py-1.5 [&_:is(td,th)]:text-left [&_th]:bg-muted/60',
+);
+
+const VERIFY_ITEM: Record<CheckStatus, string> = {
+  passed: '',
+  skipped: '',
+  warning: 'border-amber-300 bg-amber-50/50 dark:border-amber-900 dark:bg-amber-950/30',
+  failed: 'border-red-300 bg-red-50/50 dark:border-red-900 dark:bg-red-950/30',
+};
 
 function SkillStatusBadge({ status }: { status: SkillStatus }) {
   const s = SKILL_STATUS[status] ?? { label: status, tone: 'neutral' as Tone };
@@ -207,9 +258,13 @@ export function SkillsPage() {
       render: (s) => {
         const v = s.activeVersion ?? s.latestVersion;
         return (
-          <div className="skill-cell">
-            <div className="cell-title skill-name">{s.name}</div>
-            {v && <div className="cell-sub clamp-2">{v.description}</div>}
+          <div className="max-w-[460px] min-w-48 whitespace-normal">
+            <div className="font-mono font-semibold">{s.name}</div>
+            {v && (
+              <div className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+                {v.description}
+              </div>
+            )}
           </div>
         );
       },
@@ -219,14 +274,18 @@ export function SkillsPage() {
       key: 'active',
       header: '활성 버전',
       render: (s) =>
-        s.activeVersion ? <Mono>{s.activeVersion.version}</Mono> : <span className="muted">—</span>,
+        s.activeVersion ? (
+          <Mono>{s.activeVersion.version}</Mono>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        ),
     },
     {
       key: 'latest',
       header: '최신 버전',
       render: (s) =>
         s.latestVersion ? (
-          <span className="row tight">
+          <span className="flex flex-wrap items-center gap-1">
             <Mono>{s.latestVersion.version}</Mono>
             {!s.latestVersion.active && s.activeVersion && (
               <Badge tone={s.latestVersion.verificationStatus === 'failed' ? 'danger' : 'warning'}>
@@ -237,7 +296,7 @@ export function SkillsPage() {
             )}
           </span>
         ) : (
-          <span className="muted">—</span>
+          <span className="text-muted-foreground">—</span>
         ),
     },
     {
@@ -251,7 +310,7 @@ export function SkillsPage() {
       header: 'allowed-tools',
       align: 'right',
       render: (s) => (
-        <span className="num">
+        <span className="tabular-nums">
           {(s.activeVersion ?? s.latestVersion)?.allowedTools.length ?? 0}
         </span>
       ),
@@ -267,13 +326,25 @@ export function SkillsPage() {
         description="SKILL.md 기반 업무 절차를 올리고, 공급망 검증 · 버전 · 활성화를 관리합니다. 활성 버전만 새 작업에 쓰여요."
         actions={
           <RoleGate min="admin">
-            <Button onClick={() => setUploading(true)}>+ Skill 업로드</Button>
+            <Button onClick={() => setUploading(true)}>
+              <PlusIcon aria-hidden="true" />
+              Skill 업로드
+            </Button>
           </RoleGate>
         }
       />
       <Toolbar>
         <SearchInput label="Skill 검색" placeholder="이름 · 설명" value={q} onChange={setQ} />
-        <div className="filter-chips" role="group" aria-label="상태 필터">
+        <ToggleGroup
+          type="single"
+          variant="outline"
+          size="sm"
+          spacing={1}
+          className="flex-wrap"
+          aria-label="상태 필터"
+          value={filter}
+          onValueChange={(v) => v && setFilter(v as Filter)}
+        >
           {(
             [
               ['all', `전체 ${all.length}`],
@@ -283,17 +354,11 @@ export function SkillsPage() {
               ['inactive', `비활성 ${count('inactive')}`],
             ] as [Filter, string][]
           ).map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              className={filter === id ? 'chip active' : 'chip'}
-              aria-pressed={filter === id}
-              onClick={() => setFilter(id)}
-            >
+            <ToggleGroupItem key={id} value={id} className={FILTER_ITEM}>
               {label}
-            </button>
+            </ToggleGroupItem>
           ))}
-        </div>
+        </ToggleGroup>
       </Toolbar>
       <ErrorNotice error={skills.error} onRetry={() => void skills.reload()} />
       <Card flush>
@@ -421,9 +486,12 @@ function UploadModal({
       {result ? (
         <UploadSummary result={result} />
       ) : (
-        <div className="stack">
+        <div className="flex flex-col gap-3 [&>[data-slot=alert]]:mb-0">
           <label
-            className={drag ? 'dropzone drag' : 'dropzone'}
+            className={cn(
+              'flex min-h-40 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border-2 border-dashed p-5 text-center transition-colors hover:border-primary hover:bg-primary/5 has-[:focus-visible]:ring-[3px] has-[:focus-visible]:ring-ring/50',
+              drag && 'border-primary bg-primary/5',
+            )}
             onDragOver={(e) => {
               e.preventDefault();
               setDrag(true);
@@ -431,28 +499,24 @@ function UploadModal({
             onDragLeave={() => setDrag(false)}
             onDrop={onDrop}
           >
-            <input
+            <Input
               ref={inputRef}
               type="file"
               accept=".zip,application/zip"
-              className="visually-hidden"
+              className="sr-only"
               aria-label="Skill zip 파일"
               onChange={(e) => pick(e.target.files?.[0])}
             />
-            <span className="dropzone-icon" aria-hidden="true">
-              ⬆
-            </span>
+            <UploadIcon className="size-6 text-primary" aria-hidden="true" />
             {file ? (
               <span>
-                <strong>{file.name}</strong>{' '}
-                <span className="muted">· {formatBytes(file.size)}</span>
+                <strong className="font-semibold">{file.name}</strong>{' '}
+                <span className="text-muted-foreground">· {formatBytes(file.size)}</span>
               </span>
             ) : (
-              <span>
-                <strong>zip 파일을 끌어 놓거나 눌러서 고르세요</strong>
-              </span>
+              <span className="font-semibold">zip 파일을 끌어 놓거나 눌러서 고르세요</span>
             )}
-            <span className="muted small">
+            <span className="text-xs text-muted-foreground">
               SKILL.md(최상위) + 참고 문서 · 템플릿 · 스크립트 — zip 20MB · 압축 해제 16MB · 파일
               512개 이하
             </span>
@@ -460,10 +524,10 @@ function UploadModal({
           {tooBig && <Notice tone="error">20MB 를 넘는 zip 은 올릴 수 없어요.</Notice>}
           {notZip && <Notice tone="error">zip 파일만 올릴 수 있어요.</Notice>}
           <UploadError error={upload.error} />
-          <p className="muted small">
+          <p className="text-xs text-muted-foreground">
             올리면 SKILL.md 를 검사하고 출처 · 해시 · 서명 · 스크립트 · 숨은 지시문 · Tool 범위를
-            검증한 뒤 <strong>검토 대기</strong> 버전으로 저장해요. 활성화는 결과를 확인한 뒤 따로
-            합니다.
+            검증한 뒤 <strong className="text-foreground">검토 대기</strong> 버전으로 저장해요.
+            활성화는 결과를 확인한 뒤 따로 합니다.
           </p>
         </div>
       )}
@@ -478,41 +542,44 @@ function UploadError({ error }: { error: Error | null }) {
   const lineIssues = issues.filter((i) => i.line != null || i.path.startsWith('SKILL.md'));
   const other = issues.filter((i) => !lineIssues.includes(i));
   return (
-    <div className="notice notice-error upload-error" role="alert">
-      <div>
-        <p className="upload-error-title">
+    <Alert variant="destructive" className="flex items-start gap-2.5 border-destructive/30">
+      <CircleXIcon className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+      <div className="min-w-0 flex-1">
+        <p className="font-semibold">
           {code === 'SKILL_PARSE_FAILED' && lineIssues.length
             ? 'SKILL.md 에 고칠 곳이 있어요'
             : error.message}
         </p>
         {lineIssues.length > 0 && (
-          <ul className="line-issues">
+          <ul className="mt-2 flex flex-col gap-1 text-sm">
             {lineIssues.map((i: FieldIssue, n) => (
-              <li key={n}>
-                <span className="line-no">{i.line != null ? `${i.line}행` : i.path}</span>
+              <li key={n} className="flex items-baseline gap-2.5">
+                <span className="min-w-12 shrink-0 rounded bg-destructive/10 px-1.5 py-px text-center font-mono text-xs font-semibold">
+                  {i.line != null ? `${i.line}행` : i.path}
+                </span>
                 <span>{i.message}</span>
               </li>
             ))}
           </ul>
         )}
         {other.length > 0 && (
-          <ul className="issue-list">
+          <ul className="mt-1.5 list-disc pl-5 text-sm">
             {other.map((i, n) => (
               <li key={n}>{i.message}</li>
             ))}
           </ul>
         )}
       </div>
-    </div>
+    </Alert>
   );
 }
 
 function UploadSummary({ result }: { result: UploadResult }) {
   const v = result.version;
   return (
-    <div className="stack">
-      <div className="upload-head">
-        <span className="skill-name">{result.skill.name}</span>
+    <div className="flex flex-col gap-3 [&>[data-slot=alert]]:mb-0">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-mono text-base font-semibold">{result.skill.name}</span>
         <Mono>{v.version}</Mono>
         <VerificationBadge status={v.verificationStatus} />
         {v.active && <Badge tone="success">활성 버전</Badge>}
@@ -533,8 +600,8 @@ function UploadSummary({ result }: { result: UploadResult }) {
       {result.warnings.length > 0 && (
         <Notice tone="warn">
           <div>
-            <p>SKILL.md 경고</p>
-            <ul className="issue-list">
+            <p className="font-semibold">SKILL.md 경고</p>
+            <ul className="mt-1 list-disc pl-5 text-sm">
               {result.warnings.map((w, i) => (
                 <li key={i}>{w}</li>
               ))}
@@ -610,7 +677,7 @@ export function SkillDetailPage() {
     <>
       <PageHeader
         back={{ to: '/skills', label: 'Skill' }}
-        title={<span className="skill-name">{s.name}</span>}
+        title={<span className="font-mono">{s.name}</span>}
         meta={
           <>
             <SkillStatusBadge status={s.status} />
@@ -653,8 +720,8 @@ export function SkillDetailPage() {
         </Notice>
       )}
 
-      <div className="grid grid-main-side skill-layout">
-        <div className="stack">
+      <div className="grid items-start gap-4 min-[1100px]:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="min-w-0">
           {!selectedId ? (
             <Card>
               <Empty title="버전이 없어요" />
@@ -669,28 +736,30 @@ export function SkillDetailPage() {
             )
           ) : (
             <>
-              <Card className="version-head-card">
-                <div className="version-bar">
-                  <div className="version-bar-main">
-                    <p className="version-title">
+              <Card>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-col gap-1.5">
+                    <p className="font-semibold">
                       버전 <Mono>{v.version}</Mono>
                     </p>
-                    <div className="row tight">
+                    <div className="flex flex-wrap items-center gap-1.5">
                       <VerificationBadge status={v.verificationStatus} />
                       {v.active ? (
                         <Badge tone="success">활성 버전</Badge>
                       ) : (
                         <Badge>비활성 버전</Badge>
                       )}
-                      <span className="muted small">
+                      <span className="text-xs text-muted-foreground">
                         <Time iso={v.createdAt} absolute />
                       </span>
                     </div>
                   </div>
                   {can('admin') && !v.active && (
-                    <div className="version-bar-actions">
+                    <div className="flex flex-wrap items-center gap-2.5">
                       {v.verificationStatus !== 'passed' && (
-                        <span className="muted small">검증을 통과해야 활성화할 수 있어요</span>
+                        <span className="text-xs text-muted-foreground">
+                          검증을 통과해야 활성화할 수 있어요
+                        </span>
                       )}
                       <Button
                         disabled={v.verificationStatus !== 'passed'}
@@ -701,12 +770,14 @@ export function SkillDetailPage() {
                     </div>
                   )}
                   {can('admin') && v.active && s.status !== 'active' && (
-                    <div className="version-bar-actions">
-                      <Button onClick={() => setConfirm('activate')}>다시 활성화</Button>
-                    </div>
+                    <Button onClick={() => setConfirm('activate')}>다시 활성화</Button>
                   )}
                 </div>
-                <ErrorNotice error={activate.error} />
+                {activate.error && (
+                  <div className="mt-3 [&>[data-slot=alert]]:mb-0">
+                    <ErrorNotice error={activate.error} />
+                  </div>
+                )}
               </Card>
               <Tabs<DetailTab>
                 label="버전 내용"
@@ -741,39 +812,32 @@ export function SkillDetailPage() {
             </>
           )}
         </div>
-        <div className="stack">
+        <div className="min-w-0">
           <Card title="버전" description="새 작업은 활성 버전(내용 해시)으로 고정돼요" flush>
             {versions.loading && !versions.data ? (
               <Loading />
             ) : (
-              <ul className="version-list" aria-label="Skill 버전">
+              <ul className="flex flex-col gap-0.5 p-1.5" aria-label="Skill 버전">
                 {(versions.data ?? []).map((ver) => (
                   <li key={ver.id}>
                     <button
                       type="button"
-                      className={ver.id === selectedId ? 'version-item active' : 'version-item'}
+                      className={LIST_ITEM}
                       aria-current={ver.id === selectedId || undefined}
                       onClick={() => setParams({ version: ver.id }, { replace: true })}
                     >
-                      <span className="version-head">
-                        <strong className="mono">{ver.version}</strong>
+                      <span className="flex w-full items-center gap-2">
+                        <strong className="font-mono font-semibold">{ver.version}</strong>
                         {ver.active && <Badge tone="success">활성</Badge>}
-                        <span className="spacer" />
-                        <Time iso={ver.createdAt} />
+                        <span className="ml-auto text-xs text-muted-foreground">
+                          <Time iso={ver.createdAt} />
+                        </span>
                       </span>
-                      <span className="version-counts">
-                        <span
-                          className={
-                            ver.verificationStatus === 'failed'
-                              ? 'del'
-                              : ver.verificationStatus === 'passed'
-                                ? 'add'
-                                : undefined
-                          }
-                        >
+                      <span className="flex gap-2 text-xs">
+                        <span className={VERIFICATION_TEXT[ver.verificationStatus]}>
                           {VERIFICATION[ver.verificationStatus].label}
                         </span>
-                        <span className="muted" title={ver.contentHash}>
+                        <span className="font-mono text-muted-foreground" title={ver.contentHash}>
                           sha256:{ver.contentHash.slice(0, 10)}
                         </span>
                       </span>
@@ -786,7 +850,7 @@ export function SkillDetailPage() {
           {v && (
             <Card title="allowed-tools" description="Skill 단계에서 쓸 수 있는 Tool (서버가 강제)">
               {v.allowedTools.length ? (
-                <ul className="tool-scope">
+                <ul className="flex flex-wrap gap-1.5">
                   {v.allowedTools.map((t) => (
                     <li key={t}>
                       <Mono>{t}</Mono>
@@ -794,7 +858,9 @@ export function SkillDetailPage() {
                   ))}
                 </ul>
               ) : (
-                <p className="muted small">지정 없음 — 문서만 참고하고 Tool 은 쓰지 않아요.</p>
+                <p className="text-xs text-muted-foreground">
+                  지정 없음 — 문서만 참고하고 Tool 은 쓰지 않아요.
+                </p>
               )}
             </Card>
           )}
@@ -817,7 +883,7 @@ export function SkillDetailPage() {
         open={confirm === 'activate'}
         title={`${s.name} ${v?.version ?? ''} 활성화`}
         body={
-          <p className="confirm-body">
+          <p className="mb-3 text-muted-foreground">
             새 Tool Registry 버전이 만들어지고, 그 뒤에 만드는 작업부터 이 버전을 써요
             {active && active.id !== selectedId ? ` (지금 활성: ${active.version})` : ''}. 실행 중인
             작업은 고정된 버전을 그대로 씁니다.
@@ -833,7 +899,7 @@ export function SkillDetailPage() {
         open={confirm === 'disable'}
         title={`${s.name} 비활성화`}
         body={
-          <p className="confirm-body">
+          <p className="mb-3 text-muted-foreground">
             새 작업의 Registry 에서 빠지고, 실행 중인 작업도 다음 Skill 단계부터 쓰지 않아요. 버전은
             남아 있어 다시 활성화할 수 있어요.
           </p>
@@ -880,13 +946,13 @@ function SkillDocTab({ skillId, version }: { skillId: string; version: SkillVers
             [
               'allowed-tools',
               version.allowedTools.length ? (
-                <span key="t" className="tag-list">
+                <span key="t" className="inline-flex flex-wrap gap-1">
                   {version.allowedTools.map((t) => (
                     <Mono key={t}>{t}</Mono>
                   ))}
                 </span>
               ) : (
-                <span key="t" className="muted">
+                <span key="t" className="text-muted-foreground">
                   없음
                 </span>
               ),
@@ -913,7 +979,7 @@ function SkillDocTab({ skillId, version }: { skillId: string; version: SkillVers
         ) : raw ? (
           <CodeBlock code={doc.data.text} />
         ) : (
-          <Markdown className="md-doc" text={stripFrontmatter(doc.data.text)} />
+          <Markdown className={MARKDOWN} text={stripFrontmatter(doc.data.text)} />
         )}
       </Card>
     </>
@@ -942,25 +1008,28 @@ function FilesTab({ skillId, version }: { skillId: string; version: SkillVersion
   const isMd = /\.md$/i.test(path);
 
   return (
-    <div className="files-grid">
+    <div className="grid items-start gap-4 min-[1100px]:grid-cols-[280px_minmax(0,1fr)] [&>*]:mb-0">
       <Card title="파일" description={`${files.length}개 · ${formatBytes(total)}`} flush>
-        <ul className="file-list" aria-label="번들 파일">
+        <ul
+          className="flex max-h-[60vh] flex-col gap-0.5 overflow-y-auto p-1.5"
+          aria-label="번들 파일"
+        >
           {files.map((f) => (
             <li key={f.path}>
               <button
                 type="button"
-                className={f.path === path ? 'file-item active' : 'file-item'}
+                className={LIST_ITEM}
                 aria-current={f.path === path || undefined}
                 onClick={() => setPath(f.path)}
               >
-                <span className="file-path">{f.path}</span>
-                <span className="file-meta">
+                <span className="font-mono text-[12.5px] break-all">{f.path}</span>
+                <span className="flex items-center gap-2 text-xs">
                   <Badge
                     tone={f.kind === 'script' ? 'warning' : f.kind === 'skill' ? 'info' : 'neutral'}
                   >
                     {FILE_KIND[f.kind]}
                   </Badge>
-                  <span className="muted">{formatBytes(f.size)}</span>
+                  <span className="text-muted-foreground">{formatBytes(f.size)}</span>
                 </span>
               </button>
             </li>
@@ -992,7 +1061,7 @@ function FilesTab({ skillId, version }: { skillId: string; version: SkillVersion
           <Loading />
         ) : isMd && !raw ? (
           <Markdown
-            className="md-doc"
+            className={MARKDOWN}
             text={
               selected?.kind === 'skill' ? stripFrontmatter(content.data.text) : content.data.text
             }
@@ -1018,38 +1087,48 @@ export function VerificationList({ checks }: { checks: VerificationCheck[] }) {
   const failed = checks.filter((c) => c.status === 'failed').length;
   const warned = checks.filter((c) => c.status === 'warning').length;
   return (
-    <div className="verify">
-      <p className="verify-summary">
+    <div>
+      <p className="mb-3 flex flex-wrap items-center gap-2">
         {failed ? (
           <Badge tone="danger">실패 {failed}</Badge>
         ) : (
           <Badge tone="success">실패 없음</Badge>
         )}
         {warned > 0 && <Badge tone="warning">경고 {warned}</Badge>}
-        <span className="muted small">{checks.length}개 항목</span>
+        <span className="text-xs text-muted-foreground">{checks.length}개 항목</span>
       </p>
-      <ol className="verify-list">
+      <ol className="flex flex-col gap-2">
         {sorted.map((c) => {
           const st = CHECK_STATUS[c.status];
+          const Icon = st.icon;
           const label = CHECK_LABEL[c.check] ?? { title: c.check, hint: '' };
           return (
-            <li key={c.check} className={`verify-item ${c.status}`}>
-              <span className="verify-icon" aria-hidden="true">
-                {st.icon}
+            <li
+              key={c.check}
+              className={cn('flex gap-3 rounded-lg border p-3', VERIFY_ITEM[c.status])}
+            >
+              <span
+                className={cn(
+                  'grid size-7 shrink-0 place-items-center rounded-full',
+                  TONE_CLASS[st.tone],
+                )}
+                aria-hidden="true"
+              >
+                <Icon className="size-4" />
               </span>
-              <div className="verify-body">
-                <p className="verify-title">
+              <div className="min-w-0 flex-1">
+                <p className="flex flex-wrap items-center gap-2 font-semibold">
                   {label.title} <Badge tone={st.tone}>{st.label}</Badge>
                 </p>
-                <p className="verify-detail">{c.detail}</p>
+                <p className="mt-0.5 text-sm break-words text-muted-foreground">{c.detail}</p>
                 {c.findings && c.findings.length > 0 && (
-                  <ul className="verify-findings">
+                  <ul className="mt-1.5 list-disc pl-5 text-sm">
                     {c.findings.map((f, i) => (
                       <li key={i}>{f}</li>
                     ))}
                   </ul>
                 )}
-                {label.hint && <p className="verify-hint">{label.hint}</p>}
+                {label.hint && <p className="mt-1 text-xs text-muted-foreground">{label.hint}</p>}
               </div>
             </li>
           );
@@ -1098,21 +1177,25 @@ function DiffTab({
         }
         actions={
           others.length > 0 ? (
-            <label className="inline-select">
-              <span>기준</span>
-              <select
-                className="input"
+            <div className="flex items-center gap-2">
+              <Label htmlFor="skill-diff-against" className="font-normal text-muted-foreground">
+                기준
+              </Label>
+              <NativeSelect
+                id="skill-diff-against"
+                size="sm"
+                containerClassName="w-auto"
                 value={against}
                 onChange={(e) => setAgainst(e.target.value)}
               >
-                <option value="">직전 버전</option>
+                <NativeSelectOption value="">직전 버전</NativeSelectOption>
                 {others.map((o) => (
-                  <option key={o.id} value={o.id}>
+                  <NativeSelectOption key={o.id} value={o.id}>
                     {o.version}
-                  </option>
+                  </NativeSelectOption>
                 ))}
-              </select>
-            </label>
+              </NativeSelect>
+            </div>
           ) : undefined
         }
       >
@@ -1121,11 +1204,11 @@ function DiffTab({
         ) : !d ? (
           <Loading />
         ) : !d.from ? (
-          <p className="muted">비교할 이전 버전이 없어요.</p>
+          <p className="text-sm text-muted-foreground">비교할 이전 버전이 없어요.</p>
         ) : (
-          <div className="stack">
+          <div className="flex flex-col gap-3">
             {(d.metadata.description || d.metadata.allowedTools) && (
-              <div className="meta-diff">
+              <div className="flex flex-col gap-2.5">
                 {d.metadata.description && (
                   <DiffView
                     label="description"
@@ -1142,7 +1225,7 @@ function DiffTab({
                 )}
               </div>
             )}
-            <div className="name-diff">
+            <div className="grid gap-3 sm:grid-cols-3">
               {(
                 [
                   ['추가', d.files.added, 'add', 'added'],
@@ -1150,34 +1233,45 @@ function DiffTab({
                   ['삭제', d.files.removed, 'del', 'removed'],
                 ] as const
               ).map(([label, paths, cls, kind]) => (
-                <div key={label} className={`name-diff-col ${cls}`}>
-                  <p className="name-diff-title">
-                    {label} 파일 <span className="muted">{paths.length}</span>
+                <div
+                  key={label}
+                  className={cn(
+                    'min-w-0 rounded-lg border border-t-[3px] px-3 py-2.5',
+                    NAME_DIFF_BORDER[cls],
+                  )}
+                >
+                  <p className="mb-1.5 text-sm font-semibold">
+                    {label} 파일{' '}
+                    <span className="font-normal text-muted-foreground tabular-nums">
+                      {paths.length}
+                    </span>
                   </p>
                   {paths.length ? (
-                    <ul>
+                    <ul className="flex flex-col items-start gap-1">
                       {paths.map((p) => (
-                        <li key={p}>
-                          <button
-                            type="button"
-                            className={
-                              file?.path === p ? 'link-btn mono active-file' : 'link-btn mono'
-                            }
+                        <li key={p} className="max-w-full">
+                          <Button
+                            variant="link"
+                            size="xs"
+                            className={cn(
+                              'h-auto px-0 text-left font-mono text-[12.5px] font-normal break-all whitespace-normal',
+                              file?.path === p && 'font-bold underline',
+                            )}
                             onClick={() => setFile({ path: p, kind })}
                           >
                             {p}
-                          </button>
+                          </Button>
                         </li>
                       ))}
                     </ul>
                   ) : (
-                    <p className="muted">—</p>
+                    <p className="text-sm text-muted-foreground">—</p>
                   )}
                 </div>
               ))}
             </div>
             {!d.files.added.length && !d.files.changed.length && !d.files.removed.length && (
-              <p className="muted">파일 차이 없음</p>
+              <p className="text-sm text-muted-foreground">파일 차이 없음</p>
             )}
           </div>
         )}

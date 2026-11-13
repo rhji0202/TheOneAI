@@ -3,6 +3,15 @@
  * API: docs/api-spec.md §4.5 — src/mcp/admin/mcp-admin.{controller,service,schemas}.ts
  * 조회는 Viewer, 변경은 Admin, 사설 네트워크 허용은 Owner.
  */
+import {
+  ArrowRightIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  CircleAlertIcon,
+  CircleCheckIcon,
+  PlusIcon,
+  TriangleAlertIcon,
+} from 'lucide-react';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { formatPercent } from '../../../shared/format';
@@ -29,13 +38,22 @@ import {
   SearchInput,
   Tabs,
   Time,
+  TONE_CLASS,
   Toggle,
   Toolbar,
   useAction,
   useQuery,
   useToast,
 } from '../ui';
+import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
+import { Textarea } from '@/components/ui/textarea';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { cn } from '@/lib/utils';
 
 /* ───────────── 타입 (서버 응답) ───────────── */
 
@@ -284,6 +302,13 @@ const REGISTRY_REASON: Record<string, string> = {
   builtin_tools_changed: '내장 Tool 구성 변경',
 };
 
+export const FILTER_ITEM =
+  'data-[state=on]:border-primary/40 data-[state=on]:bg-primary/10 data-[state=on]:text-primary';
+
+/** 카드 안 세로 목록(Registry 버전 · Skill 버전 · 번들 파일)의 항목 버튼 — 선택은 aria-current */
+export const LIST_ITEM =
+  'flex w-full flex-col gap-1 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-muted aria-[current=true]:bg-primary/10';
+
 export function ServerStatusBadge({ status }: { status: ServerStatus }) {
   const s = SERVER_STATUS[status] ?? { label: status, tone: 'neutral' as Tone };
   return <Badge tone={s.tone}>{s.label}</Badge>;
@@ -303,7 +328,7 @@ export function CheckBadges({
   const s = SCHEMA_CHECK[schema.result];
   const k = SECURITY_CHECK[security.result];
   return (
-    <span className="check-badges">
+    <span className="inline-flex flex-wrap gap-1">
       <Badge tone={s.tone}>{s.label}</Badge>
       <Badge tone={k.tone}>{k.label}</Badge>
     </span>
@@ -324,12 +349,24 @@ export function CheckIssues({
   ];
   if (!items.length) return null;
   return (
-    <ul className="check-issues">
-      {items.map((it, i) => (
-        <li key={i} className={it.bad ? 'bad' : 'warn'}>
-          <strong>{it.kind}</strong> {it.m}
-        </li>
-      ))}
+    <ul className="my-2 flex flex-col gap-1 text-sm">
+      {items.map((it, i) => {
+        const Icon = it.bad ? CircleAlertIcon : TriangleAlertIcon;
+        return (
+          <li
+            key={i}
+            className={cn(
+              'flex items-start gap-1.5',
+              it.bad ? 'text-red-700 dark:text-red-300' : 'text-amber-800 dark:text-amber-300',
+            )}
+          >
+            <Icon className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+            <span>
+              <strong className="font-semibold">{it.kind}</strong> {it.m}
+            </span>
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -366,11 +403,12 @@ export function ApiErrorNotice({
     (i) => !skipPaths.some((p) => i.path === p || i.path.startsWith(`${p}.`)),
   );
   return (
-    <div className="notice notice-error" role="alert">
-      <div>
+    <Alert variant="destructive" className="mb-3 flex items-start gap-2.5 border-destructive/30">
+      <CircleAlertIcon className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+      <div className="min-w-0 flex-1">
         <p>{error.message}</p>
         {rest.length > 0 && (
-          <ul className="issue-list">
+          <ul className="mt-1.5 list-disc pl-5 text-sm">
             {rest.map((i, n) => (
               <li key={n}>
                 {i.path && <Mono>{i.path}</Mono>} {i.message}
@@ -379,7 +417,7 @@ export function ApiErrorNotice({
           </ul>
         )}
       </div>
-    </div>
+    </Alert>
   );
 }
 
@@ -449,6 +487,12 @@ export function lineDiff(before: string, after: string): DiffLine[] {
   return out;
 }
 
+const DIFF_LINE: Record<DiffLine['type'], string> = {
+  same: '',
+  add: 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300',
+  del: 'bg-red-50 text-red-800 dark:bg-red-950/60 dark:text-red-300',
+};
+
 export function DiffView({
   before,
   after,
@@ -461,15 +505,22 @@ export function DiffView({
   const lines = useMemo(() => lineDiff(before, after), [before, after]);
   const changed = lines.some((l) => l.type !== 'same');
   return (
-    <div className="diff">
-      {label && <div className="diff-label">{label}</div>}
+    <div className="overflow-hidden rounded-lg border">
+      {label && (
+        <div className="border-b bg-muted/50 px-3 py-1.5 text-xs font-medium text-muted-foreground">
+          {label}
+        </div>
+      )}
       {!changed ? (
-        <p className="diff-same">차이 없음</p>
+        <p className="px-3 py-2 text-sm text-muted-foreground">차이 없음</p>
       ) : (
-        <pre className="diff-body" aria-label="변경 내용 (- 이전, + 이후)">
+        <pre
+          className="m-0 max-h-[420px] overflow-auto py-1.5 font-mono text-[12.5px] leading-relaxed"
+          aria-label="변경 내용 (- 이전, + 이후)"
+        >
           {lines.map((l, n) => (
-            <div key={n} className={`diff-line ${l.type}`}>
-              <span className="diff-sign" aria-hidden="true">
+            <div key={n} className={cn('px-3 break-words whitespace-pre-wrap', DIFF_LINE[l.type])}>
+              <span className="inline-block w-4 select-none" aria-hidden="true">
                 {l.type === 'add' ? '+' : l.type === 'del' ? '−' : ' '}
               </span>
               {l.text || ' '}
@@ -497,9 +548,12 @@ export function McpListPage() {
         description="외부 Tool 을 제공하는 MCP 서버를 연결하고, Tool 권한 등급 · 변경 검토 · Registry 버전을 관리합니다."
         actions={
           <RoleGate min="admin">
-            <Link className="btn btn-primary" to="/mcp/new">
-              + MCP 서버 연결
-            </Link>
+            <Button asChild>
+              <Link to="/mcp/new">
+                <PlusIcon aria-hidden="true" />
+                MCP 서버 연결
+              </Link>
+            </Button>
           </RoleGate>
         }
       />
@@ -549,9 +603,11 @@ function ServerList() {
       key: 'name',
       header: '서버',
       render: (s) => (
-        <div>
-          <div className="cell-title mcp-name">{s.name}</div>
-          <div className="cell-sub">{s.description || 'Streamable HTTP'}</div>
+        <div className="min-w-0">
+          <div className="font-mono font-semibold">{s.name}</div>
+          <div className="mt-0.5 line-clamp-2 text-xs whitespace-normal text-muted-foreground">
+            {s.description || 'Streamable HTTP'}
+          </div>
         </div>
       ),
     },
@@ -564,7 +620,7 @@ function ServerList() {
       key: 'status',
       header: '상태',
       render: (s) => (
-        <div className="row tight">
+        <div className="flex flex-wrap items-center gap-1">
           <ServerStatusBadge status={s.status} />
           {s.tools.pendingChanges > 0 && (
             <Badge tone="warning">변경 {s.tools.pendingChanges}건 검토</Badge>
@@ -577,8 +633,8 @@ function ServerList() {
       header: 'Tool',
       align: 'right',
       render: (s) => (
-        <span className="num" title="사용 중 / 전체">
-          {s.tools.enabled} <span className="muted">/ {s.tools.total}</span>
+        <span className="tabular-nums" title="사용 중 / 전체">
+          {s.tools.enabled} <span className="text-muted-foreground">/ {s.tools.total}</span>
         </span>
       ),
     },
@@ -591,7 +647,11 @@ function ServerList() {
       key: 'protocol',
       header: '프로토콜',
       render: (s) =>
-        s.protocolVersion ? <Mono>{s.protocolVersion}</Mono> : <span className="muted">—</span>,
+        s.protocolVersion ? (
+          <Mono>{s.protocolVersion}</Mono>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        ),
     },
     {
       key: 'synced',
@@ -604,7 +664,16 @@ function ServerList() {
     <>
       <Toolbar>
         <SearchInput label="서버 검색" placeholder="이름 · 설명 · URL" value={q} onChange={setQ} />
-        <div className="filter-chips" role="group" aria-label="상태 필터">
+        <ToggleGroup
+          type="single"
+          variant="outline"
+          size="sm"
+          spacing={1}
+          className="flex-wrap"
+          aria-label="상태 필터"
+          value={filter}
+          onValueChange={(v) => v && setFilter(v as StatusFilter)}
+        >
           {(
             [
               ['all', `전체 ${all.length}`],
@@ -614,17 +683,11 @@ function ServerList() {
               ['disabled', `비활성 ${count((s) => s.status === 'disabled')}`],
             ] as [StatusFilter, string][]
           ).map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              className={filter === id ? 'chip active' : 'chip'}
-              aria-pressed={filter === id}
-              onClick={() => setFilter(id)}
-            >
+            <ToggleGroupItem key={id} value={id} className={FILTER_ITEM}>
               {label}
-            </button>
+            </ToggleGroupItem>
           ))}
-        </div>
+        </ToggleGroup>
       </Toolbar>
       <ErrorNotice error={servers.error} onRetry={() => void servers.reload()} />
       <Card flush>
@@ -640,9 +703,12 @@ function ServerList() {
               <Empty title="연결된 MCP 서버가 없어요">
                 <p>MCP 서버를 연결하면 Agent 가 그 서버의 Tool 을 쓸 수 있어요.</p>
                 <RoleGate min="admin">
-                  <Link className="btn btn-primary empty-cta" to="/mcp/new">
-                    MCP 서버 연결
-                  </Link>
+                  <Button asChild className="mt-3">
+                    <Link to="/mcp/new">
+                      <PlusIcon aria-hidden="true" />
+                      MCP 서버 연결
+                    </Link>
+                  </Button>
                 </RoleGate>
               </Empty>
             ) : (
@@ -657,13 +723,18 @@ function ServerList() {
 
 function HealthCell({ health }: { health: McpServerView['health'] }) {
   if (health.p95Ms == null && health.errorRate == null)
-    return <span className="muted">호출 없음</span>;
+    return <span className="text-muted-foreground">호출 없음</span>;
   const rate = health.errorRate ?? 0;
   return (
-    <span className="health">
-      <span className="num">{formatMs(health.p95Ms)}</span>
-      <span className="sep">·</span>
-      <span className={rate >= 0.05 ? 'health-bad' : rate > 0 ? 'health-warn' : undefined}>
+    <span className="inline-flex items-center gap-1.5 tabular-nums">
+      <span>{formatMs(health.p95Ms)}</span>
+      <span className="text-muted-foreground">·</span>
+      <span
+        className={cn(
+          rate >= 0.05 && 'font-semibold text-red-600 dark:text-red-400',
+          rate > 0 && rate < 0.05 && 'text-amber-700 dark:text-amber-400',
+        )}
+      >
         {formatPercent(rate)}
       </span>
     </span>
@@ -702,33 +773,48 @@ function RegistryVersions() {
     );
 
   return (
-    <div className="registry-grid">
-      <Card title="버전" description="새 작업은 만들 때의 최신 버전을 고정해 씁니다." flush>
-        <ul className="version-list" aria-label="Registry 버전">
+    <div className="grid items-start gap-4 lg:grid-cols-[300px_minmax(0,1fr)]">
+      <Card
+        className="mb-0 lg:sticky lg:top-[72px]"
+        title="버전"
+        description="새 작업은 만들 때의 최신 버전을 고정해 씁니다."
+        flush
+      >
+        <ul
+          className="flex max-h-[70vh] flex-col gap-0.5 overflow-y-auto p-1.5"
+          aria-label="Registry 버전"
+        >
           {list.map((v) => {
             const s = v.changeSummary;
             return (
               <li key={v.id}>
                 <button
                   type="button"
-                  className={v.version === selected ? 'version-item active' : 'version-item'}
+                  className={LIST_ITEM}
                   aria-current={v.version === selected || undefined}
                   onClick={() =>
                     setParams({ tab: 'registry', v: String(v.version) }, { replace: true })
                   }
                 >
-                  <span className="version-head">
-                    <strong>v{v.version}</strong>
+                  <span className="flex w-full items-center gap-2">
+                    <strong className="font-semibold">v{v.version}</strong>
                     {v.version === list[0]!.version && <Badge tone="success">최신</Badge>}
-                    <span className="spacer" />
-                    <Time iso={v.createdAt} />
+                    <span className="ml-auto text-xs text-muted-foreground">
+                      <Time iso={v.createdAt} />
+                    </span>
                   </span>
-                  <span className="version-reason">{reasonText(s)}</span>
-                  <span className="version-counts">
-                    {s?.added?.length ? <span className="add">+{s.added.length}</span> : null}
-                    {s?.changed?.length ? <span className="chg">~{s.changed.length}</span> : null}
-                    {s?.removed?.length ? <span className="del">−{s.removed.length}</span> : null}
-                    <span className="muted">Tool {v.toolCount}</span>
+                  <span className="line-clamp-2 text-muted-foreground">{reasonText(s)}</span>
+                  <span className="flex gap-2 text-xs tabular-nums">
+                    {s?.added?.length ? (
+                      <span className={NAME_DIFF_TEXT.add}>+{s.added.length}</span>
+                    ) : null}
+                    {s?.changed?.length ? (
+                      <span className={NAME_DIFF_TEXT.chg}>~{s.changed.length}</span>
+                    ) : null}
+                    {s?.removed?.length ? (
+                      <span className={NAME_DIFF_TEXT.del}>−{s.removed.length}</span>
+                    ) : null}
+                    <span className="text-muted-foreground">Tool {v.toolCount}</span>
                   </span>
                 </button>
               </li>
@@ -768,7 +854,7 @@ function RegistryVersionDetailView({
       key: 'name',
       header: 'Tool',
       render: (t) => (
-        <span className="nowrap">
+        <span className="whitespace-nowrap">
           <Mono>{t.name}</Mono>
         </span>
       ),
@@ -786,17 +872,19 @@ function RegistryVersionDetailView({
     {
       key: 'mode',
       header: '승인 정책',
-      render: (t) => <span className="nowrap">{approvalLabel(t.modeOverride)}</span>,
+      render: (t) => <span className="whitespace-nowrap">{approvalLabel(t.modeOverride)}</span>,
     },
     {
       key: 'desc',
       header: '설명',
-      render: (t) => <span className="clamp-2">{t.description}</span>,
+      render: (t) => (
+        <span className="line-clamp-2 min-w-48 whitespace-normal">{t.description}</span>
+      ),
     },
   ];
 
   return (
-    <div className="stack">
+    <div className="min-w-0">
       <ErrorNotice error={detail.error} onRetry={() => void detail.reload()} />
       <Card
         title={`Tool Registry v${version}`}
@@ -821,23 +909,27 @@ function RegistryVersionDetailView({
       <Card
         title="변경 비교"
         actions={
-          <label className="inline-select">
-            <span>기준</span>
-            <select
-              className="input"
+          <div className="flex items-center gap-2">
+            <Label htmlFor="registry-diff-from" className="font-normal text-muted-foreground">
+              기준
+            </Label>
+            <NativeSelect
+              id="registry-diff-from"
+              size="sm"
+              containerClassName="w-auto"
               value={from}
               onChange={(e) => setFrom(e.target.value === '' ? '' : Number(e.target.value))}
             >
-              <option value="">직전 버전</option>
+              <NativeSelectOption value="">직전 버전</NativeSelectOption>
               {all
                 .filter((v) => v.version < version)
                 .map((v) => (
-                  <option key={v.id} value={v.version}>
+                  <NativeSelectOption key={v.id} value={v.version}>
                     v{v.version}
-                  </option>
+                  </NativeSelectOption>
                 ))}
-            </select>
-          </label>
+            </NativeSelect>
+          </div>
         }
       >
         {diff.error ? (
@@ -846,7 +938,7 @@ function RegistryVersionDetailView({
           <Loading />
         ) : (
           <>
-            <p className="muted diff-caption">
+            <p className="mb-3 text-sm text-muted-foreground">
               {diff.data.from
                 ? `v${diff.data.from} → v${diff.data.to}`
                 : `처음 버전 (v${diff.data.to})`}
@@ -886,13 +978,13 @@ function RegistryVersionDetailView({
                     header: 'allowed-tools',
                     render: (s: SnapshotSkill) =>
                       s.allowedTools.length ? (
-                        <span className="tag-list">
+                        <span className="inline-flex flex-wrap gap-1">
                           {s.allowedTools.map((t) => (
                             <Mono key={t}>{t}</Mono>
                           ))}
                         </span>
                       ) : (
-                        <span className="muted">없음</span>
+                        <span className="text-muted-foreground">없음</span>
                       ),
                   },
                 ]}
@@ -907,23 +999,42 @@ function RegistryVersionDetailView({
   );
 }
 
+type NameDiffKind = 'add' | 'chg' | 'del';
+const NAME_DIFF_TEXT: Record<NameDiffKind, string> = {
+  add: 'text-emerald-700 dark:text-emerald-400',
+  chg: 'text-amber-700 dark:text-amber-400',
+  del: 'text-red-700 dark:text-red-400',
+};
+export const NAME_DIFF_BORDER: Record<NameDiffKind, string> = {
+  add: 'border-t-emerald-600 dark:border-t-emerald-500',
+  chg: 'border-t-amber-600 dark:border-t-amber-500',
+  del: 'border-t-red-600 dark:border-t-red-500',
+};
+
 export function NameDiff({ diff }: { diff: RegistryDiff }) {
-  const groups: [string, string[], string][] = [
+  const groups: [string, string[], NameDiffKind][] = [
     ['추가', diff.added, 'add'],
     ['변경', diff.changed, 'chg'],
     ['삭제', diff.removed, 'del'],
   ];
   if (!diff.added.length && !diff.changed.length && !diff.removed.length)
-    return <p className="muted">차이 없음</p>;
+    return <p className="text-sm text-muted-foreground">차이 없음</p>;
   return (
-    <div className="name-diff">
-      {groups.map(([label, names, cls]) => (
-        <div key={label} className={`name-diff-col ${cls}`}>
-          <p className="name-diff-title">
-            {label} <span className="muted">{names.length}</span>
+    <div className="grid gap-3 sm:grid-cols-3">
+      {groups.map(([label, names, kind]) => (
+        <div
+          key={label}
+          className={cn(
+            'min-w-0 rounded-lg border border-t-[3px] px-3 py-2.5',
+            NAME_DIFF_BORDER[kind],
+          )}
+        >
+          <p className="mb-1.5 text-sm font-semibold">
+            {label}{' '}
+            <span className="font-normal text-muted-foreground tabular-nums">{names.length}</span>
           </p>
           {names.length ? (
-            <ul>
+            <ul className="flex flex-col items-start gap-1">
               {names.map((n) => (
                 <li key={n}>
                   <Mono>{n}</Mono>
@@ -931,7 +1042,7 @@ export function NameDiff({ diff }: { diff: RegistryDiff }) {
               ))}
             </ul>
           ) : (
-            <p className="muted">—</p>
+            <p className="text-sm text-muted-foreground">—</p>
           )}
         </div>
       ))}
@@ -1008,7 +1119,7 @@ export function McpDetailPage() {
     <>
       <PageHeader
         back={{ to: '/mcp', label: 'MCP 서버' }}
-        title={<span className="mcp-name">{s.name}</span>}
+        title={<span className="font-mono">{s.name}</span>}
         meta={
           <>
             <ServerStatusBadge status={s.status} />
@@ -1059,17 +1170,22 @@ export function McpDetailPage() {
       )}
       {unfinished && (
         <Notice tone="warn">
-          <span>
-            {s.statusReason && s.status !== 'disabled' ? `${s.statusReason}. ` : ''}
-            {s.status === 'disabled'
-              ? '비활성화된 서버입니다. 다시 쓰려면 연결 테스트 · Tool 탐색 · 등록을 다시 거쳐야 해요.'
-              : '등록을 마치지 않은 서버입니다. 등록 전에는 이 서버의 Tool 을 쓸 수 없어요.'}
-          </span>
-          {isAdmin && (
-            <Link className="btn btn-primary btn-sm" to={`/mcp/new?server=${s.id}`}>
-              {s.status === 'disabled' ? '다시 등록' : '등록 이어서 하기'}
-            </Link>
-          )}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <span className="min-w-0 flex-1">
+              {s.statusReason && s.status !== 'disabled' ? `${s.statusReason}. ` : ''}
+              {s.status === 'disabled'
+                ? '비활성화된 서버입니다. 다시 쓰려면 연결 테스트 · Tool 탐색 · 등록을 다시 거쳐야 해요.'
+                : '등록을 마치지 않은 서버입니다. 등록 전에는 이 서버의 Tool 을 쓸 수 없어요.'}
+            </span>
+            {isAdmin && (
+              <Button asChild size="sm">
+                <Link to={`/mcp/new?server=${s.id}`}>
+                  {s.status === 'disabled' ? '다시 등록' : '등록 이어서 하기'}
+                  <ArrowRightIcon aria-hidden="true" />
+                </Link>
+              </Button>
+            )}
+          </div>
         </Notice>
       )}
       <ErrorNotice error={test.error ?? discover.error ?? null} />
@@ -1095,8 +1211,8 @@ export function McpDetailPage() {
         />
       )}
 
-      <div className="grid grid-main-side">
-        <div className="stack">
+      <div className="grid items-start gap-4 min-[1100px]:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="min-w-0">
           <Card
             title="Tool"
             description={`사용 ${s.tools.enabled} / 전체 ${s.tools.total} · 등급과 승인 정책은 Registry 새 버전으로 반영돼요`}
@@ -1110,7 +1226,7 @@ export function McpDetailPage() {
             />
           </Card>
         </div>
-        <div className="stack">
+        <div className="min-w-0">
           <Card
             title="연결 정보"
             actions={
@@ -1144,13 +1260,13 @@ export function McpDetailPage() {
                 [
                   '허용 호스트',
                   s.allowedHosts.length ? (
-                    <span key="h" className="tag-list">
+                    <span key="h" className="inline-flex flex-wrap gap-1">
                       {s.allowedHosts.map((h) => (
                         <Mono key={h}>{h}</Mono>
                       ))}
                     </span>
                   ) : (
-                    <span key="h" className="muted">
+                    <span key="h" className="text-muted-foreground">
                       엔드포인트 호스트만
                     </span>
                   ),
@@ -1170,29 +1286,30 @@ export function McpDetailPage() {
             />
           </Card>
           <Card title="상태 · 성능" description="최근 24시간 이 서버 Tool 호출 기준">
-            <div className="mini-stats">
-              <div>
-                <p className="mini-label">응답 p95</p>
-                <p className="mini-value">{formatMs(s.health.p95Ms)}</p>
-              </div>
-              <div>
-                <p className="mini-label">오류율</p>
-                <p className="mini-value">
-                  {s.health.errorRate == null ? '—' : formatPercent(s.health.errorRate)}
-                </p>
-              </div>
-              <div>
-                <p className="mini-label">검토 대기 변경</p>
-                <p className="mini-value">{s.tools.pendingChanges}</p>
-              </div>
-            </div>
-            <p className="muted small">
+            <dl className="mb-3 grid grid-cols-3 gap-2">
+              {(
+                [
+                  ['응답 p95', formatMs(s.health.p95Ms)],
+                  ['오류율', s.health.errorRate == null ? '—' : formatPercent(s.health.errorRate)],
+                  ['검토 대기 변경', s.tools.pendingChanges],
+                ] as const
+              ).map(([label, value]) => (
+                <div key={label} className="min-w-0 rounded-md bg-muted/60 px-2.5 py-2">
+                  <dt className="truncate text-xs text-muted-foreground">{label}</dt>
+                  <dd className="mt-0.5 text-lg font-semibold tabular-nums">{value}</dd>
+                </div>
+              ))}
+            </dl>
+            <p className="mb-2 text-xs text-muted-foreground">
               주기 재탐색(mcp-sync)이 서버 상태 · Tool 변경을 확인합니다. 변경은 승인 전까지 이전
               정의로 실행돼요.
             </p>
-            <Link to="/mcp?tab=registry" className="small">
-              Tool Registry 버전 보기 →
-            </Link>
+            <Button asChild variant="link" size="sm" className="h-auto px-0">
+              <Link to="/mcp?tab=registry">
+                Tool Registry 버전 보기
+                <ArrowRightIcon aria-hidden="true" />
+              </Link>
+            </Button>
           </Card>
         </div>
       </div>
@@ -1229,7 +1346,7 @@ export function McpDetailPage() {
         open={confirm === 'disable'}
         title={`${s.name} 비활성화`}
         body={
-          <p className="confirm-body">
+          <p className="mb-3 text-muted-foreground">
             이 서버의 Tool 이 새 Registry 버전에서 빠지고, 실행 중인 작업도 다음 호출부터 거부돼요.
             다시 쓰려면 탐색 · 등록을 다시 해야 합니다.
           </p>
@@ -1245,7 +1362,7 @@ export function McpDetailPage() {
         open={confirm === 'delete'}
         title={`${s.name} 삭제`}
         body={
-          <p className="confirm-body">
+          <p className="mb-3 text-muted-foreground">
             서버와 저장된 API Key 를 지우고, Agent 허용 목록에서도 빠집니다. 되돌릴 수 없어요. 같은
             이름으로 다시 연결할 수 있습니다.
           </p>
@@ -1279,10 +1396,10 @@ function ToolTable({
       key: 'name',
       header: 'Tool',
       render: (t) => (
-        <div className="tool-cell">
+        <div className="flex min-w-48 flex-col items-start gap-1 whitespace-normal">
           <Mono>{t.registryName}</Mono>
           {t.description && (
-            <p className="cell-sub clamp-2">
+            <p className="line-clamp-2 text-xs text-muted-foreground">
               {t.title ? `${t.title} — ` : ''}
               {t.description}
             </p>
@@ -1295,7 +1412,9 @@ function ToolTable({
       key: 'mode',
       header: '승인 정책',
       render: (t) => (
-        <span className={t.approvalModeOverride ? 'nowrap' : 'nowrap muted'}>
+        <span
+          className={cn('whitespace-nowrap', !t.approvalModeOverride && 'text-muted-foreground')}
+        >
           {approvalLabel(t.approvalModeOverride)}
         </span>
       ),
@@ -1319,12 +1438,10 @@ function ToolTable({
     },
     {
       key: 'open',
-      header: <span className="visually-hidden">설정</span>,
+      header: <span className="sr-only">설정</span>,
       width: '32px',
       render: () => (
-        <span className="row-chevron" aria-hidden="true">
-          ›
-        </span>
+        <ChevronRightIcon className="size-4 text-muted-foreground" aria-hidden="true" />
       ),
     },
   ];
@@ -1346,15 +1463,20 @@ function ToolTable({
 
 export function TestResultView({ result }: { result: ConnectionTestResult }) {
   const ok = result.handshake === 'ok';
+  const Icon = ok ? CircleCheckIcon : CircleAlertIcon;
   return (
-    <div className="test-result">
-      <div className={ok ? 'test-head ok' : 'test-head fail'} role="status">
-        <span className="test-icon" aria-hidden="true">
-          {ok ? '✓' : '!'}
-        </span>
-        <div>
-          <p className="test-title">{ok ? '연결에 성공했어요' : '연결하지 못했어요'}</p>
-          {result.error && <p className="test-error">{result.error}</p>}
+    <div className="flex flex-col gap-3">
+      <div
+        className={cn(
+          'flex items-start gap-3 rounded-lg p-3',
+          TONE_CLASS[ok ? 'success' : 'danger'],
+        )}
+        role="status"
+      >
+        <Icon className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
+        <div className="min-w-0">
+          <p className="font-semibold">{ok ? '연결에 성공했어요' : '연결하지 못했어요'}</p>
+          {result.error && <p className="mt-0.5 text-sm break-words">{result.error}</p>}
         </div>
       </div>
       <KeyValue
@@ -1365,7 +1487,10 @@ export function TestResultView({ result }: { result: ConnectionTestResult }) {
               <span key="s">
                 <Badge tone="success">허용</Badge>{' '}
                 {result.ssrf.resolvedIps.length > 0 && (
-                  <span className="muted">→ {result.ssrf.resolvedIps.join(', ')}</span>
+                  <span className="inline-flex items-center gap-1 text-muted-foreground">
+                    <ArrowRightIcon className="size-3.5" aria-hidden="true" />
+                    {result.ssrf.resolvedIps.join(', ')}
+                  </span>
                 )}
               </span>
             ) : (
@@ -1373,7 +1498,10 @@ export function TestResultView({ result }: { result: ConnectionTestResult }) {
                 <Badge tone="danger">차단</Badge>{' '}
                 {result.ssrf.blockedReason ? BLOCKED_REASON[result.ssrf.blockedReason] : ''}
                 {result.ssrf.resolvedIps.length > 0 && (
-                  <span className="muted"> ({result.ssrf.resolvedIps.join(', ')})</span>
+                  <span className="text-muted-foreground">
+                    {' '}
+                    ({result.ssrf.resolvedIps.join(', ')})
+                  </span>
                 )}
               </span>
             ),
@@ -1383,7 +1511,7 @@ export function TestResultView({ result }: { result: ConnectionTestResult }) {
             result.protocolVersion ? (
               <span key="p">
                 <Mono>{result.protocolVersion}</Mono>{' '}
-                <span className="muted">
+                <span className="text-muted-foreground">
                   {result.era === 'modern'
                     ? '요청 단위 프로토콜 (server/discover)'
                     : result.era === 'legacy'
@@ -1401,7 +1529,7 @@ export function TestResultView({ result }: { result: ConnectionTestResult }) {
             result.server ? (
               `${result.server.name} ${result.server.version}`
             ) : (
-              <span key="v" className="muted">
+              <span key="v" className="text-muted-foreground">
                 —
               </span>
             ),
@@ -1447,7 +1575,7 @@ function PendingChangesCard({
 
   return (
     <Card
-      className="changes-card"
+      className="border-amber-400 dark:border-amber-700"
       title={`Tool 변경 검토 · ${changes.length}건`}
       description="서버가 알려 준 Tool 정의가 바뀌었어요. 승인하기 전까지는 이전 정의로 실행하고, 새 Tool 은 쓰이지 않아요."
       actions={
@@ -1464,28 +1592,25 @@ function PendingChangesCard({
       flush
     >
       <ApiErrorNotice error={approve.error} />
-      <ul className="change-list">
+      <ul className="divide-y">
         {changes.map((t) => {
           const c = t.pendingChange!;
           const kind = CHANGE_KIND[c.kind];
           const expanded = open === t.id;
           return (
-            <li key={t.id} className="change-item">
-              <div className="change-row">
+            <li key={t.id}>
+              <div className="flex flex-wrap items-center gap-2 px-4 py-2.5">
                 {can('admin') && (
-                  <input
-                    type="checkbox"
-                    className="change-check"
+                  <Checkbox
                     aria-label={`${t.name} 변경 선택`}
                     checked={selected.has(t.name)}
-                    onChange={() => toggle(t.name)}
+                    onCheckedChange={() => toggle(t.name)}
                   />
                 )}
                 <Badge tone={kind.tone}>{kind.label}</Badge>
                 <Mono>{t.registryName}</Mono>
                 {c.next && <CheckBadges schema={c.next.schema} security={c.next.security} />}
-                <span className="spacer" />
-                <span className="muted small">
+                <span className="ml-auto text-xs text-muted-foreground">
                   감지 <Time iso={c.detectedAt} />
                 </span>
                 <Button
@@ -1495,10 +1620,14 @@ function PendingChangesCard({
                   onClick={() => setOpen(expanded ? null : t.id)}
                 >
                   {expanded ? '접기' : '자세히'}
+                  <ChevronDownIcon
+                    className={cn('transition-transform', expanded && 'rotate-180')}
+                    aria-hidden="true"
+                  />
                 </Button>
               </div>
               {expanded && (
-                <div className="change-detail">
+                <div className="flex flex-col gap-2.5 pr-4 pb-4 pl-4 text-sm sm:pl-10 [&>[data-slot=alert]]:mb-0">
                   {c.kind === 'removed' && (
                     <p>
                       서버가 더 이상 이 Tool 을 알려 주지 않아요. 승인하면 Registry 에서 빠집니다.
@@ -1511,7 +1640,9 @@ function PendingChangesCard({
                         Tool 목록에서 켜세요. 제안 등급:{' '}
                         <LevelBadge level={c.next.suggestedLevel} />
                       </p>
-                      {c.next.description && <p className="muted">{c.next.description}</p>}
+                      {c.next.description && (
+                        <p className="text-muted-foreground">{c.next.description}</p>
+                      )}
                       <CheckIssues schema={c.next.schema} security={c.next.security} />
                       <Json value={c.next.inputSchema} />
                     </>
@@ -1605,44 +1736,42 @@ function ToolPolicyModal({
         )
       }
     >
-      <div className="stack">
+      <div className="flex flex-col gap-3 [&>[data-slot=alert]]:mb-0">
         {tool.description && <p>{tool.description}</p>}
-        <div className="row">
+        <div className="flex flex-wrap items-center gap-2">
           <CheckBadges schema={tool.schema} security={tool.security} />
           {tool.state !== 'active' && (
             <Badge tone={TOOL_STATE[tool.state].tone}>{TOOL_STATE[tool.state].label}</Badge>
           )}
         </div>
         <CheckIssues schema={tool.schema} security={tool.security} />
-        <div className="grid grid-2 policy-fields">
+        <div className="grid gap-4 sm:grid-cols-2 [&>*]:mb-0">
           <Field label="권한 등급" hint="등급별 기본 승인 정책은 승인 · 권한 화면에서 정합니다">
-            <select
-              className="input"
+            <NativeSelect
               value={level}
               disabled={!editable}
               onChange={(e) => setLevel(e.target.value as PermissionLevel)}
             >
               {LEVELS.map((l) => (
-                <option key={l} value={l}>
+                <NativeSelectOption key={l} value={l}>
                   {LEVEL[l]}
-                </option>
+                </NativeSelectOption>
               ))}
-            </select>
+            </NativeSelect>
           </Field>
           <Field label="승인 정책" hint="비워 두면 등급 기본 정책을 따릅니다">
-            <select
-              className="input"
+            <NativeSelect
               value={mode}
               disabled={!editable}
               onChange={(e) => setMode(e.target.value as ApprovalMode | '')}
             >
-              <option value="">등급 기본값</option>
+              <NativeSelectOption value="">등급 기본값</NativeSelectOption>
               {APPROVAL_MODES.map((m) => (
-                <option key={m.value} value={m.value}>
+                <NativeSelectOption key={m.value} value={m.value}>
                   {m.label}
-                </option>
+                </NativeSelectOption>
               ))}
-            </select>
+            </NativeSelect>
           </Field>
         </div>
         <Toggle
@@ -1662,7 +1791,7 @@ function ToolPolicyModal({
         )}
         <ApiErrorNotice error={save.error} />
         <div>
-          <p className="section-label">입력 스키마</p>
+          <p className="mb-1.5 text-sm font-semibold text-muted-foreground">입력 스키마</p>
           <Json value={tool.inputSchema} />
         </div>
       </div>
@@ -1728,29 +1857,23 @@ function ServerEditModal({
       }
     >
       <Field label="설명" error={issueFor(save.error, 'description')}>
-        <textarea
-          className="input"
-          rows={2}
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-        />
+        <Textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
       </Field>
       <Field label="엔드포인트 URL" required error={issueFor(save.error, 'endpointUrl')}>
-        <input
-          className="input"
+        <Input
+          className="font-mono"
           value={endpointUrl}
           onChange={(e) => setEndpointUrl(e.target.value)}
         />
       </Field>
       <Field label="인증">
-        <select
-          className="input"
+        <NativeSelect
           value={authType}
           onChange={(e) => setAuthType(e.target.value as 'none' | 'api_key')}
         >
-          <option value="none">인증 없음</option>
-          <option value="api_key">API Key</option>
-        </select>
+          <NativeSelectOption value="none">인증 없음</NativeSelectOption>
+          <NativeSelectOption value="api_key">API Key</NativeSelectOption>
+        </NativeSelect>
       </Field>
       {authType === 'api_key' && (
         <Field
@@ -1762,8 +1885,7 @@ function ServerEditModal({
           }
           error={issueFor(save.error, 'secret')}
         >
-          <input
-            className="input"
+          <Input
             type="password"
             autoComplete="new-password"
             value={secret}
@@ -1777,8 +1899,8 @@ function ServerEditModal({
         hint="한 줄에 하나 (예: api.example.com, *.example.com). 엔드포인트 호스트는 자동으로 허용돼요."
         error={issueFor(save.error, 'allowedHosts')}
       >
-        <textarea
-          className="input code"
+        <Textarea
+          className="font-mono text-[13px]"
           rows={3}
           value={hosts}
           onChange={(e) => setHosts(e.target.value)}
