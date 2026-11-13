@@ -1,7 +1,6 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import {
   ArrowUpIcon,
-  BanIcon,
   BracesIcon,
   CircleAlertIcon,
   CircleCheckIcon,
@@ -23,7 +22,6 @@ import {
   RouteIcon,
   ShieldAlertIcon,
   SquareIcon,
-  WrenchIcon,
   XIcon,
 } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -358,68 +356,8 @@ export function PlanCard({
             </Trace>
           </TraceCollapsibleContent>
         </TraceCollapsible>
-        {tools.length > 0 && <ToolLog tools={tools} />}
       </Trace>
     </section>
-  );
-}
-
-const TOOL: Record<ToolChip['status'], { icon: LucideIcon; label?: string; status?: TraceStatus }> =
-  {
-    running: { icon: WrenchIcon, label: '실행 중', status: 'running' },
-    succeeded: { icon: WrenchIcon },
-    failed: { icon: CircleXIcon, label: '실패', status: 'error' },
-    timeout: { icon: ClockIcon, label: '시간 초과', status: 'error' },
-    denied: { icon: BanIcon, label: '거부됨' },
-  };
-
-/** Tool — 실행 기록. 실행 중인 Tool 이 있으면 저절로 펼친다 */
-function ToolLog({ tools }: { tools: ToolChip[] }) {
-  const [open, setOpen] = useState<boolean>();
-  const running = tools.some((t) => t.status === 'running');
-  return (
-    <TraceCollapsible open={open ?? running} onOpenChange={setOpen}>
-      <TraceCollapsibleTrigger>
-        <TraceLine status={running ? 'running' : undefined}>
-          <TraceIcon>
-            <WrenchIcon />
-          </TraceIcon>
-          <TraceTitle>실행 기록</TraceTitle>
-          <TraceDescription>Tool {tools.length}회</TraceDescription>
-        </TraceLine>
-      </TraceCollapsibleTrigger>
-      <TraceCollapsibleContent>
-        <Trace>
-          {tools.map((t) => (
-            <ToolLine key={t.executionId} tool={t} />
-          ))}
-        </Trace>
-      </TraceCollapsibleContent>
-    </TraceCollapsible>
-  );
-}
-
-function ToolLine({ tool }: { tool: ToolChip }) {
-  const s = TOOL[tool.status];
-  const line = (
-    <TraceLine status={s.status}>
-      <TraceIcon>
-        <s.icon />
-      </TraceIcon>
-      <TraceTitle>
-        {s.label && `${s.label} · `}
-        <span className="font-mono text-xs">{tool.toolName}</span>
-      </TraceTitle>
-    </TraceLine>
-  );
-  if (!tool.preview || tool.status === 'running') return line;
-  return (
-    <TraceCollapsible>
-      <TraceCollapsibleTrigger>{line}</TraceCollapsibleTrigger>
-      <TraceCollapsibleContent>
-        <p className="font-mono text-xs break-all whitespace-pre-wrap">{tool.preview}</p>
-      </TraceCollapsibleContent>
-    </TraceCollapsible>
   );
 }
 
