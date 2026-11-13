@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execSync } from 'node:child_process';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { Redis } from 'ioredis';
 import pg from 'pg';
@@ -21,7 +21,7 @@ export default async function setup(): Promise<void> {
   await admin.query(`CREATE DATABASE ${TEST_DB_NAME}`);
   await admin.end();
 
-  execFileSync('npx', ['prisma', 'migrate', 'deploy'], {
+  execSync('npx prisma migrate deploy', {
     env: { ...process.env, DATABASE_MIGRATION_URL: TEST_OWNER_URL },
     stdio: 'pipe',
   });
