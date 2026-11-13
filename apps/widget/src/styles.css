@@ -1,0 +1,94 @@
+@layer theme, base, legacy, components, utilities;
+
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+@import './widget.css' layer(legacy);
+
+@source '../../shared';
+
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+/* 위젯 루트에 토큰을 둔다 — 브랜드 색은 테넌트 설정이 --brand / --on-brand 로 넣는다 */
+.tw-root {
+  --radius: 0.75rem;
+  --background: #ffffff;
+  --foreground: #16181d;
+  --card: #ffffff;
+  --card-foreground: #16181d;
+  --popover: #ffffff;
+  --popover-foreground: #16181d;
+  --primary: var(--brand, #4f46e5);
+  --primary-foreground: var(--on-brand, #ffffff);
+  --secondary: #f3f4f6;
+  --secondary-foreground: #16181d;
+  --muted: #f4f5f7;
+  --muted-foreground: #5b6170;
+  --accent: #f1f2f5;
+  --accent-foreground: #16181d;
+  --destructive: #dc2626;
+  --border: #e3e5e8;
+  --input: #c9cdd3;
+  --ring: var(--brand, #4f46e5);
+}
+
+.tw-root[data-theme='dark'] {
+  --background: #17191f;
+  --foreground: #eef0f3;
+  --card: #1c1f26;
+  --card-foreground: #eef0f3;
+  --popover: #1c1f26;
+  --popover-foreground: #eef0f3;
+  --secondary: #262a33;
+  --secondary-foreground: #eef0f3;
+  --muted: #22252d;
+  --muted-foreground: #9aa1ad;
+  --accent: #2a2e38;
+  --accent-foreground: #eef0f3;
+  --destructive: #f87171;
+  --border: #30343d;
+  --input: #3d424d;
+}
+
+@theme inline {
+  --font-sans:
+    'IBM Plex Sans KR', 'Pretendard', system-ui, -apple-system, 'Apple SD Gothic Neo',
+    'Malgun Gothic', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+}
+
+@layer base {
+  .tw-root,
+  .tw-root * {
+    @apply border-border outline-ring/50;
+  }
+  .tw-root {
+    @apply font-sans text-sm text-foreground antialiased;
+    color-scheme: light;
+  }
+  .tw-root[data-theme='dark'] {
+    color-scheme: dark;
+  }
+}

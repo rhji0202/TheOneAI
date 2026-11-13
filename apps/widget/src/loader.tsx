@@ -1,6 +1,14 @@
 import { createRoot, type Root } from 'react-dom/client';
 import { App, type WidgetOptions } from './App';
-import css from './widget.css?inline';
+import css from './styles.css?inline';
+
+// Shadow DOM 안의 @property 는 무시된다 — Tailwind 변수(테두리 · 그림자 등)의 초기값이 빠지지 않게 문서에 등록한다.
+const PROPERTY_RULE = /@property\s+[\w-]+\s*\{[^}]*\}/g;
+const propertyCss = (css.match(PROPERTY_RULE) ?? []).join('\n');
+// rem 은 호스트 페이지 html 글자 크기를 따른다 — 어느 사이트에서도 같은 크기로 보이게 px 로 고정한다.
+const shadowCss = css
+  .replace(PROPERTY_RULE, '')
+  .replace(/(-?\d*\.?\d+)rem\b/g, (_, n: string) => `${Number(n) * 16}px`);
 
 /**
  * 위젯 로더 — 고객사 페이지에 한 줄로 넣는다.
@@ -25,6 +33,7 @@ declare global {
 const script = document.currentScript as HTMLScriptElement | null;
 let root: Root | null = null;
 let host: HTMLElement | null = null;
+let properties: HTMLStyleElement | null = null;
 let options: WidgetOptions | null = null;
 let identityVersion = 0;
 
@@ -36,10 +45,16 @@ function render() {
     host.style.all = 'initial';
     const shadow = host.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
-    style.textContent = css;
+    style.textContent = shadowCss;
     const mount = document.createElement('div');
     shadow.append(style, mount);
     document.body.appendChild(host);
+    if (propertyCss && !properties) {
+      properties = document.createElement('style');
+      properties.dataset.theoneai = 'properties';
+      properties.textContent = propertyCss;
+      document.head.appendChild(properties);
+    }
     root = createRoot(mount);
   }
   root!.render(<App options={options} identityVersion={identityVersion} />);
@@ -74,8 +89,10 @@ const api: PublicApi = {
   destroy() {
     root?.unmount();
     host?.remove();
+    properties?.remove();
     root = null;
     host = null;
+    properties = null;
   },
 };
 

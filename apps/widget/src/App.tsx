@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { PortalContainerContext } from '@/lib/portal';
 import { ApiError, type Bootstrap, type TaskSummary, WidgetApi } from './api';
 import { Back, ChatBubble, Close, ListIcon, Minus, Plus, Spark } from './icons';
 import { ChatView, HomeView, statusLine, TasksView } from './views';
@@ -48,6 +49,7 @@ export function App({
   const [badge, setBadge] = useState(0);
   const [header, setHeader] = useState(DEFAULT_HEADER);
   const [dark, setDark] = useState(false);
+  const [rootEl, setRootEl] = useState<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const store = options.storage;
   const viewKey = `theoneai:${options.widgetKey}:view`;
@@ -146,117 +148,120 @@ export function App({
     setView({ name: 'chat', conversationId: t.conversationId, taskId: t.id });
 
   return (
-    <div
-      className="tw-root"
-      data-position={b.theme.position}
-      data-theme={dark ? 'dark' : 'light'}
-      style={{ ['--brand' as string]: brand, ['--on-brand' as string]: onBrand }}
-    >
-      {open && (
-        <div
-          ref={panelRef}
-          tabIndex={-1}
-          className="panel"
-          role="dialog"
-          aria-label={`${b.agent.name} 상담`}
-        >
-          <header className="head">
-            {view.name === 'home' ? (
-              <>
-                <span className="agent-avatar" aria-hidden="true">
-                  {b.agent.avatarUrl ? <img src={b.agent.avatarUrl} alt="" /> : <Spark />}
-                </span>
-                <div className="head-text">
-                  <p className="head-title">{b.agent.name}</p>
-                  <p className="head-sub online">
-                    <span className="dot" />
-                    연결됨
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  className="icon-btn"
-                  aria-label="작업 목록"
-                  onClick={() => setView({ name: 'tasks' })}
-                >
-                  <ListIcon />
-                </button>
-              </>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  className="icon-btn"
-                  aria-label="홈으로"
-                  onClick={() => setView({ name: 'home' })}
-                >
-                  <Back />
-                </button>
-                <div className="head-text">
-                  <p className="head-title">
-                    {view.name === 'tasks' ? '작업' : header.title || '대화'}
-                  </p>
-                  {view.name === 'chat' && (
-                    <p className={`head-sub st-${header.status ?? 'idle'}`}>
+    <PortalContainerContext value={rootEl}>
+      <div
+        ref={setRootEl}
+        className="tw-root"
+        data-position={b.theme.position}
+        data-theme={dark ? 'dark' : 'light'}
+        style={{ ['--brand' as string]: brand, ['--on-brand' as string]: onBrand }}
+      >
+        {open && (
+          <div
+            ref={panelRef}
+            tabIndex={-1}
+            className="panel"
+            role="dialog"
+            aria-label={`${b.agent.name} 상담`}
+          >
+            <header className="head">
+              {view.name === 'home' ? (
+                <>
+                  <span className="agent-avatar" aria-hidden="true">
+                    {b.agent.avatarUrl ? <img src={b.agent.avatarUrl} alt="" /> : <Spark />}
+                  </span>
+                  <div className="head-text">
+                    <p className="head-title">{b.agent.name}</p>
+                    <p className="head-sub online">
                       <span className="dot" />
-                      {header.connection === 'reconnecting'
-                        ? '다시 연결하는 중'
-                        : statusLine(header.status, header.progress)}
+                      연결됨
                     </p>
-                  )}
-                  {view.name === 'tasks' && <p className="head-sub">최근 30일</p>}
-                </div>
-              </>
+                  </div>
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    aria-label="작업 목록"
+                    onClick={() => setView({ name: 'tasks' })}
+                  >
+                    <ListIcon />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    aria-label="홈으로"
+                    onClick={() => setView({ name: 'home' })}
+                  >
+                    <Back />
+                  </button>
+                  <div className="head-text">
+                    <p className="head-title">
+                      {view.name === 'tasks' ? '작업' : header.title || '대화'}
+                    </p>
+                    {view.name === 'chat' && (
+                      <p className={`head-sub st-${header.status ?? 'idle'}`}>
+                        <span className="dot" />
+                        {header.connection === 'reconnecting'
+                          ? '다시 연결하는 중'
+                          : statusLine(header.status, header.progress)}
+                      </p>
+                    )}
+                    {view.name === 'tasks' && <p className="head-sub">최근 30일</p>}
+                  </div>
+                </>
+              )}
+              <button
+                type="button"
+                className="icon-btn"
+                aria-label="새 대화"
+                onClick={() => setView({ name: 'home' })}
+              >
+                <Plus />
+              </button>
+              <button
+                type="button"
+                className="icon-btn"
+                aria-label="최소화"
+                onClick={() => setOpen(false)}
+              >
+                <Minus />
+              </button>
+            </header>
+            {view.name === 'home' && (
+              <HomeView api={api} boot={b} onStart={startChat} onOpenTask={openTask} />
             )}
-            <button
-              type="button"
-              className="icon-btn"
-              aria-label="새 대화"
-              onClick={() => setView({ name: 'home' })}
-            >
-              <Plus />
-            </button>
-            <button
-              type="button"
-              className="icon-btn"
-              aria-label="최소화"
-              onClick={() => setOpen(false)}
-            >
-              <Minus />
-            </button>
-          </header>
-          {view.name === 'home' && (
-            <HomeView api={api} boot={b} onStart={startChat} onOpenTask={openTask} />
-          )}
-          {view.name === 'tasks' && <TasksView api={api} onOpen={openTask} />}
-          {view.name === 'chat' && (
-            <ChatView
-              key={view.conversationId}
-              api={api}
-              boot={b}
-              conversationId={view.conversationId}
-              focusTaskId={view.taskId}
-              onHeader={setHeader}
-              onTaskEvent={(kind) => {
-                if (!open || kind === 'approval') setBadge((n) => n + (open ? 0 : 1));
-              }}
-            />
-          )}
+            {view.name === 'tasks' && <TasksView api={api} onOpen={openTask} />}
+            {view.name === 'chat' && (
+              <ChatView
+                key={view.conversationId}
+                api={api}
+                boot={b}
+                conversationId={view.conversationId}
+                focusTaskId={view.taskId}
+                onHeader={setHeader}
+                onTaskEvent={(kind) => {
+                  if (!open || kind === 'approval') setBadge((n) => n + (open ? 0 : 1));
+                }}
+              />
+            )}
+          </div>
+        )}
+        <div className="launcher-wrap">
+          <button
+            type="button"
+            className="launcher"
+            aria-label={open ? '위젯 닫기' : `${b.agent.name} 열기`}
+            aria-expanded={open}
+            onClick={() => setOpen((v) => !v)}
+          >
+            {open ? <Close size={22} /> : <ChatBubble />}
+            {badge > 0 && !open && <span className="launcher-badge">{badge}</span>}
+          </button>
         </div>
-      )}
-      <div className="launcher-wrap">
-        <button
-          type="button"
-          className="launcher"
-          aria-label={open ? '위젯 닫기' : `${b.agent.name} 열기`}
-          aria-expanded={open}
-          onClick={() => setOpen((v) => !v)}
-        >
-          {open ? <Close size={22} /> : <ChatBubble />}
-          {badge > 0 && !open && <span className="launcher-badge">{badge}</span>}
-        </button>
       </div>
-    </div>
+    </PortalContainerContext>
   );
 }
 
