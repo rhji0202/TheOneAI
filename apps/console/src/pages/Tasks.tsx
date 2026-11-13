@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { RefreshCwIcon, XIcon } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { formatDuration, formatRemaining } from '../../../shared/format';
 import { ACTIVE_STATUSES } from '../../../shared/status';
@@ -21,6 +22,9 @@ import {
   useQuery,
 } from '../ui';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
+import { Progress as ProgressBar } from '@/components/ui/progress';
 
 /* ───────────── 타입 (src/tasks/admin/tasks-admin.service.ts) ───────────── */
 
@@ -124,11 +128,16 @@ export function failureLabel(code: string | null | undefined): string {
 export function Progress({ completed, total }: { completed: number; total: number | null }) {
   const ratio = total ? Math.min(1, completed / total) : 0;
   return (
-    <div className="tk-progress" title={total ? `${completed}/${total} 단계` : `${completed} 단계`}>
-      <span className="tk-progress-track" aria-hidden="true">
-        <span className="tk-progress-fill" style={{ width: `${Math.round(ratio * 100)}%` }} />
-      </span>
-      <span className="tk-progress-text">
+    <div
+      className="flex items-center gap-2"
+      title={total ? `${completed}/${total} 단계` : `${completed} 단계`}
+    >
+      <ProgressBar
+        value={Math.round(ratio * 100)}
+        aria-hidden="true"
+        className="h-1 max-w-20 min-w-12 flex-1 bg-muted"
+      />
+      <span className="text-xs whitespace-nowrap text-muted-foreground tabular-nums">
         {completed}/{total ?? '?'}
       </span>
     </div>
@@ -138,13 +147,11 @@ export function Progress({ completed, total }: { completed: number; total: numbe
 /** 상태 배지 + 보조 정보(승인 만료 · 실패 원인 · 복구 횟수) */
 export function TaskStatusCell({ row }: { row: AdminTaskRow }) {
   return (
-    <div className="tk-status-cell">
+    <div className="flex flex-col items-start gap-1 text-xs text-muted-foreground">
       <StatusBadge status={row.status} />
-      {row.pendingApproval && (
-        <span className="cell-sub">{formatRemaining(row.pendingApproval.expiresAt)}</span>
-      )}
-      {row.failure && <span className="cell-sub tk-danger">{failureLabel(row.failure.code)}</span>}
-      {row.recoveryCount > 0 && <span className="cell-sub">복구 {row.recoveryCount}회</span>}
+      {row.pendingApproval && <span>{formatRemaining(row.pendingApproval.expiresAt)}</span>}
+      {row.failure && <span className="text-destructive">{failureLabel(row.failure.code)}</span>}
+      {row.recoveryCount > 0 && <span>복구 {row.recoveryCount}회</span>}
     </div>
   );
 }
@@ -164,19 +171,20 @@ export function AgentSelect({
   agents: AgentOption[] | undefined;
 }) {
   return (
-    <select
-      className="input"
+    <NativeSelect
+      size="sm"
+      containerClassName="w-44"
       aria-label="Agent"
       value={value}
       onChange={(e) => onChange(e.target.value)}
     >
-      <option value="">모든 Agent</option>
+      <NativeSelectOption value="">모든 Agent</NativeSelectOption>
       {(agents ?? []).map((a) => (
-        <option key={a.id} value={a.id}>
+        <NativeSelectOption key={a.id} value={a.id}>
           {a.name}
-        </option>
+        </NativeSelectOption>
       ))}
-    </select>
+    </NativeSelect>
   );
 }
 
@@ -248,16 +256,16 @@ export function TasksPage() {
       key: 'title',
       header: '작업',
       render: (r) => (
-        <div className="tk-task-cell">
+        <div className="flex min-w-0 flex-col gap-0.5">
           <Link
             to={`/tasks/${r.id}`}
-            className="cell-title"
+            className="block max-w-[420px] truncate font-medium text-foreground hover:text-primary max-sm:max-w-[220px]"
             onClick={(e) => e.stopPropagation()}
             title={r.title}
           >
             {r.title}
           </Link>
-          <span className="cell-sub">
+          <span className="text-xs text-muted-foreground">
             <ShortId id={r.id} /> · {r.agentName} v{r.agentVersion}
           </span>
         </div>
@@ -268,7 +276,9 @@ export function TasksPage() {
       key: 'user',
       header: '사용자',
       width: '120px',
-      render: (r) => <span className="tk-mono">{r.endUserPseudonym}</span>,
+      render: (r) => (
+        <span className="font-mono text-[12.5px] text-muted-foreground">{r.endUserPseudonym}</span>
+      ),
     },
     {
       key: 'progress',
@@ -281,7 +291,7 @@ export function TasksPage() {
       header: '소요',
       width: '90px',
       align: 'right',
-      render: (r) => <span className="num tk-nowrap-text">{formatElapsed(r.elapsedMs)}</span>,
+      render: (r) => <span className="tabular-nums">{formatElapsed(r.elapsedMs)}</span>,
     },
     {
       key: 'cost',
@@ -289,7 +299,7 @@ export function TasksPage() {
       width: '100px',
       align: 'right',
       render: (r) => (
-        <span className="num tk-nowrap-text">
+        <span className="tabular-nums">
           {r.costCurrency ? formatCost(r.costAmount, r.costCurrency) : '—'}
         </span>
       ),
@@ -322,28 +332,26 @@ export function TasksPage() {
           value={agentId}
           onChange={(v) => setParam('agentId', v)}
         />
-        <label className="tk-date-filter">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <span>시작일</span>
-          <input
+          <Input
             type="date"
-            className="input"
+            className="h-8 w-[150px] text-foreground max-sm:w-[140px]"
             aria-label="시작일부터"
             value={from}
             max={to || undefined}
             onChange={(e) => setParam('from', e.target.value)}
           />
-        </label>
-        <span className="muted">~</span>
-        <label className="tk-date-filter">
-          <input
+          <span>~</span>
+          <Input
             type="date"
-            className="input"
+            className="h-8 w-[150px] text-foreground max-sm:w-[140px]"
             aria-label="종료일까지"
             value={to}
             min={from || undefined}
             onChange={(e) => setParam('to', e.target.value)}
           />
-        </label>
+        </div>
         {filtered && (
           <Button
             size="sm"
@@ -354,10 +362,11 @@ export function TasksPage() {
               setParams(next, { replace: true });
             }}
           >
+            <XIcon aria-hidden="true" />
             필터 지우기
           </Button>
         )}
-        <div className="spacer" />
+        <div className="flex-1" />
         {pollable && <Badge tone="info">10초마다 새로 고침</Badge>}
         <Button
           variant="outline"
@@ -365,6 +374,7 @@ export function TasksPage() {
           onClick={() => void list.reload()}
           loading={list.loading && !!list.items.length}
         >
+          {!(list.loading && list.items.length) && <RefreshCwIcon aria-hidden="true" />}
           새로 고침
         </Button>
       </Toolbar>

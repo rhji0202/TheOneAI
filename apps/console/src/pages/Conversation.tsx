@@ -1,4 +1,5 @@
 import { useEffect, useMemo } from 'react';
+import { BotIcon, InfoIcon, type LucideIcon, PaperclipIcon, UserIcon } from 'lucide-react';
 import { Link, useParams } from 'react-router';
 import { formatBytes } from '../../../shared/format';
 import { Markdown } from '../../../shared/markdown';
@@ -18,7 +19,9 @@ import {
   useQuery,
   useToast,
 } from '../ui';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import { isLive, type TaskStatus } from './Tasks';
 
 /* ───────────── 타입 (TasksAdminService.conversation) ───────────── */
@@ -52,11 +55,34 @@ interface AttachmentInfo {
   sizeBytes: number;
 }
 
-const ROLE_LABEL: Record<MessageView['role'], string> = {
-  user: '사용자',
-  assistant: 'Agent',
-  system: '시스템',
+const ROLE: Record<
+  MessageView['role'],
+  { label: string; icon: LucideIcon; avatarClass: string; labelClass?: string }
+> = {
+  user: {
+    label: '사용자',
+    icon: UserIcon,
+    avatarClass: 'bg-primary/10 text-primary',
+    labelClass: 'text-primary',
+  },
+  assistant: { label: 'Agent', icon: BotIcon, avatarClass: 'bg-muted text-foreground' },
+  system: { label: '시스템', icon: InfoIcon, avatarClass: 'bg-muted text-muted-foreground' },
 };
+
+/** Agent 답변 — shared/markdown 이 만드는 태그에 직접 스타일을 입힌다 */
+const MARKDOWN_CLASS = cn(
+  'text-sm leading-relaxed break-words [&>:first-child]:mt-0 [&>:last-child]:mb-0',
+  '[&_blockquote]:mb-2 [&_ol]:mb-2 [&_p]:mb-2 [&_pre]:mb-2 [&_ul]:mb-2',
+  '[&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5',
+  '[&_:is(h3,h4,h5,h6)]:mt-3 [&_:is(h3,h4,h5,h6)]:mb-1.5 [&_:is(h3,h4,h5,h6)]:font-semibold [&_h3]:text-base',
+  '[&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2',
+  '[&_blockquote]:border-l-[3px] [&_blockquote]:pl-2.5 [&_blockquote]:text-muted-foreground',
+  '[&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-px [&_code]:font-mono [&_code]:text-[12.5px]',
+  '[&_pre]:overflow-auto [&_pre]:rounded-lg [&_pre]:bg-muted [&_pre]:p-2.5 [&_pre_code]:bg-transparent [&_pre_code]:p-0',
+  '[&_.md-table]:mb-2 [&_.md-table]:overflow-x-auto [&_table]:border-collapse [&_table]:text-[13px]',
+  '[&_td]:border [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:bg-muted [&_th]:px-2 [&_th]:py-1 [&_th]:text-left',
+  '[&_hr]:my-2.5',
+);
 
 /* ───────────── 대화 보기 (C-02) ───────────── */
 
@@ -122,12 +148,12 @@ export function ConversationPage() {
           </>
         }
       />
-      <div className="grid grid-main-side">
+      <div className="grid grid-cols-1 items-start gap-x-4 gap-y-0 min-[1100px]:grid-cols-[minmax(0,1fr)_340px]">
         <Card title="대화 기록" description="위젯 사용자와 Agent 가 주고받은 메시지입니다." flush>
           {data.messages.length === 0 ? (
             <Empty title="메시지가 없어요" />
           ) : (
-            <ol className="tk-thread">
+            <ol className="divide-y">
               {data.messages.map((m) => (
                 <MessageItem
                   key={m.id}
@@ -139,20 +165,24 @@ export function ConversationPage() {
             </ol>
           )}
         </Card>
-        <div className="stack">
+        <div className="min-w-0">
           <Card title="이 대화의 작업" flush>
             {data.tasks.length === 0 ? (
-              <p className="muted tk-pad">작업이 없어요.</p>
+              <p className="p-4 text-sm text-muted-foreground">작업이 없어요.</p>
             ) : (
-              <ul className="tk-list">
+              <ul className="divide-y">
                 {[...data.tasks].reverse().map((t) => (
-                  <li key={t.id} className="tk-conv-task">
-                    <Link to={`/tasks/${t.id}`} className="tk-conv-task-title" title={t.title}>
+                  <li key={t.id} className="flex flex-col gap-1.5 px-4 py-3">
+                    <Link
+                      to={`/tasks/${t.id}`}
+                      className="truncate font-medium text-foreground hover:text-primary"
+                      title={t.title}
+                    >
                       {t.title}
                     </Link>
-                    <span className="row">
+                    <span className="flex flex-wrap items-center gap-2">
                       <StatusBadge status={t.status} />
-                      <span className="cell-sub">
+                      <span className="text-xs text-muted-foreground">
                         <Time iso={t.createdAt} />
                       </span>
                     </span>
@@ -166,9 +196,9 @@ export function ConversationPage() {
             description="오래된 메시지는 요약해 다음 작업의 Context 로 씁니다."
           >
             {data.summary ? (
-              <p className="tk-conv-summary">{data.summary}</p>
+              <p className="text-sm whitespace-pre-wrap text-muted-foreground">{data.summary}</p>
             ) : (
-              <p className="muted">아직 요약할 만큼 대화가 길지 않아요.</p>
+              <p className="text-sm text-muted-foreground">아직 요약할 만큼 대화가 길지 않아요.</p>
             )}
           </Card>
         </div>
@@ -193,37 +223,49 @@ function MessageItem({
   const attachments = message.content.filter(
     (b): b is { type: 'attachment'; artifactId: string } => b.type === 'attachment',
   );
+  const role = ROLE[message.role];
+  const RoleIcon = role.icon;
   return (
-    <li className={`tk-msg tk-msg-${message.role}`}>
-      <div className="tk-msg-head">
-        <span className="tk-msg-role">{ROLE_LABEL[message.role]}</span>
-        <span className="cell-sub">
-          <Time iso={message.createdAt} absolute />
-        </span>
-        {task && (
-          <Link to={`/tasks/${task.id}`} className="tk-msg-task">
-            {message.role === 'user' ? '시작한 작업' : '작업'} ·{' '}
-            <StatusBadge status={task.status} />
-          </Link>
+    <li className={cn('flex gap-3 px-4 py-3', message.role === 'user' && 'bg-muted/40')}>
+      <Avatar size="sm" className="mt-0.5">
+        <AvatarFallback className={role.avatarClass}>
+          <RoleIcon className="size-3.5" aria-hidden="true" />
+        </AvatarFallback>
+      </Avatar>
+      <div className="min-w-0 flex-1">
+        <div className="mb-1.5 flex flex-wrap items-center gap-2">
+          <span className={cn('text-sm font-bold', role.labelClass)}>{role.label}</span>
+          <span className="text-xs text-muted-foreground">
+            <Time iso={message.createdAt} absolute />
+          </span>
+          {task && (
+            <Link
+              to={`/tasks/${task.id}`}
+              className="ml-auto inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+            >
+              {message.role === 'user' ? '시작한 작업' : '작업'} ·{' '}
+              <StatusBadge status={task.status} />
+            </Link>
+          )}
+        </div>
+        {text &&
+          (message.role === 'assistant' ? (
+            <Markdown text={text} className={MARKDOWN_CLASS} />
+          ) : (
+            <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">{text}</p>
+          ))}
+        {attachments.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {attachments.map((a) => (
+              <AttachmentChip
+                key={a.artifactId}
+                artifactId={a.artifactId}
+                file={files?.[a.artifactId]}
+              />
+            ))}
+          </div>
         )}
       </div>
-      {text &&
-        (message.role === 'assistant' ? (
-          <Markdown text={text} className="tk-md tk-msg-text" />
-        ) : (
-          <p className="tk-msg-text tk-plain">{text}</p>
-        ))}
-      {attachments.length > 0 && (
-        <div className="tk-msg-attachments">
-          {attachments.map((a) => (
-            <AttachmentChip
-              key={a.artifactId}
-              artifactId={a.artifactId}
-              file={files?.[a.artifactId]}
-            />
-          ))}
-        </div>
-      )}
     </li>
   );
 }
@@ -247,7 +289,8 @@ function AttachmentChip({ artifactId, file }: { artifactId: string; file?: Attac
       loading={download.pending}
       onClick={() => void download.run()}
     >
-      📎 {file ? file.fileName : '첨부 파일'}{' '}
+      {!download.pending && <PaperclipIcon aria-hidden="true" />}
+      {file ? file.fileName : '첨부 파일'}
       <Badge>{file ? formatBytes(file.sizeBytes) : artifactId.slice(0, 8)}</Badge>
     </Button>
   );

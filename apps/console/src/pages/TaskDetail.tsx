@@ -1,4 +1,24 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
+import {
+  ArrowRightIcon,
+  ChevronRightIcon,
+  CircleCheckIcon,
+  CircleDashedIcon,
+  CirclePauseIcon,
+  CircleSlashIcon,
+  CircleXIcon,
+  DownloadIcon,
+  FileIcon,
+  FlagIcon,
+  LoaderCircleIcon,
+  type LucideIcon,
+  MessagesSquareIcon,
+  PauseIcon,
+  PlayIcon,
+  SquareIcon,
+  ThumbsDownIcon,
+  ThumbsUpIcon,
+} from 'lucide-react';
 import { Link, useParams } from 'react-router';
 import { formatBytes, formatDuration, formatNumber, formatRemaining } from '../../../shared/format';
 import { LEVEL, RISK } from '../../../shared/status';
@@ -22,12 +42,31 @@ import {
   StatusBadge,
   Tabs,
   Time,
+  type Tone,
+  TONE_CLASS,
   useAction,
   useQuery,
   useToast,
 } from '../ui';
+import { Badge as UiBadge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { type AdminTaskRow, failureLabel, formatElapsed, isLive, Progress } from './Tasks';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { Label } from '@/components/ui/label';
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
+import { Progress as ProgressBar } from '@/components/ui/progress';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableFooter,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { Textarea } from '@/components/ui/textarea';
+import { cn } from '@/lib/utils';
+import { type AdminTaskRow, failureLabel, formatElapsed, isLive, type TaskStatus } from './Tasks';
 
 /* ───────────── 타입 (src/tasks/admin/tasks-admin.service.ts · trace / step) ───────────── */
 
@@ -148,25 +187,68 @@ interface StepDetail {
 
 /* ───────────── 표시 문구 ───────────── */
 
-const STEP_STATUS: Record<StepStatus, { label: string; tone: BadgeTone }> = {
-  pending: { label: '대기', tone: 'neutral' },
-  running: { label: '실행 중', tone: 'info' },
-  succeeded: { label: '성공', tone: 'success' },
-  failed: { label: '실패', tone: 'danger' },
-  skipped: { label: '건너뜀', tone: 'neutral' },
-  waiting_approval: { label: '승인 대기', tone: 'warning' },
-  cancelled: { label: '취소', tone: 'neutral' },
+const STEP_STATUS: Record<
+  StepStatus,
+  { label: string; tone: Tone; icon: LucideIcon; iconClass: string }
+> = {
+  pending: {
+    label: '대기',
+    tone: 'neutral',
+    icon: CircleDashedIcon,
+    iconClass: 'text-muted-foreground',
+  },
+  running: {
+    label: '실행 중',
+    tone: 'info',
+    icon: LoaderCircleIcon,
+    iconClass: 'animate-spin text-blue-600 dark:text-blue-400',
+  },
+  succeeded: {
+    label: '성공',
+    tone: 'success',
+    icon: CircleCheckIcon,
+    iconClass: 'text-emerald-600 dark:text-emerald-400',
+  },
+  failed: {
+    label: '실패',
+    tone: 'danger',
+    icon: CircleXIcon,
+    iconClass: 'text-red-600 dark:text-red-400',
+  },
+  skipped: {
+    label: '건너뜀',
+    tone: 'neutral',
+    icon: CircleDashedIcon,
+    iconClass: 'text-muted-foreground',
+  },
+  waiting_approval: {
+    label: '승인 대기',
+    tone: 'warning',
+    icon: CirclePauseIcon,
+    iconClass: 'text-amber-600 dark:text-amber-400',
+  },
+  cancelled: {
+    label: '취소',
+    tone: 'neutral',
+    icon: CircleSlashIcon,
+    iconClass: 'text-muted-foreground',
+  },
 };
-type BadgeTone = 'neutral' | 'info' | 'success' | 'warning' | 'danger' | 'purple';
 
-const STEP_TYPE: Record<string, string> = {
-  context: '컨텍스트',
-  plan: '계획',
-  reason: '추론',
-  tool: 'Tool',
-  skill: 'Skill',
-  respond: '답변',
-  evaluate: '평가',
+function stepStatus(status: string) {
+  return STEP_STATUS[status as StepStatus] ?? { ...STEP_STATUS.pending, label: status };
+}
+
+const BRAND_CHIP = 'bg-primary/10 text-primary';
+
+const STEP_TYPE: Record<string, { label: string; className: string }> = {
+  context: { label: '컨텍스트', className: TONE_CLASS.neutral },
+  plan: { label: '계획', className: BRAND_CHIP },
+  reason: { label: '추론', className: TONE_CLASS.neutral },
+  tool: { label: 'Tool', className: TONE_CLASS.info },
+  skill: { label: 'Skill', className: TONE_CLASS.purple },
+  respond: { label: '답변', className: TONE_CLASS.success },
+  evaluate: { label: '평가', className: BRAND_CHIP },
 };
 
 const STEP_NAME: Record<string, string> = {
@@ -183,7 +265,7 @@ const STEP_NAME: Record<string, string> = {
   'evaluator.verify_correction': '정정 답변 검증',
 };
 
-const TOOL_STATUS: Record<string, { label: string; tone: BadgeTone }> = {
+const TOOL_STATUS: Record<string, { label: string; tone: Tone }> = {
   succeeded: { label: '성공', tone: 'success' },
   failed: { label: '실패', tone: 'danger' },
   denied: { label: '거부', tone: 'danger' },
@@ -208,13 +290,15 @@ const TOOL_SOURCE: Record<string, string> = {
   skill_script: 'Skill 스크립트',
 };
 
-const APPROVAL_STATUS: Record<ApprovalView['status'], { label: string; tone: BadgeTone }> = {
+const APPROVAL_STATUS: Record<ApprovalView['status'], { label: string; tone: Tone }> = {
   pending: { label: '대기', tone: 'warning' },
   approved: { label: '승인', tone: 'success' },
   rejected: { label: '거절', tone: 'danger' },
   expired: { label: '만료', tone: 'neutral' },
   cancelled: { label: '취소', tone: 'neutral' },
 };
+
+const RISK_TONE: Record<string, Tone> = { low: 'success', medium: 'warning', high: 'danger' };
 
 const APPROVER: Record<ApprovalView['requiredApprover'], string> = {
   user: '사용자',
@@ -250,13 +334,55 @@ export function formatMoney(amount: string | number, currency: string): string {
 }
 
 function StepStatusBadge({ status }: { status: StepStatus }) {
-  const s = STEP_STATUS[status] ?? { label: status, tone: 'neutral' as const };
+  const s = stepStatus(status);
   return <Badge tone={s.tone}>{s.label}</Badge>;
 }
 
-const PAUSABLE = ['queued', 'running', 'waiting_approval', 'recovering'];
-const CANCELLABLE = ['queued', 'running', 'waiting_approval', 'recovering', 'paused'];
-const RESUMABLE = ['failed', 'paused'];
+function StepTypeChip({ type }: { type: string }) {
+  const t = STEP_TYPE[type];
+  return (
+    <UiBadge className={cn('rounded-md font-semibold', t?.className ?? TONE_CLASS.neutral)}>
+      {t?.label ?? type}
+    </UiBadge>
+  );
+}
+
+/** 운영자 제어 — 헤더 버튼과 확인 창이 같은 문구를 쓴다 */
+const CONTROL_KINDS = ['pause', 'resume', 'cancel'] as const;
+type ControlKind = (typeof CONTROL_KINDS)[number];
+
+const CONTROL: Record<
+  ControlKind,
+  {
+    label: string;
+    title: string;
+    icon: LucideIcon;
+    variant: 'default' | 'outline' | 'destructive';
+    from: TaskStatus[];
+  }
+> = {
+  pause: {
+    label: '일시정지',
+    title: '작업 일시정지',
+    icon: PauseIcon,
+    variant: 'outline',
+    from: ['queued', 'running', 'waiting_approval', 'recovering'],
+  },
+  resume: {
+    label: '재개',
+    title: '작업 재개',
+    icon: PlayIcon,
+    variant: 'default',
+    from: ['failed', 'paused'],
+  },
+  cancel: {
+    label: '중지',
+    title: '작업 중지',
+    icon: SquareIcon,
+    variant: 'destructive',
+    from: ['queued', 'running', 'waiting_approval', 'recovering', 'paused'],
+  },
+};
 
 /* ───────────── C-02 작업 상세 · 실행 트레이스 ───────────── */
 
@@ -272,7 +398,7 @@ export function TaskDetailPage() {
   useEffect(() => setPolling(Boolean(data && isLive(data.task.status))), [data]);
 
   const [openStep, setOpenStep] = useState<string | null>(null);
-  const [control, setControl] = useState<'pause' | 'cancel' | 'resume' | null>(null);
+  const [control, setControl] = useState<ControlKind | null>(null);
 
   if (!data) {
     return (
@@ -300,6 +426,7 @@ export function TaskDetailPage() {
   const verify = [...data.steps]
     .reverse()
     .find((s) => s.name === 'evaluator.verify' || s.name === 'evaluator.verify_correction');
+  const stepRatio = stats.steps.total ? Math.min(1, stats.steps.completed / stats.steps.total) : 0;
 
   return (
     <>
@@ -317,27 +444,32 @@ export function TaskDetailPage() {
             <span>
               · <Time iso={task.createdAt} absolute />
             </span>
-            {polling && <Badge tone="info">실시간 갱신 중</Badge>}
+            {polling && (
+              <Badge tone="info">
+                <span className="size-1.5 animate-pulse rounded-full bg-current" />
+                실시간 갱신 중
+              </Badge>
+            )}
           </>
         }
         actions={
           <>
-            <Link className="btn btn-secondary" to={`/conversations/${task.conversationId}`}>
-              대화 보기
-            </Link>
-            {operator && PAUSABLE.includes(task.status) && (
-              <Button variant="outline" onClick={() => setControl('pause')}>
-                일시정지
-              </Button>
-            )}
-            {operator && RESUMABLE.includes(task.status) && (
-              <Button onClick={() => setControl('resume')}>재개</Button>
-            )}
-            {operator && CANCELLABLE.includes(task.status) && (
-              <Button variant="destructive" onClick={() => setControl('cancel')}>
-                중지
-              </Button>
-            )}
+            <Button variant="outline" asChild>
+              <Link to={`/conversations/${task.conversationId}`}>
+                <MessagesSquareIcon aria-hidden="true" />
+                대화 보기
+              </Link>
+            </Button>
+            {operator &&
+              CONTROL_KINDS.filter((k) => CONTROL[k].from.includes(task.status)).map((k) => {
+                const { label, icon: Icon, variant } = CONTROL[k];
+                return (
+                  <Button key={k} variant={variant} onClick={() => setControl(k)}>
+                    <Icon aria-hidden="true" />
+                    {label}
+                  </Button>
+                );
+              })}
           </>
         }
       />
@@ -345,9 +477,17 @@ export function TaskDetailPage() {
       <ErrorNotice error={trace.error} onRetry={() => void trace.reload()} />
       <StatusNotices task={task} hasCheckpoint={checkpoints.length > 0} />
 
-      <div className="tk-stats" aria-label="실행 요약">
+      <dl
+        aria-label="실행 요약"
+        className="mb-4 grid grid-cols-2 gap-px overflow-hidden rounded-xl border bg-border shadow-sm min-[560px]:grid-cols-4 min-[1100px]:grid-cols-8"
+      >
         <Stat label="단계">
-          <Progress completed={stats.steps.completed} total={stats.steps.total} />
+          {stats.steps.completed}/{stats.steps.total ?? '?'}
+          <ProgressBar
+            value={Math.round(stepRatio * 100)}
+            aria-hidden="true"
+            className="mt-1.5 h-1 bg-muted"
+          />
         </Stat>
         <Stat label="Tool 호출">{formatNumber(stats.toolCalls)}</Stat>
         <Stat label="재시도">{formatNumber(stats.retries)}</Stat>
@@ -356,10 +496,10 @@ export function TaskDetailPage() {
         <Stat label="토큰">{formatNumber(task.usage.inputTokens + task.usage.outputTokens)}</Stat>
         <Stat label="비용">{formatMoney(task.cost.amount, task.cost.currency)}</Stat>
         <Stat label="소요">{formatElapsed(task.elapsedMs)}</Stat>
-      </div>
+      </dl>
 
-      <div className="grid grid-main-side">
-        <div className="stack">
+      <div className="grid grid-cols-1 items-start gap-x-4 gap-y-0 min-[1100px]:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="min-w-0">
           <Card
             title="실행 트레이스"
             description="Agent Loop 단계 순서 — 단계를 누르면 입력 · 출력 · Tool 실행을 봅니다."
@@ -369,15 +509,19 @@ export function TaskDetailPage() {
           </Card>
           {data.approvals.length > 0 && <ApprovalsCard approvals={data.approvals} />}
         </div>
-        <div className="stack">
+        <div className="min-w-0">
           <PlanCard plans={data.plans} steps={data.steps} />
           {verify && (
             <Card title="결과 검증">
-              <div className="row">
+              <div className="flex flex-wrap items-center gap-2">
                 <StepStatusBadge status={verify.status} />
-                <span className="muted">{STEP_NAME[verify.name]}</span>
+                <span className="text-sm text-muted-foreground">{STEP_NAME[verify.name]}</span>
               </div>
-              {verify.summary && <p className="tk-verify-text">{verify.summary}</p>}
+              {verify.summary && (
+                <p className="mt-2 text-sm whitespace-pre-wrap text-muted-foreground">
+                  {verify.summary}
+                </p>
+              )}
             </Card>
           )}
           <Card title="실행 정보">
@@ -385,15 +529,19 @@ export function TaskDetailPage() {
               items={[
                 [
                   'Agent',
-                  <>
+                  <span key="a" className="inline-flex flex-wrap items-center gap-1.5">
                     {task.agentName} <Badge>v{task.agentVersion}</Badge>
-                  </>,
+                  </span>,
                 ],
                 [
                   'Tool Registry',
-                  <span key="r" title="작업을 시작할 때 고정된 Registry 버전">
-                    <Badge tone="purple">v{task.registryVersion}</Badge>{' '}
-                    <span className="muted">시작 시 고정</span>
+                  <span
+                    key="r"
+                    className="inline-flex flex-wrap items-center gap-1.5"
+                    title="작업을 시작할 때 고정된 Registry 버전"
+                  >
+                    <Badge tone="purple">v{task.registryVersion}</Badge>
+                    <span className="text-xs text-muted-foreground">시작 시 고정</span>
                   </span>,
                 ],
                 ['사용자', task.endUserPseudonym],
@@ -401,7 +549,7 @@ export function TaskDetailPage() {
                 [
                   'Trace ID',
                   task.traceId ? (
-                    <span key="t" className="row tk-nowrap">
+                    <span key="t" className="flex min-w-0 items-center gap-2">
                       <Mono>{task.traceId}</Mono>
                       <CopyButton text={task.traceId} />
                     </span>
@@ -415,7 +563,7 @@ export function TaskDetailPage() {
               ]}
             />
           </Card>
-          <Card title="토큰 사용량" description="모델 역할별 입력 / 출력">
+          <Card title="토큰 사용량" description="모델 역할별 입력 / 출력" flush>
             <TokenTable usage={task.usage} />
           </Card>
           {data.artifacts.length > 0 && <ArtifactsCard artifacts={data.artifacts} />}
@@ -440,9 +588,9 @@ export function TaskDetailPage() {
 
 function Stat({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="tk-stat">
-      <span className="tk-stat-label">{label}</span>
-      <span className="tk-stat-value">{children}</span>
+    <div className="flex min-w-0 flex-col gap-1 bg-card px-3.5 py-3">
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="text-base font-semibold tabular-nums">{children}</dd>
     </div>
   );
 }
@@ -457,48 +605,50 @@ function StatusNotices({
   if (task.status === 'failed' && task.failure) {
     return (
       <Notice tone="error">
-        <span>
+        <p>
           <strong>{failureLabel(task.failure.code)}</strong> <Mono>{task.failure.code}</Mono>
           {task.failure.message && <> — {task.failure.message}</>}
-          <br />
+        </p>
+        <p className="mt-1">
           {task.failure.resumable
             ? '마지막 checkpoint 부터 재개할 수 있어요.'
             : '저장된 checkpoint 가 없어 처음부터 다시 실행해야 해요.'}
-        </span>
+        </p>
       </Notice>
     );
   }
   if (task.status === 'waiting_approval' && task.pendingApproval) {
     return (
       <Notice tone="warn">
-        <span>
-          승인을 기다리는 중이에요 · {formatRemaining(task.pendingApproval.expiresAt)}. 응답이
-          없으면 작업이 일시정지됩니다.
-        </span>
-        <Link to="/approvals" className="btn btn-sm btn-secondary">
-          승인 큐에서 보기
-        </Link>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <span>
+            승인을 기다리는 중이에요 · {formatRemaining(task.pendingApproval.expiresAt)}. 응답이
+            없으면 작업이 일시정지됩니다.
+          </span>
+          <Button asChild size="sm" variant="outline">
+            <Link to="/approvals">
+              승인 큐에서 보기
+              <ArrowRightIcon aria-hidden="true" />
+            </Link>
+          </Button>
+        </div>
       </Notice>
     );
   }
   if (task.status === 'paused') {
     return (
       <Notice tone="info">
-        <span>
-          일시정지된 작업이에요.{' '}
-          {hasCheckpoint
-            ? 'checkpoint 부터 이어서 실행하거나 처음부터 다시 실행할 수 있어요.'
-            : '처음부터 다시 실행할 수 있어요.'}
-        </span>
+        일시정지된 작업이에요.{' '}
+        {hasCheckpoint
+          ? 'checkpoint 부터 이어서 실행하거나 처음부터 다시 실행할 수 있어요.'
+          : '처음부터 다시 실행할 수 있어요.'}
       </Notice>
     );
   }
   if (task.status === 'recovering') {
     return (
       <Notice tone="info">
-        <span>
-          Worker 연결이 끊겨 마지막 checkpoint 부터 복구하는 중이에요 (복구 {task.recoveryCount}회).
-        </span>
+        Worker 연결이 끊겨 마지막 checkpoint 부터 복구하는 중이에요 (복구 {task.recoveryCount}회).
       </Notice>
     );
   }
@@ -510,36 +660,71 @@ function StatusNotices({
 function Timeline({ steps, onOpen }: { steps: TraceStep[]; onOpen: (id: string) => void }) {
   if (steps.length === 0) return <Empty title="아직 실행된 단계가 없어요" />;
   return (
-    <ol className="tk-timeline">
-      {steps.map((s) => (
-        <li key={s.id} className={`tl-item tl-${s.status}`}>
-          <span className="tl-dot" aria-hidden="true" />
-          <button type="button" className="tl-body" onClick={() => onOpen(s.id)}>
-            <span className="tl-head">
-              <span className="tl-seq">#{s.seq}</span>
-              <span className={`tl-type tl-type-${s.type}`}>{STEP_TYPE[s.type] ?? s.type}</span>
-              <span className="tl-name">
-                {STEP_NAME[s.name] ?? <span className="tk-mono">{s.name}</span>}
+    <ol className="py-2">
+      {steps.map((s) => {
+        const { icon: Icon, iconClass } = stepStatus(s.status);
+        const dimmed = s.status === 'skipped' || s.status === 'cancelled';
+        return (
+          <li
+            key={s.id}
+            className="relative pr-4 pl-10 before:absolute before:inset-y-0 before:left-[23px] before:w-0.5 before:bg-border first:before:top-[18px] last:before:bottom-[calc(100%-18px)]"
+          >
+            <Icon
+              aria-hidden="true"
+              className={cn(
+                'absolute top-[11px] left-4 z-10 size-4 rounded-full bg-card',
+                iconClass,
+              )}
+            />
+            <button
+              type="button"
+              className="my-0.5 flex w-full flex-col gap-1 rounded-lg px-2.5 py-2 text-left outline-none hover:bg-muted/60 focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              onClick={() => onOpen(s.id)}
+            >
+              <span className="flex min-w-0 items-center gap-2">
+                <span className="min-w-[26px] font-mono text-xs text-muted-foreground">
+                  #{s.seq}
+                </span>
+                <StepTypeChip type={s.type} />
+                <span
+                  className={cn(
+                    'min-w-0 truncate font-semibold',
+                    dimmed && 'text-muted-foreground',
+                  )}
+                >
+                  {STEP_NAME[s.name] ?? <span className="font-mono text-[12.5px]">{s.name}</span>}
+                </span>
+                {s.name === 'planner.revise' && <Badge tone="purple">재계획</Badge>}
+                <span className="ml-auto shrink-0">
+                  <StepStatusBadge status={s.status} />
+                </span>
               </span>
-              {s.name === 'planner.revise' && <Badge tone="purple">재계획</Badge>}
-              <span className="spacer" />
-              <StepStatusBadge status={s.status} />
-            </span>
-            <span className="tl-meta">
-              {STEP_NAME[s.name] && s.type !== 'tool' && <span className="tk-mono">{s.name}</span>}
-              {s.planIndex !== null && <span>계획 {s.planIndex}단계</span>}
-              {s.parallelGroup !== null && <span>병렬 그룹 {s.parallelGroup}</span>}
-              {s.durationMs !== null && <span>{formatDuration(s.durationMs)}</span>}
-              {s.checkpoint && (
-                <span className="tl-cp" title={`checkpoint 저장 · ${s.checkpoint.at}`}>
-                  ⚑ {s.checkpoint.label}
+              <span className="flex flex-wrap gap-x-3 gap-y-1 pl-[34px] text-xs text-muted-foreground">
+                {STEP_NAME[s.name] && s.type !== 'tool' && (
+                  <span className="font-mono">{s.name}</span>
+                )}
+                {s.planIndex !== null && <span>계획 {s.planIndex}단계</span>}
+                {s.parallelGroup !== null && <span>병렬 그룹 {s.parallelGroup}</span>}
+                {s.durationMs !== null && <span>{formatDuration(s.durationMs)}</span>}
+                {s.checkpoint && (
+                  <span
+                    className="inline-flex items-center gap-1 font-semibold text-violet-700 dark:text-violet-300"
+                    title={`checkpoint 저장 · ${s.checkpoint.at}`}
+                  >
+                    <FlagIcon className="size-3" aria-hidden="true" />
+                    {s.checkpoint.label}
+                  </span>
+                )}
+              </span>
+              {s.summary && (
+                <span className="line-clamp-2 pl-[34px] text-sm text-muted-foreground">
+                  {s.summary}
                 </span>
               )}
-            </span>
-            {s.summary && <span className="tl-summary">{s.summary}</span>}
-          </button>
-        </li>
-      ))}
+            </button>
+          </li>
+        );
+      })}
     </ol>
   );
 }
@@ -565,7 +750,7 @@ function PlanCard({ plans, steps }: { plans: TraceResponse['plans']; steps: Trac
   if (!plan) {
     return (
       <Card title="실행 계획">
-        <p className="muted">계획을 아직 만들지 않았어요.</p>
+        <p className="text-sm text-muted-foreground">계획을 아직 만들지 않았어요.</p>
       </Card>
     );
   }
@@ -584,32 +769,35 @@ function PlanCard({ plans, steps }: { plans: TraceResponse['plans']; steps: Trac
         />
       )}
       {plan.reason && (
-        <p className="tk-plan-reason">
-          <strong>재계획 사유</strong> {plan.reason}
+        <p className={cn('mb-2.5 rounded-lg px-2.5 py-2 text-sm', TONE_CLASS.purple)}>
+          <strong className="mr-1.5">재계획 사유</strong>
+          {plan.reason}
         </p>
       )}
-      <ol className="tk-plan-list">
+      <ol className="mb-2 divide-y">
         {plan.steps.map((st) => {
           const status = isLatest ? statusOf.get(st.index) : undefined;
           return (
-            <li key={st.index} className="tk-plan-item">
-              <span className={`tk-plan-num ${status ?? 'none'}`}>{st.index}</span>
-              <div className="tk-plan-text">
-                <span className="tk-plan-title">{st.title}</span>
-                <span className="cell-sub">
+            <li key={st.index} className="flex items-start gap-2.5 py-2">
+              <span
+                className={cn(
+                  'grid size-[22px] shrink-0 place-items-center gap-0 rounded-full text-xs font-bold',
+                  TONE_CLASS[status ? stepStatus(status).tone : 'neutral'],
+                )}
+              >
+                {st.index}
+              </span>
+              <div className="flex min-w-0 flex-1 flex-col gap-1">
+                <span className="font-medium">{st.title}</span>
+                <span className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                   {st.kind === 'tool' && st.toolName && <Mono>{st.toolName}</Mono>}
                   {st.kind === 'skill' && st.skill && (
                     <Mono>
                       {st.skill.name}@{st.skill.version}
                     </Mono>
                   )}
-                  {(st.kind === 'reason' || st.kind === 'respond') && STEP_TYPE[st.kind]}
-                  {st.requiresApproval && (
-                    <>
-                      {' '}
-                      <Badge tone="warning">승인 필요</Badge>
-                    </>
-                  )}
+                  {(st.kind === 'reason' || st.kind === 'respond') && STEP_TYPE[st.kind]!.label}
+                  {st.requiresApproval && <Badge tone="warning">승인 필요</Badge>}
                 </span>
               </div>
               {status && <StepStatusBadge status={status} />}
@@ -617,7 +805,7 @@ function PlanCard({ plans, steps }: { plans: TraceResponse['plans']; steps: Trac
           );
         })}
       </ol>
-      <p className="cell-sub">
+      <p className="text-xs text-muted-foreground">
         v{plan.version} · <Time iso={plan.createdAt} />
       </p>
     </Card>
@@ -629,42 +817,43 @@ function PlanCard({ plans, steps }: { plans: TraceResponse['plans']; steps: Trac
 function ApprovalsCard({ approvals }: { approvals: ApprovalView[] }) {
   return (
     <Card title="승인 요청" flush>
-      <ul className="tk-list">
+      <ul className="divide-y">
         {approvals.map((a) => {
           const st = APPROVAL_STATUS[a.status];
           const risk = RISK[a.riskLevel];
           return (
-            <li key={a.id} className="tk-approval-row">
-              <div className="row">
+            <li key={a.id} className="flex flex-col items-start gap-2 px-4 py-3">
+              <div className="flex w-full flex-wrap items-center gap-2">
                 <Mono>{a.toolName}</Mono>
                 <Badge tone={st.tone}>{st.label}</Badge>
-                {risk && (
-                  <span className="badge" style={{ background: risk.bg, color: risk.fg }}>
-                    위험도 {risk.label}
-                  </span>
-                )}
+                {risk && <Badge tone={RISK_TONE[a.riskLevel]}>위험도 {risk.label}</Badge>}
                 <Badge>{LEVEL[a.permissionLevel] ?? a.permissionLevel}</Badge>
-                <span className="spacer" />
-                <span className="cell-sub">
+                <span className="ml-auto text-xs text-muted-foreground">
                   {APPROVER[a.requiredApprover]} 승인
                   {a.status === 'pending' && ` · ${formatRemaining(a.expiresAt)}`}
                 </span>
               </div>
-              <p className="tk-approval-summary">{a.summary}</p>
+              <p className="font-medium">{a.summary}</p>
               {a.args.length > 0 && (
-                <dl className="tk-args">
+                <dl className="w-full divide-y rounded-lg border text-sm">
                   {a.args.map((arg) => (
-                    <div key={arg.label}>
-                      <dt>{arg.label}</dt>
-                      <dd>{arg.value}</dd>
+                    <div
+                      key={arg.label}
+                      className="grid grid-cols-[120px_minmax(0,1fr)] gap-2 px-2.5 py-1.5"
+                    >
+                      <dt className="font-mono text-xs text-muted-foreground">{arg.label}</dt>
+                      <dd className="break-words">{arg.value}</dd>
                     </div>
                   ))}
                 </dl>
               )}
               {a.status === 'pending' && (
-                <Link to="/approvals" className="btn btn-sm btn-secondary">
-                  승인 큐에서 결정
-                </Link>
+                <Button asChild size="sm" variant="outline">
+                  <Link to="/approvals">
+                    승인 큐에서 결정
+                    <ArrowRightIcon aria-hidden="true" />
+                  </Link>
+                </Button>
               )}
             </li>
           );
@@ -685,17 +874,19 @@ function ArtifactsCard({ artifacts }: { artifacts: TraceResponse['artifacts'] })
   }, [download.error, toast]);
   return (
     <Card title="파일" flush>
-      <ul className="tk-list">
+      <ul className="divide-y">
         {artifacts.map((a) => (
-          <li key={a.id} className="tk-file-row">
-            <div className="tk-file-text">
-              <span className="tk-file-name">{a.fileName}</span>
-              <span className="cell-sub">
+          <li key={a.id} className="flex items-center gap-3 px-4 py-3">
+            <FileIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <div className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate font-medium">{a.fileName}</span>
+              <span className="text-xs text-muted-foreground">
                 {a.origin === 'user_upload' ? '사용자 첨부' : '산출물'} · {formatBytes(a.sizeBytes)}{' '}
                 · {a.mimeType}
               </span>
             </div>
             <Button variant="outline" size="sm" onClick={() => void download.run(a)}>
+              <DownloadIcon aria-hidden="true" />
               다운로드
             </Button>
           </li>
@@ -709,16 +900,28 @@ function FeedbackCard({ feedback }: { feedback: TraceResponse['feedback'] }) {
   return (
     <Card title="사용자 피드백">
       {feedback.length === 0 ? (
-        <p className="muted">피드백이 없어요.</p>
+        <p className="text-sm text-muted-foreground">피드백이 없어요.</p>
       ) : (
-        <ul className="tk-list tk-compact">
+        <ul className="flex flex-col gap-3 text-sm">
           {feedback.map((f, i) => (
             <li key={i}>
-              <Badge tone={f.rating === 'helpful' ? 'success' : 'danger'}>
-                {f.rating === 'helpful' ? '👍 도움됨' : '👎 아쉬움'}
-              </Badge>{' '}
-              <Time iso={f.createdAt} />
-              {f.comment && <p className="tk-feedback-comment">“{f.comment}”</p>}
+              <div className="flex items-center gap-2">
+                {f.rating === 'helpful' ? (
+                  <Badge tone="success">
+                    <ThumbsUpIcon aria-hidden="true" />
+                    도움됨
+                  </Badge>
+                ) : (
+                  <Badge tone="danger">
+                    <ThumbsDownIcon aria-hidden="true" />
+                    아쉬움
+                  </Badge>
+                )}
+                <span className="text-xs text-muted-foreground">
+                  <Time iso={f.createdAt} />
+                </span>
+              </div>
+              {f.comment && <p className="mt-1 text-muted-foreground">“{f.comment}”</p>}
             </li>
           ))}
         </ul>
@@ -734,29 +937,37 @@ function TokenTable({ usage }: { usage: TraceResponse['task']['usage'] }) {
     ['Evaluator', usage.byRole.evaluator],
   ];
   return (
-    <table className="tk-mini-table">
-      <thead>
-        <tr>
-          <th>역할</th>
-          <th className="num">입력</th>
-          <th className="num">출력</th>
-        </tr>
-      </thead>
-      <tbody>
+    <Table className="[&_td]:px-4 [&_th]:px-4">
+      <TableHeader>
+        <TableRow className="hover:bg-transparent">
+          <TableHead className="h-9 text-xs text-muted-foreground">역할</TableHead>
+          <TableHead className="h-9 text-right text-xs text-muted-foreground">입력</TableHead>
+          <TableHead className="h-9 text-right text-xs text-muted-foreground">출력</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
         {rows.map(([role, u]) => (
-          <tr key={role}>
-            <td>{role}</td>
-            <td className="num">{formatNumber(u.inputTokens)}</td>
-            <td className="num">{formatNumber(u.outputTokens)}</td>
-          </tr>
+          <TableRow key={role}>
+            <TableCell>{role}</TableCell>
+            <TableCell className="text-right tabular-nums">{formatNumber(u.inputTokens)}</TableCell>
+            <TableCell className="text-right tabular-nums">
+              {formatNumber(u.outputTokens)}
+            </TableCell>
+          </TableRow>
         ))}
-        <tr className="tk-total">
-          <td>합계</td>
-          <td className="num">{formatNumber(usage.inputTokens)}</td>
-          <td className="num">{formatNumber(usage.outputTokens)}</td>
-        </tr>
-      </tbody>
-    </table>
+      </TableBody>
+      <TableFooter>
+        <TableRow className="font-semibold">
+          <TableCell>합계</TableCell>
+          <TableCell className="text-right tabular-nums">
+            {formatNumber(usage.inputTokens)}
+          </TableCell>
+          <TableCell className="text-right tabular-nums">
+            {formatNumber(usage.outputTokens)}
+          </TableCell>
+        </TableRow>
+      </TableFooter>
+    </Table>
   );
 }
 
@@ -807,13 +1018,13 @@ function StepModal({
           <Loading />
         )
       ) : (
-        <div className="tk-step-detail">
+        <div>
           <KeyValue
             items={[
               [
                 '종류 · 상태',
-                <span key="s" className="row">
-                  <span className={`tl-type tl-type-${d.type}`}>{STEP_TYPE[d.type] ?? d.type}</span>
+                <span key="s" className="flex flex-wrap items-center gap-2">
+                  <StepTypeChip type={d.type} />
                   <Mono>{d.name}</Mono>
                   <StepStatusBadge status={d.status} />
                 </span>,
@@ -827,9 +1038,13 @@ function StepModal({
               ['시도', `${d.attempts}회`],
               [
                 '시간',
-                <span key="t">
-                  <Time iso={d.startedAt} absolute /> → <Time iso={d.finishedAt} absolute />
-                  {d.durationMs !== null && ` (${formatDuration(d.durationMs)})`}
+                <span key="t" className="inline-flex flex-wrap items-center gap-1.5">
+                  <Time iso={d.startedAt} absolute />
+                  <ArrowRightIcon className="size-3.5 text-muted-foreground" aria-hidden="true" />
+                  <Time iso={d.finishedAt} absolute />
+                  {d.durationMs !== null && (
+                    <span className="text-muted-foreground">({formatDuration(d.durationMs)})</span>
+                  )}
                 </span>,
               ],
               [
@@ -844,27 +1059,34 @@ function StepModal({
             ]}
           />
           {d.summary && (
-            <Field label="요약">
-              <p className="tk-step-summary">{d.summary}</p>
-            </Field>
+            <section className="mt-3">
+              <h3 className="mb-1.5 text-sm font-medium text-muted-foreground">요약</h3>
+              <p className="rounded-lg bg-muted px-2.5 py-2 text-sm whitespace-pre-wrap">
+                {d.summary}
+              </p>
+            </section>
           )}
-          <Tabs
-            label="단계 데이터"
-            value={tab}
-            onChange={setTab}
-            tabs={[
-              { id: 'tools', label: 'Tool 실행', count: d.toolExecutions.length },
-              { id: 'input', label: '입력' },
-              { id: 'output', label: '출력' },
-              { id: 'evaluation', label: '평가' },
-              ...(d.checkpoint ? [{ id: 'checkpoint' as const, label: 'checkpoint' }] : []),
-            ]}
-          />
+          <div className="mt-4">
+            <Tabs
+              label="단계 데이터"
+              value={tab}
+              onChange={setTab}
+              tabs={[
+                { id: 'tools', label: 'Tool 실행', count: d.toolExecutions.length },
+                { id: 'input', label: '입력' },
+                { id: 'output', label: '출력' },
+                { id: 'evaluation', label: '평가' },
+                ...(d.checkpoint ? [{ id: 'checkpoint' as const, label: 'checkpoint' }] : []),
+              ]}
+            />
+          </div>
           {tab === 'tools' &&
             (d.toolExecutions.length === 0 ? (
-              <p className="muted">이 단계에서는 Tool 을 실행하지 않았어요.</p>
+              <p className="text-sm text-muted-foreground">
+                이 단계에서는 Tool 을 실행하지 않았어요.
+              </p>
             ) : (
-              <div className="stack">
+              <div className="flex flex-col gap-3">
                 {d.toolExecutions.map((e) => (
                   <ToolExecutionItem key={e.id} exec={e} />
                 ))}
@@ -874,7 +1096,9 @@ function StepModal({
           {tab === 'output' && <JsonOrEmpty value={d.output} />}
           {tab === 'evaluation' && <JsonOrEmpty value={d.evaluation} />}
           {tab === 'checkpoint' && d.checkpoint && <JsonOrEmpty value={d.checkpoint.data} />}
-          <p className="cell-sub">민감정보는 서버에서 마스킹된 값입니다.</p>
+          <p className="mt-3 text-xs text-muted-foreground">
+            민감정보는 서버에서 마스킹된 값입니다.
+          </p>
         </div>
       )}
     </Modal>
@@ -882,45 +1106,50 @@ function StepModal({
 }
 
 function JsonOrEmpty({ value }: { value: unknown }) {
-  if (value === null || value === undefined) return <p className="muted">기록된 값이 없어요.</p>;
+  if (value === null || value === undefined)
+    return <p className="text-sm text-muted-foreground">기록된 값이 없어요.</p>;
   return <Json value={value} />;
 }
 
 function ToolExecutionItem({ exec }: { exec: ToolExecution }) {
   const st = TOOL_STATUS[exec.status] ?? { label: exec.status, tone: 'neutral' as const };
   return (
-    <details className="tk-tool-exec" open={exec.status !== 'succeeded'}>
-      <summary>
+    <Collapsible defaultOpen={exec.status !== 'succeeded'} className="rounded-lg border">
+      <CollapsibleTrigger className="group flex w-full flex-wrap items-center gap-2 rounded-lg px-3 py-2.5 text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
+        <ChevronRightIcon
+          className="size-4 text-muted-foreground transition-transform group-data-[state=open]:rotate-90"
+          aria-hidden="true"
+        />
         <Mono>{exec.toolName}</Mono>
         <Badge tone={st.tone}>{st.label}</Badge>
-        <span className="cell-sub">
+        <span className="text-xs text-muted-foreground">
           {TOOL_SOURCE[exec.source] ?? exec.source} · {exec.attempt}번째 시도
           {exec.durationMs !== null && ` · ${formatDuration(exec.durationMs)}`}
         </span>
-      </summary>
-      {exec.deniedReason && (
-        <Notice tone="warn">
-          <span>거부 사유: {DENIED_REASON[exec.deniedReason] ?? exec.deniedReason}</span>
-        </Notice>
-      )}
-      {exec.errorCode && (
-        <Notice tone="error">
-          <span>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="px-3 pb-3">
+        {exec.deniedReason && (
+          <Notice tone="warn">
+            거부 사유: {DENIED_REASON[exec.deniedReason] ?? exec.deniedReason}
+          </Notice>
+        )}
+        {exec.errorCode && (
+          <Notice tone="error">
             <Mono>{exec.errorCode}</Mono> {exec.errorMessage}
-          </span>
-        </Notice>
-      )}
-      <div className="grid grid-2">
-        <div>
-          <p className="field-label">인자</p>
-          <JsonOrEmpty value={exec.input} />
+          </Notice>
+        )}
+        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+          <div className="min-w-0">
+            <p className="mb-1 text-xs font-medium text-muted-foreground">인자</p>
+            <JsonOrEmpty value={exec.input} />
+          </div>
+          <div className="min-w-0">
+            <p className="mb-1 text-xs font-medium text-muted-foreground">결과</p>
+            <JsonOrEmpty value={exec.output} />
+          </div>
         </div>
-        <div>
-          <p className="field-label">결과</p>
-          <JsonOrEmpty value={exec.output} />
-        </div>
-      </div>
-    </details>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -933,7 +1162,7 @@ function ControlModal({
   onClose,
   onDone,
 }: {
-  kind: 'pause' | 'cancel' | 'resume' | null;
+  kind: ControlKind | null;
   task: TraceResponse['task'];
   checkpoints: TraceStep[];
   onClose: () => void;
@@ -945,6 +1174,8 @@ function ControlModal({
   const latestCp = checkpoints[checkpoints.length - 1]?.id ?? '';
   const [mode, setMode] = useState<'checkpoint' | 'restart'>('checkpoint');
   const [fromStepId, setFromStepId] = useState(latestCp);
+  const checkpointId = useId();
+  const restartId = useId();
   useEffect(() => {
     if (!kind) return;
     setReason('');
@@ -982,12 +1213,17 @@ function ControlModal({
     }
   };
 
-  const title = kind === 'pause' ? '작업 일시정지' : kind === 'cancel' ? '작업 중지' : '작업 재개';
+  const control = CONTROL[kind ?? 'resume'];
+  const option = (selected: boolean) =>
+    cn(
+      'flex items-start gap-3 rounded-lg border p-3 transition-colors',
+      selected && 'border-primary bg-primary/5',
+    );
   return (
     <Modal
       open={kind !== null}
       onClose={onClose}
-      title={title}
+      title={control.title}
       footer={
         <>
           <Button variant="outline" onClick={onClose}>
@@ -999,27 +1235,26 @@ function ControlModal({
             disabled={kind === 'resume' && mode === 'checkpoint' && !fromStepId}
             onClick={() => void submit()}
           >
-            {kind === 'pause' ? '일시정지' : kind === 'cancel' ? '중지' : '재개'}
+            {control.label}
           </Button>
         </>
       }
     >
-      <p className="tk-modal-title">{task.title}</p>
+      <p className="mb-2 font-semibold">{task.title}</p>
       {kind === 'pause' && (
-        <p className="muted">
+        <p className="mb-4 text-sm text-muted-foreground">
           실행 중인 단계는 마치고 멈춥니다. 승인 대기 · 대기 중인 작업은 바로 멈춥니다. 나중에
           checkpoint 부터 재개할 수 있어요.
         </p>
       )}
       {kind === 'cancel' && (
-        <p className="muted">
+        <p className="mb-4 text-sm text-muted-foreground">
           중지한 작업은 다시 이어서 실행할 수 없어요. 대기 중인 승인 요청도 함께 취소됩니다.
         </p>
       )}
       {(kind === 'pause' || kind === 'cancel') && (
         <Field label="사유" hint="감사 로그에 남습니다 (선택)">
-          <textarea
-            className="input"
+          <Textarea
             rows={3}
             maxLength={500}
             value={reason}
@@ -1028,52 +1263,65 @@ function ControlModal({
         </Field>
       )}
       {kind === 'resume' && (
-        <div className="stack tk-resume-options" role="radiogroup" aria-label="재개 방식">
-          <label className={`tk-option${checkpoints.length ? '' : ' disabled'}`}>
-            <input
-              type="radio"
-              name="mode"
-              checked={mode === 'checkpoint'}
+        <RadioGroup
+          value={mode}
+          onValueChange={(v) => setMode(v as 'checkpoint' | 'restart')}
+          aria-label="재개 방식"
+          className="mb-4 gap-2"
+        >
+          <div
+            className={cn(
+              option(mode === 'checkpoint'),
+              !checkpoints.length && 'cursor-not-allowed opacity-60',
+            )}
+          >
+            <RadioGroupItem
+              id={checkpointId}
+              value="checkpoint"
               disabled={!checkpoints.length}
-              onChange={() => setMode('checkpoint')}
+              className="mt-0.5"
             />
-            <span>
-              <strong>checkpoint 부터 재개</strong>
-              <span className="cell-sub">
-                {checkpoints.length
-                  ? '끝난 단계는 건너뛰고 저장된 지점부터 이어서 실행해요.'
-                  : '저장된 checkpoint 가 없어요.'}
-              </span>
+            <div className="flex min-w-0 flex-1 flex-col gap-2">
+              <Label
+                htmlFor={checkpointId}
+                className="flex-col items-start gap-1 leading-normal font-normal"
+              >
+                <span className="font-semibold">checkpoint 부터 재개</span>
+                <span className="text-xs text-muted-foreground">
+                  {checkpoints.length
+                    ? '끝난 단계는 건너뛰고 저장된 지점부터 이어서 실행해요.'
+                    : '저장된 checkpoint 가 없어요.'}
+                </span>
+              </Label>
               {mode === 'checkpoint' && checkpoints.length > 0 && (
-                <select
-                  className="input"
+                <NativeSelect
                   aria-label="재개할 checkpoint"
                   value={fromStepId}
                   onChange={(e) => setFromStepId(e.target.value)}
                 >
                   {[...checkpoints].reverse().map((c, i) => (
-                    <option key={c.id} value={c.id}>
+                    <NativeSelectOption key={c.id} value={c.id}>
                       {c.checkpoint!.label} · #{c.seq} {STEP_NAME[c.name] ?? c.name}
                       {i === 0 ? ' (최근)' : ''}
-                    </option>
+                    </NativeSelectOption>
                   ))}
-                </select>
+                </NativeSelect>
               )}
-            </span>
-          </label>
-          <label className="tk-option">
-            <input
-              type="radio"
-              name="mode"
-              checked={mode === 'restart'}
-              onChange={() => setMode('restart')}
-            />
-            <span>
-              <strong>처음부터 다시</strong>
-              <span className="cell-sub">계획부터 새로 실행해요. 토큰 · 비용이 다시 듭니다.</span>
-            </span>
-          </label>
-        </div>
+            </div>
+          </div>
+          <div className={option(mode === 'restart')}>
+            <RadioGroupItem id={restartId} value="restart" className="mt-0.5" />
+            <Label
+              htmlFor={restartId}
+              className="flex-1 flex-col items-start gap-1 leading-normal font-normal"
+            >
+              <span className="font-semibold">처음부터 다시</span>
+              <span className="text-xs text-muted-foreground">
+                계획부터 새로 실행해요. 토큰 · 비용이 다시 듭니다.
+              </span>
+            </Label>
+          </div>
+        </RadioGroup>
       )}
       <ErrorNotice error={controlError(action.error)} />
     </Modal>
