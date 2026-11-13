@@ -4,12 +4,19 @@ import { ChevronDownIcon } from 'lucide-react';
 
 function NativeSelect({
   className,
+  containerClassName,
   size = 'default',
   ...props
-}: Omit<React.ComponentProps<'select'>, 'size'> & { size?: 'sm' | 'default' }) {
+}: Omit<React.ComponentProps<'select'>, 'size'> & {
+  size?: 'sm' | 'default';
+  containerClassName?: string;
+}) {
   return (
     <div
-      className="group/native-select relative w-fit has-[select:disabled]:opacity-50"
+      className={cn(
+        'group/native-select relative w-full has-[select:disabled]:opacity-50',
+        containerClassName,
+      )}
       data-slot="native-select-wrapper"
     >
       <select

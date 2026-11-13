@@ -6,7 +6,6 @@ import { ApiError } from '../api';
 import { useApi } from '../auth';
 import {
   Badge,
-  Button,
   Card,
   Empty,
   ErrorNotice,
@@ -19,6 +18,7 @@ import {
   useQuery,
   useToast,
 } from '../ui';
+import { Button } from '@/components/ui/button';
 import { isLive, type TaskStatus } from './Tasks';
 
 /* ───────────── 타입 (TasksAdminService.conversation) ───────────── */
@@ -241,7 +241,12 @@ function AttachmentChip({ artifactId, file }: { artifactId: string; file?: Attac
     if (download.error) toast(download.error.message, 'danger');
   }, [download.error, toast]);
   return (
-    <Button size="sm" loading={download.pending} onClick={() => void download.run()}>
+    <Button
+      variant="outline"
+      size="sm"
+      loading={download.pending}
+      onClick={() => void download.run()}
+    >
       📎 {file ? file.fileName : '첨부 파일'}{' '}
       <Badge>{file ? formatBytes(file.sizeBytes) : artifactId.slice(0, 8)}</Badge>
     </Button>

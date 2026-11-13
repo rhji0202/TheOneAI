@@ -10,7 +10,6 @@ import { ApiError } from '../api';
 import { useApi, useAuth } from '../auth';
 import {
   Badge,
-  Button,
   Card,
   type Column,
   ConfirmModal,
@@ -29,6 +28,7 @@ import {
   useQuery,
   useToast,
 } from '../ui';
+import { Button } from '@/components/ui/button';
 
 /* ───────────── API 타입 (src/agents/admin/agents-admin.service.ts) ───────────── */
 
@@ -862,7 +862,9 @@ export function AgentDetailPage() {
         }
         actions={
           <>
-            <Button onClick={() => setVersionsOpen(true)}>버전 기록</Button>
+            <Button variant="outline" onClick={() => setVersionsOpen(true)}>
+              버전 기록
+            </Button>
             {canEdit && agent.draft && (
               <Button variant="ghost" onClick={() => setDiscardOpen(true)}>
                 초안 버리기
@@ -870,7 +872,6 @@ export function AgentDetailPage() {
             )}
             {canEdit && (
               <Button
-                variant="primary"
                 disabled={!agent.draft || dirty}
                 title={
                   dirty
@@ -1003,7 +1004,7 @@ export function AgentDetailPage() {
           >
             되돌리기
           </Button>
-          <Button variant="primary" loading={save.pending} onClick={() => void save.run()}>
+          <Button loading={save.pending} onClick={() => void save.run()}>
             {agent.draft ? `초안 v${agent.draft.version} 에 저장` : '초안 만들어 저장'}
           </Button>
         </div>
@@ -1670,8 +1671,10 @@ function PublishModal({
       onClose={onClose}
       footer={
         <>
-          <Button onClick={onClose}>취소</Button>
-          <Button variant="primary" loading={pending} onClick={() => onPublish(note.trim())}>
+          <Button variant="outline" onClick={onClose}>
+            취소
+          </Button>
+          <Button loading={pending} onClick={() => onPublish(note.trim())}>
             배포
           </Button>
         </>
@@ -1799,7 +1802,7 @@ function VersionsModal({
       align: 'right',
       render: (v) =>
         canEdit && v.status !== 'draft' ? (
-          <Button size="sm" onClick={() => setTarget(v)}>
+          <Button variant="outline" size="sm" onClick={() => setTarget(v)}>
             이 버전으로 초안 만들기
           </Button>
         ) : null,

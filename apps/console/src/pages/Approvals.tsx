@@ -10,7 +10,6 @@ import { ApiError } from '../api';
 import { useApi, useAuth } from '../auth';
 import {
   Badge,
-  Button,
   Card,
   type Column,
   ConfirmModal,
@@ -36,6 +35,7 @@ import {
   useQuery,
   useToast,
 } from '../ui';
+import { Button } from '@/components/ui/button';
 
 /* ───────────── 타입 (src/approvals/admin/*, src/tasks/approval-views.ts) ───────────── */
 
@@ -460,12 +460,10 @@ function PendingCard({
       <footer className="approval-item-foot">
         {can('operator') ? (
           <>
-            <Button variant="danger" onClick={() => onDecide('reject')}>
+            <Button variant="destructive" onClick={() => onDecide('reject')}>
               거절
             </Button>
-            <Button variant="primary" onClick={() => onDecide('approve')}>
-              운영자로 승인
-            </Button>
+            <Button onClick={() => onDecide('approve')}>운영자로 승인</Button>
           </>
         ) : (
           <span className="muted small">대리 결정은 Operator 이상만 할 수 있어요</span>
@@ -552,7 +550,9 @@ function HistoryTab() {
               onChange={(e) => setToolInput(e.target.value)}
               style={{ width: 320 }}
             />
-            <Button type="submit">거르기</Button>
+            <Button variant="outline" type="submit">
+              거르기
+            </Button>
             {toolName && (
               <Button
                 variant="ghost"
@@ -585,7 +585,11 @@ function HistoryTab() {
         wide
         title="승인 요청 상세"
         onClose={() => setOpen(null)}
-        footer={<Button onClick={() => setOpen(null)}>닫기</Button>}
+        footer={
+          <Button variant="outline" onClick={() => setOpen(null)}>
+            닫기
+          </Button>
+        }
       >
         {open && <ApprovalDetail row={open} />}
       </Modal>
@@ -756,13 +760,13 @@ function PoliciesTab() {
           editable ? (
             <>
               <Button
+                variant="outline"
                 disabled={changes.size === 0 || save.pending}
                 onClick={() => setDraft(query.data!.map((p) => ({ ...p })))}
               >
                 되돌리기
               </Button>
               <Button
-                variant="primary"
                 loading={save.pending}
                 disabled={changes.size === 0}
                 onClick={() => void onSave()}
@@ -1060,11 +1064,7 @@ function RulesTab() {
         title="조건 규칙"
         description="인자 · 도메인 · 시간 조건에 맞으면 등급 정책보다 엄격하게 — 운영자 승인을 요구하거나 차단합니다. 규칙은 정책을 강화만 해요."
         actions={
-          editable ? (
-            <Button variant="primary" onClick={() => setEditing('new')}>
-              규칙 추가
-            </Button>
-          ) : undefined
+          editable ? <Button onClick={() => setEditing('new')}>규칙 추가</Button> : undefined
         }
       >
         <ErrorNotice error={query.error ?? toggle.error} onRetry={() => void query.reload()} />
@@ -1390,13 +1390,10 @@ function RuleModal({
       onClose={onClose}
       footer={
         <>
-          <Button onClick={onClose}>취소</Button>
-          <Button
-            variant="primary"
-            loading={save.pending}
-            disabled={!name.trim()}
-            onClick={() => void submit()}
-          >
+          <Button variant="outline" onClick={onClose}>
+            취소
+          </Button>
+          <Button loading={save.pending} disabled={!name.trim()} onClick={() => void submit()}>
             {rule ? '저장' : '추가'}
           </Button>
         </>

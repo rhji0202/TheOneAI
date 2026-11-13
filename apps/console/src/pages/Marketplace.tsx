@@ -10,7 +10,6 @@ import { ApiError } from '../api';
 import { useApi, useAuth } from '../auth';
 import {
   Badge,
-  Button,
   Card,
   ConfirmModal,
   Empty,
@@ -28,6 +27,7 @@ import {
   useQuery,
   useToast,
 } from '../ui';
+import { Button } from '@/components/ui/button';
 
 /* ───────────── 타입 (src/marketplace/marketplace.service.ts) ───────────── */
 
@@ -156,11 +156,7 @@ export function MarketplacePage() {
         title="마켓플레이스"
         description="검증을 통과한 Skill 과 MCP 서버 연결 템플릿을 다른 워크스페이스와 공유해요. 모든 항목은 플랫폼 키로 서명되고, 설치할 때 서명과 파일 해시를 다시 확인합니다."
         actions={
-          can('admin') ? (
-            <Button variant="primary" onClick={() => setPublishing(true)}>
-              게시하기
-            </Button>
-          ) : undefined
+          can('admin') ? <Button onClick={() => setPublishing(true)}>게시하기</Button> : undefined
         }
       />
       <Tabs<TabId>
@@ -185,7 +181,9 @@ export function MarketplacePage() {
             if (!e.target.value) setQ('');
           }}
         />
-        <Button type="submit">검색</Button>
+        <Button variant="outline" type="submit">
+          검색
+        </Button>
       </form>
       <ErrorNotice error={listings.error} onRetry={() => void listings.reload()} />
       {listings.loading && !listings.data ? (
@@ -335,15 +333,16 @@ function ListingModal({
           d && (
             <>
               {d.mine && d.status === 'published' && can('admin') && (
-                <Button variant="danger" onClick={() => setWithdrawing(true)}>
+                <Button variant="destructive" onClick={() => setWithdrawing(true)}>
                   게시 철회
                 </Button>
               )}
               <span className="spacer" />
-              <Button onClick={onClose}>닫기</Button>
+              <Button variant="outline" onClick={onClose}>
+                닫기
+              </Button>
               {can('admin') && d.status === 'published' && !result && (
                 <Button
-                  variant="primary"
                   loading={install.pending}
                   disabled={chosen?.signatureValid === false}
                   onClick={() => void doInstall()}
@@ -505,7 +504,7 @@ function InstallResultNotice({
         <span>
           템플릿 v{result.version} 을 가져왔어요. 등록 마법사에서 API Key 를 넣고 연결을 확인하세요.
         </span>
-        <Button size="sm" variant="primary" onClick={() => onUseTemplate(result.template)}>
+        <Button size="sm" onClick={() => onUseTemplate(result.template)}>
           등록 마법사로
         </Button>
       </Notice>
@@ -672,13 +671,10 @@ function PublishModal({
       onClose={onClose}
       footer={
         <>
-          <Button onClick={onClose}>취소</Button>
-          <Button
-            variant="primary"
-            loading={publish.pending}
-            disabled={!canSubmit}
-            onClick={() => void submit()}
-          >
+          <Button variant="outline" onClick={onClose}>
+            취소
+          </Button>
+          <Button loading={publish.pending} disabled={!canSubmit} onClick={() => void submit()}>
             게시
           </Button>
         </>

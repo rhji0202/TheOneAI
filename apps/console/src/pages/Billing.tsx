@@ -8,7 +8,6 @@ import { ApiError } from '../api';
 import { useApi, useAuth } from '../auth';
 import {
   Badge,
-  Button,
   Card,
   type Column,
   DataTable,
@@ -24,6 +23,7 @@ import {
   useQuery,
   useToast,
 } from '../ui';
+import { Button } from '@/components/ui/button';
 
 /* ───────────── 타입 (src/billing/admin/billing-admin.service.ts) ───────────── */
 
@@ -751,6 +751,7 @@ function PricesCard({
         editable ? (
           <>
             <Button
+              variant="outline"
               disabled={!dirty || save.pending}
               onClick={() => {
                 setRows((prices.data ?? []).map(toRow));
@@ -762,12 +763,7 @@ function PricesCard({
             >
               되돌리기
             </Button>
-            <Button
-              variant="primary"
-              loading={save.pending}
-              disabled={!dirty}
-              onClick={() => void submit()}
-            >
+            <Button loading={save.pending} disabled={!dirty} onClick={() => void submit()}>
               저장
             </Button>
           </>
@@ -784,7 +780,7 @@ function PricesCard({
               <span>
                 단가가 없는 모델 {missing.length}개: {missing.map((m) => m.model).join(', ')}
               </span>
-              <Button size="sm" onClick={() => addRows(missing)}>
+              <Button variant="outline" size="sm" onClick={() => addRows(missing)}>
                 줄 추가
               </Button>
             </Notice>
@@ -1004,7 +1000,6 @@ function BudgetCard({ report, onSaved }: { report: UsageReport | undefined; onSa
               </div>
               <div className="row">
                 <Button
-                  variant="primary"
                   loading={save.pending}
                   disabled={invalid || unchanged || !/^[A-Z]{3}$/.test(currency)}
                   onClick={() => void submit(parsed)}
@@ -1012,7 +1007,11 @@ function BudgetCard({ report, onSaved }: { report: UsageReport | undefined; onSa
                   저장
                 </Button>
                 {budget.monthlyBudget !== null && (
-                  <Button disabled={save.pending} onClick={() => void submit(null)}>
+                  <Button
+                    variant="outline"
+                    disabled={save.pending}
+                    onClick={() => void submit(null)}
+                  >
                     한도 풀기
                   </Button>
                 )}

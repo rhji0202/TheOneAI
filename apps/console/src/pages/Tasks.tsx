@@ -5,7 +5,6 @@ import { ACTIVE_STATUSES } from '../../../shared/status';
 import { useApi } from '../auth';
 import {
   Badge,
-  Button,
   Card,
   type Column,
   DataTable,
@@ -21,6 +20,7 @@ import {
   usePaged,
   useQuery,
 } from '../ui';
+import { Button } from '@/components/ui/button';
 
 /* ───────────── 타입 (src/tasks/admin/tasks-admin.service.ts) ───────────── */
 
@@ -360,6 +360,7 @@ export function TasksPage() {
         <div className="spacer" />
         {pollable && <Badge tone="info">10초마다 새로 고침</Badge>}
         <Button
+          variant="outline"
           size="sm"
           onClick={() => void list.reload()}
           loading={list.loading && !!list.items.length}

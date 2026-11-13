@@ -9,7 +9,6 @@ import { ApiError } from '../api';
 import { useApi, useAuth } from '../auth';
 import {
   Badge,
-  Button,
   Card,
   CodeBlock,
   ConfirmModal,
@@ -28,6 +27,7 @@ import {
   useQuery,
   useToast,
 } from '../ui';
+import { Button } from '@/components/ui/button';
 
 /* ───────────── API 타입 (src/widget/admin/widget-configs-admin.service.ts) ───────────── */
 
@@ -498,7 +498,7 @@ export function WidgetSettingsPage() {
           >
             되돌리기
           </Button>
-          <Button variant="primary" loading={save.pending} onClick={() => void save.run()}>
+          <Button loading={save.pending} onClick={() => void save.run()}>
             저장
           </Button>
         </div>
@@ -683,7 +683,7 @@ app.get('/api/theoneai-token', requireLogin, async (req, res) => {
           )}
         </div>
         {canRotate ? (
-          <Button variant="danger" onClick={onRotate}>
+          <Button variant="destructive" onClick={onRotate}>
             Secret 재발급
           </Button>
         ) : (
@@ -725,7 +725,7 @@ function SecretModal({ result, onClose }: { result: RotateResult | null; onClose
       title="새 Widget Secret"
       onClose={() => saved && onClose()}
       footer={
-        <Button variant="primary" disabled={!saved} onClick={onClose}>
+        <Button disabled={!saved} onClick={onClose}>
           닫기
         </Button>
       }
@@ -822,7 +822,7 @@ function OriginsCard({
             }}
           />
         </Field>
-        <Button onClick={add} disabled={!draft.trim()}>
+        <Button variant="outline" onClick={add} disabled={!draft.trim()}>
           추가
         </Button>
       </div>
@@ -1088,7 +1088,7 @@ function BehaviorCard({
               }}
             />
           </Field>
-          <Button onClick={addCustom} disabled={!custom.trim()}>
+          <Button variant="outline" onClick={addCustom} disabled={!custom.trim()}>
             추가
           </Button>
           <Field label="파일 최대 크기" error={issues['behavior.attachments']}>

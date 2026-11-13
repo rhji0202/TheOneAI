@@ -1,5 +1,21 @@
-import { type ReactNode, useState } from 'react';
+import {
+  BotIcon,
+  CreditCardIcon,
+  DatabaseIcon,
+  FileCodeIcon,
+  LayoutDashboardIcon,
+  ListChecksIcon,
+  type LucideIcon,
+  MenuIcon,
+  MessageSquareIcon,
+  PlugIcon,
+  ShieldCheckIcon,
+  StoreIcon,
+} from 'lucide-react';
+import { useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import { ROLE_LABEL } from './api';
 import { useAuth } from './auth';
 import { type Page, ToastProvider, useQuery } from './ui';
@@ -7,43 +23,10 @@ import { type Page, ToastProvider, useQuery } from './ui';
 interface NavItem {
   to: string;
   label: string;
-  icon: ReactNode;
+  icon: LucideIcon;
   end?: boolean;
   badge?: number;
 }
-
-const I = (d: string) => (
-  <svg
-    width="18"
-    height="18"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.8"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    aria-hidden="true"
-  >
-    <path d={d} />
-  </svg>
-);
-
-const ICONS = {
-  dashboard: I('M3 13h8V3H3zM13 21h8V11h-8zM3 21h8v-6H3zM13 3v6h8V3z'),
-  tasks: I('M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01'),
-  agent: I(
-    'M12 3l1.9 4.6L18.5 9l-4.6 1.9L12 15.5l-1.9-4.6L5.5 9l4.6-1.4zM19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z',
-  ),
-  mcp: I('M8 3v4M16 3v4M6 7h12v4a6 6 0 01-12 0zM12 17v4'),
-  skill: I('M4 4h10l6 6v10H4zM14 4v6h6M8 14h8M8 18h5'),
-  approval: I('M12 3l8 3v6c0 4.5-3.4 8.4-8 9-4.6-.6-8-4.5-8-9V6zM8.5 12l2.5 2.5 4.5-5'),
-  memory: I(
-    'M12 4a8 3 0 100 6 8 3 0 000-6zM4 7v10c0 1.7 3.6 3 8 3s8-1.3 8-3V7M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3',
-  ),
-  widget: I('M4 5h16v11H8l-4 4zM8 10h8'),
-  market: I('M4 7h16l-1.5 12h-13zM9 7a3 3 0 016 0'),
-  billing: I('M4 6h16v12H4zM4 10h16M8 15h3'),
-};
 
 export function Layout() {
   const { user, tenantSlug, logout, api } = useAuth();
@@ -61,62 +44,85 @@ export function Layout() {
     {
       title: '운영',
       items: [
-        { to: '/', label: '대시보드', icon: ICONS.dashboard, end: true },
-        { to: '/tasks', label: '작업', icon: ICONS.tasks },
-        { to: '/approvals', label: '승인 · 권한', icon: ICONS.approval, badge: pendingCount },
-        { to: '/memory', label: 'Memory', icon: ICONS.memory },
+        { to: '/', label: '대시보드', icon: LayoutDashboardIcon, end: true },
+        { to: '/tasks', label: '작업', icon: ListChecksIcon },
+        { to: '/approvals', label: '승인 · 권한', icon: ShieldCheckIcon, badge: pendingCount },
+        { to: '/memory', label: 'Memory', icon: DatabaseIcon },
       ],
     },
     {
       title: '구성',
       items: [
-        { to: '/agents', label: 'Agent 설정', icon: ICONS.agent },
-        { to: '/mcp', label: 'MCP 서버', icon: ICONS.mcp },
-        { to: '/skills', label: 'Skill', icon: ICONS.skill },
-        { to: '/widget', label: '위젯 설치', icon: ICONS.widget },
+        { to: '/agents', label: 'Agent 설정', icon: BotIcon },
+        { to: '/mcp', label: 'MCP 서버', icon: PlugIcon },
+        { to: '/skills', label: 'Skill', icon: FileCodeIcon },
+        { to: '/widget', label: '위젯 설치', icon: MessageSquareIcon },
       ],
     },
     {
       title: '워크스페이스',
       items: [
-        { to: '/marketplace', label: '마켓플레이스', icon: ICONS.market },
-        { to: '/billing', label: '사용량 · 비용', icon: ICONS.billing },
+        { to: '/marketplace', label: '마켓플레이스', icon: StoreIcon },
+        { to: '/billing', label: '사용량 · 비용', icon: CreditCardIcon },
       ],
     },
   ];
 
   return (
     <ToastProvider>
-      <div className={menuOpen ? 'shell menu-open' : 'shell'}>
-        <a href="#main" className="skip-link">
+      <div className="grid min-h-screen grid-cols-[232px_minmax(0,1fr)] gap-0 max-[900px]:grid-cols-1">
+        <a
+          href="#main"
+          className="absolute top-2 -left-[999px] z-[100] rounded-lg bg-card px-3 py-2 focus:left-2"
+        >
           본문으로 건너뛰기
         </a>
-        <aside className="sidebar" aria-label="콘솔 메뉴">
-          <div className="sidebar-brand">
-            <span className="brand-mark" aria-hidden="true">
+        <aside
+          aria-label="콘솔 메뉴"
+          className={cn(
+            'sticky top-0 h-screen overflow-y-auto border-r bg-sidebar px-3 py-4 text-sidebar-foreground',
+            'max-[900px]:fixed max-[900px]:left-0 max-[900px]:z-40 max-[900px]:w-[260px] max-[900px]:transition-transform',
+            menuOpen ? 'max-[900px]:shadow-2xl' : 'max-[900px]:-translate-x-full',
+          )}
+        >
+          <div className="flex items-center gap-2.5 px-2 pt-1 pb-4">
+            <span
+              className="inline-grid size-8 place-items-center rounded-[9px] bg-primary font-bold text-primary-foreground"
+              aria-hidden="true"
+            >
               T
             </span>
             <div>
-              <p className="brand-name">TheOneAI</p>
-              <p className="brand-ws">{tenantSlug ?? '워크스페이스'}</p>
+              <p className="font-bold">TheOneAI</p>
+              <p className="text-xs text-muted-foreground">{tenantSlug ?? '워크스페이스'}</p>
             </div>
           </div>
           <nav>
             {sections.map((s) => (
-              <div key={s.title} className="nav-section">
-                <p className="nav-title">{s.title}</p>
+              <div key={s.title} className="mt-3">
+                <p className="px-2.5 py-1.5 text-xs font-semibold tracking-wide text-muted-foreground">
+                  {s.title}
+                </p>
                 {s.items.map((item) => (
                   <NavLink
                     key={item.to}
                     to={item.to}
                     end={item.end}
-                    className={({ isActive }) => (isActive ? 'nav-item active' : 'nav-item')}
+                    className={({ isActive }) =>
+                      cn(
+                        'flex min-h-[38px] items-center gap-2.5 rounded-lg px-2.5 py-2 font-medium text-foreground/75 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+                        isActive && 'bg-sidebar-accent text-primary hover:text-primary',
+                      )
+                    }
                     onClick={() => setMenuOpen(false)}
                   >
-                    {item.icon}
+                    <item.icon className="size-[18px] shrink-0" aria-hidden="true" />
                     <span>{item.label}</span>
                     {item.badge ? (
-                      <span className="nav-badge" aria-label={`대기 ${item.badge}건`}>
+                      <span
+                        className="ml-auto inline-grid h-5 min-w-5 place-items-center rounded-full bg-amber-500 px-1.5 text-xs font-bold text-amber-950"
+                        aria-label={`대기 ${item.badge}건`}
+                      >
                         {item.badge > 99 ? '99+' : item.badge}
                       </span>
                     ) : null}
@@ -126,40 +132,53 @@ export function Layout() {
             ))}
           </nav>
         </aside>
-        <div className="main-col">
-          <header className="topbar">
-            <button
-              type="button"
-              className="menu-btn"
+        <div className="flex min-w-0 flex-col">
+          <header className="sticky top-0 z-10 flex h-14 items-center gap-3 border-b bg-background/90 px-6 backdrop-blur">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="hidden max-[900px]:inline-flex"
               aria-label="메뉴"
               aria-expanded={menuOpen}
               onClick={() => setMenuOpen((v) => !v)}
             >
-              ☰
-            </button>
-            <div className="topbar-spacer" />
+              <MenuIcon className="size-5" />
+            </Button>
+            <div className="flex-1" />
             {user && (
-              <div className="user-chip">
-                <span className="avatar" aria-hidden="true">
+              <div className="flex items-center gap-2.5">
+                <span
+                  className="inline-grid size-8 place-items-center rounded-full bg-muted font-semibold"
+                  aria-hidden="true"
+                >
                   {(user.name || user.email).slice(0, 1).toUpperCase()}
                 </span>
-                <div className="user-text">
-                  <p className="user-name">{user.name || user.email}</p>
-                  <p className="user-role">
+                <div>
+                  <p className="text-sm font-semibold">{user.name || user.email}</p>
+                  <p className="text-xs text-muted-foreground">
                     {ROLE_LABEL[user.role]} · {user.email}
                   </p>
                 </div>
-                <button type="button" className="btn btn-ghost btn-sm" onClick={logout}>
+                <Button variant="ghost" size="sm" onClick={logout}>
                   로그아웃
-                </button>
+                </Button>
               </div>
             )}
           </header>
-          <main id="main" className="content" key={location.pathname.split('/')[1]}>
+          <main
+            id="main"
+            className="mx-auto w-full max-w-[1280px] p-6"
+            key={location.pathname.split('/')[1]}
+          >
             <Outlet />
           </main>
         </div>
-        {menuOpen && <div className="scrim" onClick={() => setMenuOpen(false)} />}
+        {menuOpen && (
+          <div
+            className="fixed inset-0 z-30 bg-black/40 min-[901px]:hidden"
+            onClick={() => setMenuOpen(false)}
+          />
+        )}
       </div>
     </ToastProvider>
   );

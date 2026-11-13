@@ -11,7 +11,6 @@ import { ApiError } from '../api';
 import { useApi, useAuth } from '../auth';
 import {
   Badge,
-  Button,
   Card,
   type Column,
   ConfirmModal,
@@ -36,6 +35,7 @@ import {
   useQuery,
   useToast,
 } from '../ui';
+import { Button } from '@/components/ui/button';
 
 /* ───────────── 타입 (서버 응답) ───────────── */
 
@@ -1024,20 +1024,24 @@ export function McpDetailPage() {
         actions={
           isAdmin ? (
             <>
-              <Button loading={test.pending} onClick={() => void test.run()}>
+              <Button variant="outline" loading={test.pending} onClick={() => void test.run()}>
                 연결 테스트
               </Button>
               {registered && (
-                <Button loading={discover.pending} onClick={() => void discover.run()}>
+                <Button
+                  variant="outline"
+                  loading={discover.pending}
+                  onClick={() => void discover.run()}
+                >
                   다시 탐색
                 </Button>
               )}
               {s.status !== 'disabled' && (
-                <Button variant="danger" onClick={() => setConfirm('disable')}>
+                <Button variant="destructive" onClick={() => setConfirm('disable')}>
                   비활성화
                 </Button>
               )}
-              <Button variant="danger" onClick={() => setConfirm('delete')}>
+              <Button variant="destructive" onClick={() => setConfirm('delete')}>
                 삭제
               </Button>
             </>
@@ -1111,7 +1115,7 @@ export function McpDetailPage() {
             title="연결 정보"
             actions={
               isAdmin ? (
-                <Button size="sm" onClick={() => setEditing(true)}>
+                <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
                   수정
                 </Button>
               ) : undefined
@@ -1449,7 +1453,6 @@ function PendingChangesCard({
       actions={
         can('admin') ? (
           <Button
-            variant="primary"
             loading={approve.pending}
             disabled={selected.size === 0}
             onClick={() => void approve.run()}
@@ -1588,18 +1591,17 @@ function ToolPolicyModal({
       footer={
         editable ? (
           <>
-            <Button onClick={onClose}>취소</Button>
-            <Button
-              variant="primary"
-              loading={save.pending}
-              disabled={!dirty}
-              onClick={() => void save.run()}
-            >
+            <Button variant="outline" onClick={onClose}>
+              취소
+            </Button>
+            <Button loading={save.pending} disabled={!dirty} onClick={() => void save.run()}>
               저장
             </Button>
           </>
         ) : (
-          <Button onClick={onClose}>닫기</Button>
+          <Button variant="outline" onClick={onClose}>
+            닫기
+          </Button>
         )
       }
     >
@@ -1712,9 +1714,10 @@ function ServerEditModal({
       onClose={onClose}
       footer={
         <>
-          <Button onClick={onClose}>취소</Button>
+          <Button variant="outline" onClick={onClose}>
+            취소
+          </Button>
           <Button
-            variant="primary"
             loading={save.pending}
             disabled={Object.keys(body).length === 0}
             onClick={() => void save.run()}

@@ -8,7 +8,12 @@ import {
   useMemo,
   useState,
 } from 'react';
+import { CircleAlertIcon, TriangleAlertIcon } from 'lucide-react';
 import { Navigate, useLocation, useNavigate } from 'react-router';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { AdminApi, type AdminUser, ApiError, atLeast, type MemberRole } from './api';
 
 interface AuthState {
@@ -129,61 +134,77 @@ export function LoginPage() {
   };
 
   return (
-    <main className="login">
-      <form className="login-card" onSubmit={submit} aria-labelledby="login-title">
-        <div className="login-brand">
-          <span className="brand-mark" aria-hidden="true">
+    <main className="grid min-h-screen place-items-center p-4">
+      <form
+        className="flex w-full max-w-[400px] flex-col gap-4 rounded-2xl border bg-card p-7 shadow-xl"
+        onSubmit={submit}
+        aria-labelledby="login-title"
+      >
+        <div className="flex items-center gap-2.5 font-bold">
+          <span
+            className="inline-grid size-8 place-items-center rounded-[9px] bg-primary text-primary-foreground"
+            aria-hidden="true"
+          >
             T
           </span>
           <span>TheOneAI 콘솔</span>
         </div>
-        <h1 id="login-title">로그인</h1>
+        <h1 id="login-title" className="text-xl font-semibold">
+          로그인
+        </h1>
         {state?.expired && !error && (
-          <p className="notice notice-warn" role="status">
-            로그인이 만료됐어요. 다시 로그인해 주세요.
-          </p>
+          <Alert
+            role="status"
+            className="border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200"
+          >
+            <TriangleAlertIcon aria-hidden="true" />
+            <AlertDescription className="text-current">
+              로그인이 만료됐어요. 다시 로그인해 주세요.
+            </AlertDescription>
+          </Alert>
         )}
-        <label className="field">
-          <span className="field-label">워크스페이스</span>
-          <input
-            className="input"
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="login-workspace">워크스페이스</Label>
+          <Input
+            id="login-workspace"
             required
             autoComplete="organization"
             value={tenantSlug}
             onChange={(e) => setTenantSlug(e.target.value)}
             placeholder="예: demo"
           />
-        </label>
-        <label className="field">
-          <span className="field-label">이메일</span>
-          <input
-            className="input"
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="login-email">이메일</Label>
+          <Input
+            id="login-email"
             type="email"
             required
             autoComplete="username"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
           />
-        </label>
-        <label className="field">
-          <span className="field-label">비밀번호</span>
-          <input
-            className="input"
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="login-password">비밀번호</Label>
+          <Input
+            id="login-password"
             type="password"
             required
             autoComplete="current-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
-        </label>
+        </div>
         {error && (
-          <p className="notice notice-error" role="alert">
-            {error}
-          </p>
+          <Alert variant="destructive">
+            <CircleAlertIcon aria-hidden="true" />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         )}
-        <button type="submit" className="btn btn-primary btn-block" disabled={pending}>
+        <Button type="submit" className="w-full" disabled={pending}>
           {pending ? '확인하는 중…' : '로그인'}
-        </button>
+        </Button>
       </form>
     </main>
   );

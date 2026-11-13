@@ -11,7 +11,6 @@ import { ApiError } from '../api';
 import { useApi, useAuth } from '../auth';
 import {
   Badge,
-  Button,
   Card,
   CodeBlock,
   type Column,
@@ -34,6 +33,7 @@ import {
   useQuery,
   useToast,
 } from '../ui';
+import { Button } from '@/components/ui/button';
 import { DiffView, type FieldIssue, issuesOf, type PublishedVersion, registryMessage } from './Mcp';
 
 /* ───────────── 타입 ───────────── */
@@ -267,9 +267,7 @@ export function SkillsPage() {
         description="SKILL.md 기반 업무 절차를 올리고, 공급망 검증 · 버전 · 활성화를 관리합니다. 활성 버전만 새 작업에 쓰여요."
         actions={
           <RoleGate min="admin">
-            <Button variant="primary" onClick={() => setUploading(true)}>
-              + Skill 업로드
-            </Button>
+            <Button onClick={() => setUploading(true)}>+ Skill 업로드</Button>
           </RoleGate>
         }
       />
@@ -394,6 +392,7 @@ function UploadModal({
         result ? (
           <>
             <Button
+              variant="outline"
               onClick={() => {
                 setResult(null);
                 setFile(null);
@@ -401,15 +400,14 @@ function UploadModal({
             >
               다른 파일 올리기
             </Button>
-            <Button variant="primary" onClick={() => onDone(result)}>
-              버전 상세 보기
-            </Button>
+            <Button onClick={() => onDone(result)}>버전 상세 보기</Button>
           </>
         ) : (
           <>
-            <Button onClick={onClose}>취소</Button>
+            <Button variant="outline" onClick={onClose}>
+              취소
+            </Button>
             <Button
-              variant="primary"
               loading={upload.pending}
               disabled={!file || tooBig || notZip}
               onClick={() => void submit()}
@@ -628,10 +626,12 @@ export function SkillDetailPage() {
           can('admin') ? (
             <>
               {s.source !== 'marketplace' && (
-                <Button onClick={() => setUploading(true)}>새 버전 업로드</Button>
+                <Button variant="outline" onClick={() => setUploading(true)}>
+                  새 버전 업로드
+                </Button>
               )}
               {s.status === 'active' && (
-                <Button variant="danger" onClick={() => setConfirm('disable')}>
+                <Button variant="destructive" onClick={() => setConfirm('disable')}>
                   비활성화
                 </Button>
               )}
@@ -693,7 +693,6 @@ export function SkillDetailPage() {
                         <span className="muted small">검증을 통과해야 활성화할 수 있어요</span>
                       )}
                       <Button
-                        variant="primary"
                         disabled={v.verificationStatus !== 'passed'}
                         onClick={() => setConfirm('activate')}
                       >
@@ -703,9 +702,7 @@ export function SkillDetailPage() {
                   )}
                   {can('admin') && v.active && s.status !== 'active' && (
                     <div className="version-bar-actions">
-                      <Button variant="primary" onClick={() => setConfirm('activate')}>
-                        다시 활성화
-                      </Button>
+                      <Button onClick={() => setConfirm('activate')}>다시 활성화</Button>
                     </div>
                   )}
                 </div>

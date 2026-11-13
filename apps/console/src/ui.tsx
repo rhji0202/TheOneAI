@@ -1,21 +1,67 @@
 /**
- * 콘솔 공용 UI — 데이터 훅(useQuery · useAction · usePaged) 과 기본 컴포넌트.
- * 페이지는 이 파일의 컴포넌트 + console.css 토큰만 써서 같은 모양을 유지한다.
+ * 콘솔 공용 UI — 데이터 훅(useQuery · useAction · usePaged) 과 shadcn/ui 위에 만든 화면 조각.
+ * 단순한 버튼 · 입력 · 표 조각은 페이지가 '@/components/ui/*' 를 바로 쓴다.
  */
 import {
+  ArrowDownIcon,
+  ArrowLeftIcon,
+  ArrowUpIcon,
+  CheckIcon,
+  CircleAlertIcon,
+  CircleCheckIcon,
+  CopyIcon,
+  InfoIcon,
+  Loader2Icon,
+  MinusIcon,
+  SearchIcon,
+  TriangleAlertIcon,
+} from 'lucide-react';
+import {
   cloneElement,
-  createContext,
   isValidElement,
   type ReactElement,
   type ReactNode,
   useCallback,
-  useContext,
   useEffect,
   useId,
   useRef,
   useState,
 } from 'react';
 import { Link } from 'react-router';
+import { toast } from 'sonner';
+import { Alert } from '@/components/ui/alert';
+import { Badge as UiBadge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  Card as UiCard,
+} from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { NativeSelect } from '@/components/ui/native-select';
+import { Switch } from '@/components/ui/switch';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { Tabs as UiTabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Textarea } from '@/components/ui/textarea';
+import { Toaster } from '@/components/ui/sonner';
+import { cn } from '@/lib/utils';
 import { formatDateTime, formatRelative } from '../../shared/format';
 import { statusOf } from '../../shared/status';
 import type { MemberRole } from './api';
@@ -152,39 +198,39 @@ export function useAction<A extends unknown[], R>(fn: (...args: A) => Promise<R>
   return { run, pending, error, reset: () => setError(null) };
 }
 
-/* ───────────── 토스트 ───────────── */
+/* ───────────── 색 · 토스트 ───────────── */
 
-type Tone = 'neutral' | 'info' | 'success' | 'warning' | 'danger' | 'purple';
-interface ToastItem {
-  id: number;
-  message: string;
-  tone: Tone;
+export type Tone = 'neutral' | 'info' | 'success' | 'warning' | 'danger' | 'purple';
+
+/** 상태 색 — 배지 · 강조 칩이 같은 색을 쓰도록 한 곳에 둔다 */
+export const TONE_CLASS: Record<Tone, string> = {
+  neutral: 'bg-muted text-muted-foreground',
+  info: 'bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300',
+  success: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300',
+  warning: 'bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-300',
+  danger: 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300',
+  purple: 'bg-violet-50 text-violet-700 dark:bg-violet-950 dark:text-violet-300',
+};
+
+function notify(message: string, tone: Tone = 'success') {
+  if (tone === 'success') toast.success(message);
+  else if (tone === 'danger') toast.error(message);
+  else if (tone === 'warning') toast.warning(message);
+  else if (tone === 'info') toast.info(message);
+  else toast(message);
 }
-const ToastContext = createContext<(message: string, tone?: Tone) => void>(() => undefined);
 
 export function ToastProvider({ children }: { children: ReactNode }) {
-  const [items, setItems] = useState<ToastItem[]>([]);
-  const push = useCallback((message: string, tone: Tone = 'success') => {
-    const id = Date.now() + Math.random();
-    setItems((prev) => [...prev.slice(-3), { id, message, tone }]);
-    setTimeout(() => setItems((prev) => prev.filter((t) => t.id !== id)), 4000);
-  }, []);
   return (
-    <ToastContext.Provider value={push}>
+    <>
       {children}
-      <div className="toasts" role="status" aria-live="polite">
-        {items.map((t) => (
-          <div key={t.id} className={`toast toast-${t.tone}`}>
-            {t.message}
-          </div>
-        ))}
-      </div>
-    </ToastContext.Provider>
+      <Toaster position="bottom-right" />
+    </>
   );
 }
 
 export function useToast() {
-  return useContext(ToastContext);
+  return notify;
 }
 
 /* ───────────── 레이아웃 조각 ───────────── */
@@ -203,18 +249,26 @@ export function PageHeader({
   meta?: ReactNode;
 }) {
   return (
-    <header className="page-head">
-      <div className="page-head-main">
+    <header className="mb-5 flex flex-wrap items-start justify-between gap-4">
+      <div className="min-w-0">
         {back && (
-          <Link to={back.to} className="back-link">
-            ← {back.label}
+          <Link
+            to={back.to}
+            className="mb-1.5 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+          >
+            <ArrowLeftIcon className="size-4" aria-hidden="true" />
+            {back.label}
           </Link>
         )}
-        <h1 className="page-title">{title}</h1>
-        {meta && <div className="page-meta">{meta}</div>}
-        {description && <p className="page-desc">{description}</p>}
+        <h1 className="text-2xl font-semibold tracking-tight break-words">{title}</h1>
+        {meta && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+            {meta}
+          </div>
+        )}
+        {description && <p className="mt-1 text-muted-foreground">{description}</p>}
       </div>
-      {actions && <div className="page-actions">{actions}</div>}
+      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </header>
   );
 }
@@ -236,58 +290,29 @@ export function Card({
   flush?: boolean;
 }) {
   return (
-    <section className={`card${className ? ` ${className}` : ''}`}>
+    <UiCard className={cn('mb-4 min-w-0 gap-0 py-0', className)}>
       {(title || actions) && (
-        <div className="card-head">
-          <div>
-            {title && <h2 className="card-title">{title}</h2>}
-            {description && <p className="card-desc">{description}</p>}
-          </div>
-          {actions && <div className="card-actions">{actions}</div>}
-        </div>
+        <CardHeader className="border-b px-4 py-3.5 [.border-b]:pb-3.5">
+          {title && <h2 className="leading-snug font-semibold">{title}</h2>}
+          {description && <CardDescription>{description}</CardDescription>}
+          {actions && <CardAction className="flex items-center gap-2">{actions}</CardAction>}
+        </CardHeader>
       )}
-      <div className={flush ? 'card-body flush' : 'card-body'}>{children}</div>
-    </section>
-  );
-}
-
-export function Button({
-  variant = 'secondary',
-  size,
-  loading,
-  children,
-  className,
-  type = 'button',
-  ...rest
-}: {
-  variant?: 'primary' | 'secondary' | 'danger' | 'ghost';
-  size?: 'sm';
-  loading?: boolean;
-} & React.ButtonHTMLAttributes<HTMLButtonElement>) {
-  return (
-    <button
-      type={type}
-      className={`btn btn-${variant}${size ? ` btn-${size}` : ''}${className ? ` ${className}` : ''}`}
-      disabled={rest.disabled || loading}
-      aria-busy={loading || undefined}
-      {...rest}
-    >
-      {loading && <span className="spinner" aria-hidden="true" />}
-      {children}
-    </button>
+      <CardContent className={flush ? 'p-0' : 'p-4'}>{children}</CardContent>
+    </UiCard>
   );
 }
 
 export function Badge({ tone = 'neutral', children }: { tone?: Tone; children: ReactNode }) {
-  return <span className={`badge badge-${tone}`}>{children}</span>;
+  return <UiBadge className={TONE_CLASS[tone]}>{children}</UiBadge>;
 }
 
 export function StatusBadge({ status }: { status: string }) {
   const s = statusOf(status);
   return (
-    <span className="badge" style={{ background: s.bg, color: s.fg }}>
+    <UiBadge style={{ background: s.bg, color: s.fg }} className="font-semibold">
       {s.label}
-    </span>
+    </UiBadge>
   );
 }
 
@@ -303,21 +328,24 @@ export function Tabs<T extends string>({
   label?: string;
 }) {
   return (
-    <div className="tabs" role="tablist" aria-label={label}>
-      {tabs.map((t) => (
-        <button
-          key={t.id}
-          type="button"
-          role="tab"
-          aria-selected={value === t.id}
-          className={value === t.id ? 'tab active' : 'tab'}
-          onClick={() => onChange(t.id)}
-        >
-          {t.label}
-          {t.count !== undefined && <span className="tab-count">{t.count}</span>}
-        </button>
-      ))}
-    </div>
+    <UiTabs value={value} onValueChange={(v) => onChange(v as T)} className="mb-4">
+      <TabsList
+        variant="line"
+        aria-label={label}
+        className="w-full justify-start overflow-x-auto border-b"
+      >
+        {tabs.map((t) => (
+          <TabsTrigger key={t.id} value={t.id} className="flex-none px-3">
+            {t.label}
+            {t.count !== undefined && (
+              <span className="rounded-full bg-muted px-1.5 text-xs text-muted-foreground tabular-nums">
+                {t.count}
+              </span>
+            )}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+    </UiTabs>
   );
 }
 
@@ -347,22 +375,26 @@ export function DataTable<T>({
   label?: string;
 }) {
   return (
-    <div className="table-wrap">
-      <table className="table" aria-label={label}>
-        <thead>
-          <tr>
+    <div>
+      <Table aria-label={label}>
+        <TableHeader className="bg-muted/50">
+          <TableRow>
             {columns.map((c) => (
-              <th key={c.key} style={{ width: c.width, textAlign: c.align }}>
+              <TableHead
+                key={c.key}
+                style={{ width: c.width, textAlign: c.align }}
+                className="px-3.5 text-xs text-muted-foreground"
+              >
                 {c.header}
-              </th>
+              </TableHead>
             ))}
-          </tr>
-        </thead>
-        <tbody>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {rows.map((row) => (
-            <tr
+            <TableRow
               key={rowKey(row)}
-              className={onRowClick ? 'clickable' : undefined}
+              className={onRowClick ? 'cursor-pointer' : undefined}
               onClick={onRowClick ? () => onRowClick(row) : undefined}
               onKeyDown={
                 onRowClick
@@ -374,16 +406,22 @@ export function DataTable<T>({
               tabIndex={onRowClick ? 0 : undefined}
             >
               {columns.map((c) => (
-                <td key={c.key} style={{ textAlign: c.align }}>
+                <TableCell key={c.key} style={{ textAlign: c.align }} className="px-3.5 py-2.5">
                   {c.render(row)}
-                </td>
+                </TableCell>
               ))}
-            </tr>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
       {rows.length === 0 &&
-        (loading ? <Loading /> : <div className="table-empty">{empty ?? '항목이 없어요'}</div>)}
+        (loading ? (
+          <Loading />
+        ) : (
+          <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+            {empty ?? '항목이 없어요'}
+          </div>
+        ))}
     </div>
   );
 }
@@ -399,8 +437,8 @@ export function MoreButton({
 }) {
   if (!hasMore) return null;
   return (
-    <div className="more">
-      <Button size="sm" loading={loading} onClick={onClick}>
+    <div className="flex justify-center p-3">
+      <Button variant="outline" size="sm" loading={loading} onClick={onClick}>
         더 보기
       </Button>
     </div>
@@ -409,9 +447,9 @@ export function MoreButton({
 
 export function Empty({ title, children }: { title: ReactNode; children?: ReactNode }) {
   return (
-    <div className="empty">
-      <p className="empty-title">{title}</p>
-      {children && <div className="empty-body">{children}</div>}
+    <div className="px-4 py-10 text-center text-muted-foreground">
+      <p className="font-semibold text-foreground">{title}</p>
+      {children && <div className="mt-1.5 text-sm">{children}</div>}
     </div>
   );
 }
@@ -419,16 +457,43 @@ export function Empty({ title, children }: { title: ReactNode; children?: ReactN
 export function ErrorNotice({ error, onRetry }: { error: Error | null; onRetry?: () => void }) {
   if (!error) return null;
   return (
-    <div className="notice notice-error" role="alert">
-      <span>{error.message}</span>
+    <Alert variant="destructive" className="mb-3 flex items-center gap-3 border-destructive/30">
+      <CircleAlertIcon className="size-4 shrink-0" aria-hidden="true" />
+      <span className="flex-1">{error.message}</span>
       {onRetry && (
         <Button size="sm" variant="ghost" onClick={onRetry}>
           다시 시도
         </Button>
       )}
-    </div>
+    </Alert>
   );
 }
+
+const NOTICE: Record<
+  'info' | 'warn' | 'error' | 'success',
+  { icon: typeof InfoIcon; className: string }
+> = {
+  info: {
+    icon: InfoIcon,
+    className:
+      'border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-200',
+  },
+  warn: {
+    icon: TriangleAlertIcon,
+    className:
+      'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200',
+  },
+  error: {
+    icon: CircleAlertIcon,
+    className:
+      'border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200',
+  },
+  success: {
+    icon: CircleCheckIcon,
+    className:
+      'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200',
+  },
+};
 
 export function Notice({
   tone = 'info',
@@ -437,19 +502,31 @@ export function Notice({
   tone?: 'info' | 'warn' | 'error' | 'success';
   children: ReactNode;
 }) {
-  return <div className={`notice notice-${tone}`}>{children}</div>;
+  const { icon: Icon, className: toneClass } = NOTICE[tone];
+  return (
+    <Alert
+      role={undefined}
+      className={cn('mb-3 flex items-start gap-2.5 [&>svg]:translate-y-0.5', toneClass)}
+    >
+      <Icon className="size-4 shrink-0" aria-hidden="true" />
+      <div className="min-w-0 flex-1">{children}</div>
+    </Alert>
+  );
 }
 
 export function Loading({ label = '불러오는 중…' }: { label?: string }) {
   return (
-    <div className="loading" role="status">
-      <span className="spinner" aria-hidden="true" />
+    <div
+      className="flex items-center justify-center gap-2 p-8 text-sm text-muted-foreground"
+      role="status"
+    >
+      <Loader2Icon className="size-4 animate-spin" aria-hidden="true" />
       {label}
     </div>
   );
 }
 
-const LABELABLE = new Set(['input', 'select', 'textarea']);
+const LABELABLE = new Set<unknown>(['input', 'select', 'textarea', Input, Textarea, NativeSelect]);
 
 /**
  * 폼 칸 — 입력 요소 하나면 label[for] 로 잇고 도움말은 aria-describedby 로 (접근성 이름에 도움말이 섞이지 않게).
@@ -471,35 +548,31 @@ export function Field({
   const id = useId();
   const noteId = `${id}-note`;
   const note = error ? (
-    <span id={noteId} className="field-error">
+    <span id={noteId} className="text-xs text-destructive">
       {error}
     </span>
   ) : hint ? (
-    <span id={noteId} className="field-hint">
+    <span id={noteId} className="text-xs text-muted-foreground">
       {hint}
     </span>
   ) : null;
   const labelText = (
     <>
       {label}
-      {required && <span className="req"> *</span>}
+      {required && <span className="text-destructive"> *</span>}
     </>
   );
-  if (
-    isValidElement(children) &&
-    typeof children.type === 'string' &&
-    LABELABLE.has(children.type)
-  ) {
+  if (isValidElement(children) && LABELABLE.has(children.type)) {
     const control = children as ReactElement<Record<string, unknown>>;
     const controlId = (control.props.id as string | undefined) ?? `${id}-control`;
     const describedBy = [control.props['aria-describedby'], note ? noteId : null]
       .filter(Boolean)
       .join(' ');
     return (
-      <div className="field">
-        <label className="field-label" htmlFor={controlId}>
+      <div className="mb-4 flex flex-col gap-1.5">
+        <Label htmlFor={controlId} className="text-muted-foreground">
           {labelText}
-        </label>
+        </Label>
         {cloneElement(control, {
           id: controlId,
           'aria-describedby': describedBy || undefined,
@@ -510,9 +583,9 @@ export function Field({
     );
   }
   return (
-    <div className="field">
-      <label className="field-wrap">
-        <span className="field-label">{labelText}</span>
+    <div className="mb-4 flex flex-col gap-1.5">
+      <label className="flex flex-col gap-1.5">
+        <span className="text-sm font-medium text-muted-foreground">{labelText}</span>
         {children}
       </label>
       {note}
@@ -531,18 +604,14 @@ export function Toggle({
   label: ReactNode;
   disabled?: boolean;
 }) {
+  const id = useId();
   return (
-    <label className={`toggle${disabled ? ' disabled' : ''}`}>
-      <input
-        type="checkbox"
-        role="switch"
-        checked={checked}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.checked)}
-      />
-      <span className="toggle-track" aria-hidden="true" />
-      <span>{label}</span>
-    </label>
+    <div className={cn('inline-flex min-h-8 items-center gap-2.5', disabled && 'opacity-55')}>
+      <Switch id={id} checked={checked} disabled={disabled} onCheckedChange={onChange} />
+      <Label htmlFor={id} className="font-normal">
+        {label}
+      </Label>
+    </div>
   );
 }
 
@@ -561,45 +630,22 @@ export function Modal({
   footer?: ReactNode;
   wide?: boolean;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const titleId = useId();
-  useEffect(() => {
-    if (!open) return;
-    const prev = document.activeElement as HTMLElement | null;
-    const first = ref.current?.querySelector<HTMLElement>(
-      'input, textarea, select, button:not(.modal-close)',
-    );
-    (first ?? ref.current)?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      prev?.focus?.();
-    };
-  }, [open, onClose]);
-  if (!open) return null;
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div
-        ref={ref}
-        className={wide ? 'modal wide' : 'modal'}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        tabIndex={-1}
+    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent
+        aria-describedby={undefined}
+        className={cn(
+          'flex max-h-[calc(100vh-2rem)] flex-col gap-0 p-0',
+          wide ? 'sm:max-w-[880px]' : 'sm:max-w-[520px]',
+        )}
       >
-        <div className="modal-head">
-          <h2 id={titleId}>{title}</h2>
-          <button type="button" className="modal-close" aria-label="닫기" onClick={onClose}>
-            ×
-          </button>
-        </div>
-        <div className="modal-body">{children}</div>
-        {footer && <div className="modal-foot">{footer}</div>}
-      </div>
-    </div>
+        <DialogHeader className="px-5 pt-4 pb-3">
+          <DialogTitle>{title}</DialogTitle>
+        </DialogHeader>
+        <div className="overflow-y-auto px-5 pt-1 pb-4">{children}</div>
+        {footer && <DialogFooter className="border-t px-5 py-3">{footer}</DialogFooter>}
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -640,9 +686,11 @@ export function ConfirmModal({
       onClose={onClose}
       footer={
         <>
-          <Button onClick={onClose}>취소</Button>
+          <Button variant="outline" onClick={onClose}>
+            취소
+          </Button>
           <Button
-            variant={danger ? 'danger' : 'primary'}
+            variant={danger ? 'destructive' : 'default'}
             loading={pending}
             disabled={requireReason && !reason.trim()}
             onClick={() => onConfirm(reason.trim())}
@@ -655,12 +703,7 @@ export function ConfirmModal({
       {body}
       {requireReason && (
         <Field label={reasonLabel} required>
-          <textarea
-            className="input"
-            rows={3}
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-          />
+          <Textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} />
         </Field>
       )}
       <ErrorNotice error={error ?? null} />
@@ -670,11 +713,14 @@ export function ConfirmModal({
 
 export function KeyValue({ items }: { items: [ReactNode, ReactNode][] }) {
   return (
-    <dl className="kv">
+    <dl className="m-0 grid gap-0">
       {items.map(([k, v], i) => (
-        <div key={i}>
-          <dt>{k}</dt>
-          <dd>{v ?? '—'}</dd>
+        <div
+          key={i}
+          className="grid grid-cols-[140px_minmax(0,1fr)] gap-3 border-b py-2 last:border-b-0"
+        >
+          <dt className="text-sm text-muted-foreground">{k}</dt>
+          <dd className="m-0 min-w-0 break-words">{v ?? '—'}</dd>
         </div>
       ))}
     </dl>
@@ -699,26 +745,41 @@ export function Kpi({
 }) {
   const good =
     delta && delta.direction !== 'flat' ? (delta.direction === 'up') === goodWhenUp : null;
+  const DeltaIcon =
+    delta?.direction === 'up'
+      ? ArrowUpIcon
+      : delta?.direction === 'down'
+        ? ArrowDownIcon
+        : MinusIcon;
   return (
-    <div className="kpi">
-      <p className="kpi-label">{label}</p>
-      <p className="kpi-value">{value}</p>
-      <div className="kpi-foot">
+    <UiCard className="min-w-0 gap-1 px-4 py-3.5">
+      <p className="text-sm text-muted-foreground">{label}</p>
+      <p className="text-2xl font-semibold tracking-tight tabular-nums">{value}</p>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
         {delta && (
-          <span className={`kpi-delta ${good === null ? 'flat' : good ? 'good' : 'bad'}`}>
-            {delta.direction === 'up' ? '▲' : delta.direction === 'down' ? '▼' : '–'} {delta.text}
+          <span
+            className={cn(
+              'inline-flex items-center gap-0.5 font-semibold',
+              good === null
+                ? 'text-muted-foreground'
+                : good
+                  ? 'text-emerald-600 dark:text-emerald-400'
+                  : 'text-red-600 dark:text-red-400',
+            )}
+          >
+            <DeltaIcon className="size-3" aria-hidden="true" /> {delta.text}
           </span>
         )}
-        {target && <span className="kpi-target">{target}</span>}
-        {hint && <span className="kpi-hint">{hint}</span>}
+        {target && <span>{target}</span>}
+        {hint && <span>{hint}</span>}
       </div>
-    </div>
+    </UiCard>
   );
 }
 
 export function Mono({ children, title }: { children: ReactNode; title?: string }) {
   return (
-    <code className="mono" title={title}>
+    <code className="rounded bg-muted px-1.5 py-px font-mono text-[12.5px] break-all" title={title}>
       {children}
     </code>
   );
@@ -731,12 +792,12 @@ export function ShortId({ id }: { id: string }) {
 
 export function CodeBlock({ code, label }: { code: string; label?: string }) {
   return (
-    <div className="code-block">
-      {label && <div className="code-label">{label}</div>}
-      <pre>
+    <div className="relative overflow-hidden rounded-lg border bg-muted/60">
+      {label && <div className="border-b px-3 py-1.5 text-xs text-muted-foreground">{label}</div>}
+      <pre className="m-0 max-h-[420px] overflow-auto p-3 font-mono text-[12.5px] break-words whitespace-pre-wrap">
         <code>{code}</code>
       </pre>
-      <CopyButton text={code} />
+      <CopyButton text={code} className="absolute top-1.5 right-1.5" />
     </div>
   );
 }
@@ -745,12 +806,21 @@ export function Json({ value }: { value: unknown }) {
   return <CodeBlock code={JSON.stringify(value, null, 2) ?? 'null'} />;
 }
 
-export function CopyButton({ text, label = '복사' }: { text: string; label?: string }) {
+export function CopyButton({
+  text,
+  label = '복사',
+  className,
+}: {
+  text: string;
+  label?: string;
+  className?: string;
+}) {
   const [done, setDone] = useState(false);
   return (
-    <button
-      type="button"
-      className="copy-btn"
+    <Button
+      variant="outline"
+      size="xs"
+      className={cn('bg-background', className)}
       onClick={() => {
         void navigator.clipboard?.writeText(text).then(() => {
           setDone(true);
@@ -758,13 +828,14 @@ export function CopyButton({ text, label = '복사' }: { text: string; label?: s
         });
       }}
     >
+      {done ? <CheckIcon aria-hidden="true" /> : <CopyIcon aria-hidden="true" />}
       {done ? '복사됨' : label}
-    </button>
+    </Button>
   );
 }
 
 export function Time({ iso, absolute }: { iso: string | null | undefined; absolute?: boolean }) {
-  if (!iso) return <span className="muted">—</span>;
+  if (!iso) return <span className="text-muted-foreground">—</span>;
   return (
     <time dateTime={iso} title={formatDateTime(iso)}>
       {absolute ? formatDateTime(iso) : formatRelative(iso)}
@@ -798,19 +869,25 @@ export function SearchInput({
   label: string;
 }) {
   return (
-    <input
-      type="search"
-      className="input search"
-      aria-label={label}
-      placeholder={placeholder}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-    />
+    <div className="relative w-full max-w-xs">
+      <SearchIcon
+        className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
+        aria-hidden="true"
+      />
+      <Input
+        type="search"
+        className="pl-8"
+        aria-label={label}
+        placeholder={placeholder}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </div>
   );
 }
 
 export function Toolbar({ children }: { children: ReactNode }) {
-  return <div className="toolbar">{children}</div>;
+  return <div className="mb-3 flex flex-wrap items-center gap-2">{children}</div>;
 }
 
 /** 위젯 사용자는 가명으로만 표시 (화면 설계 공통 규칙) */

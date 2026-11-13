@@ -10,7 +10,6 @@ import { LEVEL } from '../../../shared/status';
 import { ApiError } from '../api';
 import { useApi, useAuth } from '../auth';
 import {
-  Button,
   Card,
   ConfirmModal,
   Empty,
@@ -25,6 +24,7 @@ import {
   useAction,
   useToast,
 } from '../ui';
+import { Button } from '@/components/ui/button';
 import {
   ApiErrorNotice,
   APPROVAL_MODES,
@@ -676,7 +676,7 @@ function ConnectionStep({
           나가기
         </Link>
         <span className="spacer" />
-        <Button type="submit" variant="primary" loading={save.pending}>
+        <Button type="submit" loading={save.pending}>
           {server ? '저장하고 연결 테스트' : '저장하고 연결 테스트'}
         </Button>
       </div>
@@ -723,7 +723,7 @@ function TestStep({
           </>
         }
         actions={
-          <Button size="sm" loading={run.pending} onClick={() => void start()}>
+          <Button variant="outline" size="sm" loading={run.pending} onClick={() => void start()}>
             다시 테스트
           </Button>
         }
@@ -748,13 +748,11 @@ function TestStep({
         ) : null}
       </Card>
       <div className="wizard-actions">
-        <Button onClick={onBack}>← 연결 정보 수정</Button>
+        <Button variant="outline" onClick={onBack}>
+          ← 연결 정보 수정
+        </Button>
         <span className="spacer" />
-        <Button
-          variant="primary"
-          disabled={result?.handshake !== 'ok' || run.pending}
-          onClick={onNext}
-        >
+        <Button disabled={result?.handshake !== 'ok' || run.pending} onClick={onNext}>
           Tool 탐색하기 →
         </Button>
       </div>
@@ -829,9 +827,13 @@ function DiscoverStep({
           <ApiErrorNotice error={discover.error} />
           {!candidates && (
             <div className="wizard-actions">
-              <Button onClick={onBack}>← 연결 테스트</Button>
+              <Button variant="outline" onClick={onBack}>
+                ← 연결 테스트
+              </Button>
               <span className="spacer" />
-              <Button onClick={() => void run()}>다시 탐색</Button>
+              <Button variant="outline" onClick={() => void run()}>
+                다시 탐색
+              </Button>
             </div>
           )}
         </>
@@ -861,7 +863,12 @@ function DiscoverStep({
                 >
                   권장대로 선택
                 </Button>
-                <Button size="sm" loading={discover.pending} onClick={() => void run()}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  loading={discover.pending}
+                  onClick={() => void run()}
+                >
                   다시 탐색
                 </Button>
               </>
@@ -988,11 +995,12 @@ function DiscoverStep({
           </Card>
           <ApiErrorNotice error={select.error} />
           <div className="wizard-actions">
-            <Button onClick={onBack}>← 연결 테스트</Button>
+            <Button variant="outline" onClick={onBack}>
+              ← 연결 테스트
+            </Button>
             <span className="spacer" />
             <span className="muted small">{included.length}개 Tool 포함</span>
             <Button
-              variant="primary"
               loading={select.pending}
               disabled={included.length === 0}
               onClick={() =>
@@ -1132,10 +1140,11 @@ function RegisterStep({
       </div>
       <ApiErrorNotice error={register.error} />
       <div className="wizard-actions">
-        <Button onClick={onBack}>← Tool 선택</Button>
+        <Button variant="outline" onClick={onBack}>
+          ← Tool 선택
+        </Button>
         <span className="spacer" />
         <Button
-          variant="primary"
           loading={register.pending}
           disabled={included.length === 0}
           onClick={() =>

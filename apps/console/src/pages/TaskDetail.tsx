@@ -6,7 +6,6 @@ import { ApiError } from '../api';
 import { useApi, useAuth } from '../auth';
 import {
   Badge,
-  Button,
   Card,
   CopyButton,
   Empty,
@@ -27,6 +26,7 @@ import {
   useQuery,
   useToast,
 } from '../ui';
+import { Button } from '@/components/ui/button';
 import { type AdminTaskRow, failureLabel, formatElapsed, isLive, Progress } from './Tasks';
 
 /* ───────────── 타입 (src/tasks/admin/tasks-admin.service.ts · trace / step) ───────────── */
@@ -326,15 +326,15 @@ export function TaskDetailPage() {
               대화 보기
             </Link>
             {operator && PAUSABLE.includes(task.status) && (
-              <Button onClick={() => setControl('pause')}>일시정지</Button>
-            )}
-            {operator && RESUMABLE.includes(task.status) && (
-              <Button variant="primary" onClick={() => setControl('resume')}>
-                재개
+              <Button variant="outline" onClick={() => setControl('pause')}>
+                일시정지
               </Button>
             )}
+            {operator && RESUMABLE.includes(task.status) && (
+              <Button onClick={() => setControl('resume')}>재개</Button>
+            )}
             {operator && CANCELLABLE.includes(task.status) && (
-              <Button variant="danger" onClick={() => setControl('cancel')}>
+              <Button variant="destructive" onClick={() => setControl('cancel')}>
                 중지
               </Button>
             )}
@@ -695,7 +695,7 @@ function ArtifactsCard({ artifacts }: { artifacts: TraceResponse['artifacts'] })
                 · {a.mimeType}
               </span>
             </div>
-            <Button size="sm" onClick={() => void download.run(a)}>
+            <Button variant="outline" size="sm" onClick={() => void download.run(a)}>
               다운로드
             </Button>
           </li>
@@ -990,9 +990,11 @@ function ControlModal({
       title={title}
       footer={
         <>
-          <Button onClick={onClose}>닫기</Button>
+          <Button variant="outline" onClick={onClose}>
+            닫기
+          </Button>
           <Button
-            variant={kind === 'cancel' ? 'danger' : 'primary'}
+            variant={kind === 'cancel' ? 'destructive' : 'default'}
             loading={action.pending}
             disabled={kind === 'resume' && mode === 'checkpoint' && !fromStepId}
             onClick={() => void submit()}

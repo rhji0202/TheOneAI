@@ -9,7 +9,6 @@ import { formatDateTime, formatPercent } from '../../../shared/format';
 import { useApi, useAuth } from '../auth';
 import {
   Badge,
-  Button,
   Card,
   type Column,
   ConfirmModal,
@@ -33,6 +32,7 @@ import {
   useQuery,
   useToast,
 } from '../ui';
+import { Button } from '@/components/ui/button';
 
 /* ───────────── 타입 (src/memory/admin/memories-admin.service.ts) ───────────── */
 
@@ -231,7 +231,7 @@ export function MemoryPage() {
               키워드
             </button>
           </div>
-          <Button type="submit" variant="primary" disabled={!text.trim() || !agentId}>
+          <Button type="submit" disabled={!text.trim() || !agentId}>
             검색
           </Button>
         </form>
@@ -537,12 +537,13 @@ function MemoryDetail({
           <>
             {admin && !editing && (
               <>
-                <Button variant="danger" onClick={() => setConfirmDelete(true)}>
+                <Button variant="destructive" onClick={() => setConfirmDelete(true)}>
                   삭제
                 </Button>
                 <span className="spacer" />
                 {m.status === 'quarantined' && (
                   <Button
+                    variant="outline"
                     loading={release.pending}
                     onClick={() =>
                       void release
@@ -554,6 +555,7 @@ function MemoryDetail({
                   </Button>
                 )}
                 <Button
+                  variant="outline"
                   loading={pin.pending}
                   onClick={() =>
                     void pin
@@ -565,14 +567,13 @@ function MemoryDetail({
                 >
                   {m.pinned ? '고정 해제' : '고정'}
                 </Button>
-                <Button variant="primary" onClick={() => setEditing(true)}>
-                  편집
-                </Button>
+                <Button onClick={() => setEditing(true)}>편집</Button>
               </>
             )}
             {admin && editing && (
               <>
                 <Button
+                  variant="outline"
                   onClick={() => {
                     setEditing(false);
                     setTitle(m.title ?? '');
@@ -583,7 +584,6 @@ function MemoryDetail({
                   취소
                 </Button>
                 <Button
-                  variant="primary"
                   loading={update.pending}
                   disabled={!content.trim()}
                   onClick={() => void saveEdit()}
@@ -592,7 +592,11 @@ function MemoryDetail({
                 </Button>
               </>
             )}
-            {!admin && <Button onClick={onClose}>닫기</Button>}
+            {!admin && (
+              <Button variant="outline" onClick={onClose}>
+                닫기
+              </Button>
+            )}
           </>
         }
       >
@@ -773,9 +777,11 @@ function EraseUserModal({
       onClose={onClose}
       footer={
         <>
-          <Button onClick={onClose}>취소</Button>
+          <Button variant="outline" onClick={onClose}>
+            취소
+          </Button>
           <Button
-            variant="danger"
+            variant="destructive"
             loading={erase.pending}
             disabled={typed.trim() !== name}
             onClick={() =>
