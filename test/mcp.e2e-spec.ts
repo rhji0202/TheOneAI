@@ -89,8 +89,7 @@ const toolEvents = (events: SseEvent[], type: string) =>
 const requestsFor = (tag: string): RecordedRequest[] =>
   ctx.llm.requests.filter((r) => r.body.messages.some((m) => (m.content ?? '').includes(tag)));
 
-const firstWork = (tag: string) =>
-  requestsFor(tag).find((r) => r.role.startsWith('Executor (work'))!;
+const firstWork = (tag: string) => requestsFor(tag).find((r) => r.role === 'Agent')!;
 
 const offered = (r: RecordedRequest) => (r.body.tools ?? []).map((t) => t.function.name);
 
@@ -442,7 +441,7 @@ describe('Agent 허용 목록 · 실행', () => {
     ).publishedVersionId!;
     expect(
       await tenantRows((tx) => tx.modelConfig.count({ where: { agentVersionId: versionId } })),
-    ).toBe(3);
+    ).toBe(1);
   });
 
   it('[MCP조회] 모델이 MCP Tool 을 부르면 서버가 실행하고 결과가 답변까지 이어진다', async () => {
@@ -453,9 +452,6 @@ describe('Agent 허용 목록 · 실행', () => {
     );
     const ticket = work.body.tools!.find((t) => t.function.name === 'shop__create_ticket')!;
     expect(ticket.function.description).toContain('Requires approval');
-    expect(
-      requestsFor('#mcp-ok').find((r) => r.role === 'Planner')!.body.messages[0]!.content,
-    ).toContain('shop__lookup_order');
 
     expect(toolEvents(events, 'tool.called')).toEqual([
       expect.objectContaining({ toolName: 'shop.lookup_order', source: 'mcp' }),
@@ -475,8 +471,12 @@ describe('Agent 허용 목록 · 실행', () => {
       args: { orderId: 'A-1001' },
       authorization: `Bearer ${MCP_KEY}`,
     });
-    const respond = requestsFor('#mcp-ok').find((r) => r.role.startsWith('Executor (respond'))!;
-    expect(respond.body.messages[0]!.content).toContain('배송 중');
+    // Tool 결과가 다음 차례 대화로 이어져 답변에 쓰인다
+    const answer = requestsFor('#mcp-ok')
+      .filter((r) => r.role === 'Agent')
+      .at(-1)!;
+    expect(answer.body.messages.at(-1)).toMatchObject({ role: 'tool' });
+    expect(answer.body.messages.at(-1)!.content).toContain('배송 중');
   });
 
   it('[MCP인자] JSON Schema 에 맞지 않는 인자는 서버로 보내지 않고 모델이 고치게 한다', async () => {

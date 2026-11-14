@@ -920,7 +920,7 @@ function PoliciesTab() {
                   </TableCell>
                   <TableCell className="px-4 py-3 align-top">
                     <NativeSelect
-                      containerClassName="min-w-40"
+                      className="min-w-40"
                       aria-label={`${LEVEL[p.level]} 실행 방식`}
                       value={p.mode}
                       disabled={!editable}
@@ -935,7 +935,7 @@ function PoliciesTab() {
                   </TableCell>
                   <TableCell className="px-4 py-3 align-top">
                     <NativeSelect
-                      containerClassName="min-w-40"
+                      className="min-w-40"
                       aria-label={`${LEVEL[p.level]} 승인하는 사람`}
                       value={p.approver ?? ''}
                       disabled={!editable || !approvalMode}
@@ -976,7 +976,7 @@ function PoliciesTab() {
                   </TableCell>
                   <TableCell className="px-4 py-3 align-top">
                     <NativeSelect
-                      containerClassName="min-w-32"
+                      className="min-w-32"
                       aria-label={`${LEVEL[p.level]} 승인 대기 시간`}
                       value={p.ttlSeconds}
                       disabled={!editable || !approvalMode}
@@ -1621,7 +1621,7 @@ function RuleModal({
           </ToggleGroup>
           {mode === 'builder' && clauses.length > 1 && (
             <NativeSelect
-              containerClassName="w-auto"
+              className="w-auto"
               aria-label="조건 결합"
               value={combinator}
               onChange={(e) => setCombinator(e.target.value as 'all' | 'any')}
@@ -1730,8 +1730,8 @@ function ClauseEditor({
   return (
     <div className="flex flex-wrap items-center gap-1.5 rounded-lg border bg-muted/40 p-2">
       <NativeSelect
-        containerClassName="w-40 flex-none"
-        className="bg-background"
+        className="w-40 flex-none bg-background"
+
         aria-label="조건 종류"
         value={clause.kind}
         onChange={(e) => onChange({ kind: e.target.value as ClauseKind })}
@@ -1750,8 +1750,8 @@ function ClauseEditor({
             onChange={(e) => onChange({ arg: e.target.value })}
           />
           <NativeSelect
-            containerClassName="w-30 flex-none"
-            className="bg-background"
+            className="w-30 flex-none bg-background"
+
             aria-label="비교"
             value={clause.op}
             onChange={(e) => onChange({ op: e.target.value as CompareOp })}

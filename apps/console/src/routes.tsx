@@ -14,6 +14,7 @@ import { SkillDetailPage, SkillsPage } from './pages/Skills';
 import { TaskDetailPage } from './pages/TaskDetail';
 import { TasksPage } from './pages/Tasks';
 import { WidgetSettingsPage } from './pages/WidgetSettings';
+import { WorkspacePage } from './pages/Workspace';
 import { Empty, PageHeader } from './ui';
 
 export function AppRoutes() {
@@ -43,6 +44,7 @@ export function AppRoutes() {
         <Route path="widget" element={<WidgetSettingsPage />} />
         <Route path="marketplace" element={<MarketplacePage />} />
         <Route path="billing" element={<BillingPage />} />
+        <Route path="workspace" element={<WorkspacePage />} />
         <Route
           path="*"
           element={

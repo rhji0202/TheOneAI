@@ -1,5 +1,5 @@
 // =============================================================================
-// TheOneAI · Embedded AI Agent — 데이터 모델 v0.1
+// TheOneWidget · Embedded AI Agent — 데이터 모델 v0.1
 // 기준: 기획안 v2.0 · 화면 설계 v1.0 (docs/screen-design.md)
 //
 // 규칙
@@ -472,6 +472,7 @@ model EndUser {
 // Agent · 버전 · 모델
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// 이름은 보관(archivedAt)되지 않은 Agent 끼리만 유니크 (부분 유니크 인덱스, SQL 참고).
 model Agent {
   id                 String    @id @default(uuid(7)) @db.Uuid
   tenantId           String    @map("tenant_id") @db.Uuid
@@ -495,7 +496,6 @@ model Agent {
   usageRecords     UsageRecord[]
   evalCases        EvalCase[]
 
-  @@unique([tenantId, name])
   @@map("agents")
 }
 
@@ -1192,9 +1192,9 @@ model WidgetConfig {
   previousSecretExpiresAt DateTime?    @map("previous_secret_expires_at") @db.Timestamptz(3)
   allowedOrigins          String[]     @default([]) @map("allowed_origins")
   identityMode            IdentityMode @default(signed_token) @map("identity_mode")
-  /// { brandColor, position: 'bottom-right'|'bottom-left', darkMode: 'system'|'light'|'dark' }
+  /// { brandColor, position: 'bottom-right'|'bottom-left', darkMode: 'system'|'light'|'dark', icon: { sha256, mimeType } | null }
   theme                   Json
-  /// { autoOpen, language, attachments: { types, maxMb }, noticeText, showPoweredBy }
+  /// { autoOpen, language, attachments: { types, maxMb }, noticeText, showPoweredBy, starterPrompts: string[] }
   behavior                Json
   enabled                 Boolean      @default(true)
   createdAt               DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)

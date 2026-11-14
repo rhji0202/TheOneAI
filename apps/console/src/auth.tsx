@@ -15,13 +15,19 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { AdminApi, type AdminUser, ApiError, atLeast, type MemberRole } from './api';
+import logoUrl from './assets/logo.png';
 
 interface AuthState {
   api: AdminApi;
   user: AdminUser | null;
   tenantSlug: string | null;
-  login(input: { tenantSlug: string; email: string; password: string }): Promise<void>;
+  login(input: { email: string; password: string }): Promise<void>;
   logout(): void;
+  /**
+   * 다른 워크스페이스로 옮겨 대시보드를 새로 연다. 이 로그인에서 비밀번호를 확인하지 않은 워크스페이스면
+   * 그 비밀번호가 필요하다 (없거나 틀리면 403 WORKSPACE_PASSWORD_REQUIRED 로 실패).
+   */
+  switchWorkspace(slug: string, password?: string): Promise<void>;
   /** 현재 사용자가 이 역할 이상인지 */
   can(min: MemberRole): boolean;
 }
@@ -51,7 +57,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [api]);
 
   const login = useCallback(
-    async (input: { tenantSlug: string; email: string; password: string }) => {
+    async (input: { email: string; password: string }) => {
       const session = await api.login(input);
       setUser(session.user);
     },
@@ -64,6 +70,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     navigate('/login', { replace: true });
   }, [api, navigate]);
 
+  const switchWorkspace = useCallback(
+    async (slug: string, password?: string) => {
+      await api.switchTo(slug, password);
+      // 화면 · 사이드바가 들고 있는 이전 워크스페이스 데이터를 모두 버린다 (지금 주소의 id 도 이전 워크스페이스 것)
+      window.location.assign(import.meta.env.BASE_URL);
+    },
+    [api],
+  );
+
   const value = useMemo<AuthState>(
     () => ({
       api,
@@ -71,9 +86,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       tenantSlug: api.current?.tenantSlug ?? null,
       login,
       logout,
+      switchWorkspace,
       can: (min) => atLeast(user?.role, min),
     }),
-    [api, user, login, logout],
+    [api, user, login, logout, switchWorkspace],
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
@@ -100,7 +116,6 @@ export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const state = location.state as { from?: string; expired?: boolean } | null;
-  const [tenantSlug, setTenantSlug] = useState(() => lastWorkspace());
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -113,12 +128,7 @@ export function LoginPage() {
     setPending(true);
     setError(null);
     try {
-      await login({ tenantSlug: tenantSlug.trim(), email: email.trim(), password });
-      try {
-        localStorage.setItem('theoneai:console:workspace', tenantSlug.trim());
-      } catch {
-        // 무시
-      }
+      await login({ email: email.trim(), password });
       navigate(state?.from && state.from !== '/login' ? state.from : '/', { replace: true });
     } catch (err) {
       setError(
@@ -141,13 +151,8 @@ export function LoginPage() {
         aria-labelledby="login-title"
       >
         <div className="flex items-center gap-2.5 font-bold">
-          <span
-            className="inline-grid size-8 place-items-center rounded-[9px] bg-primary text-primary-foreground"
-            aria-hidden="true"
-          >
-            T
-          </span>
-          <span>TheOneAI 콘솔</span>
+          <img src={logoUrl} alt="" className="size-8" />
+          <span>TheOneWidget 콘솔</span>
         </div>
         <h1 id="login-title" className="text-xl font-semibold">
           로그인
@@ -163,17 +168,6 @@ export function LoginPage() {
             </AlertDescription>
           </Alert>
         )}
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="login-workspace">워크스페이스</Label>
-          <Input
-            id="login-workspace"
-            required
-            autoComplete="organization"
-            value={tenantSlug}
-            onChange={(e) => setTenantSlug(e.target.value)}
-            placeholder="예: demo"
-          />
-        </div>
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="login-email">이메일</Label>
           <Input
@@ -208,12 +202,4 @@ export function LoginPage() {
       </form>
     </main>
   );
-}
-
-function lastWorkspace(): string {
-  try {
-    return localStorage.getItem('theoneai:console:workspace') ?? '';
-  } catch {
-    return '';
-  }
 }

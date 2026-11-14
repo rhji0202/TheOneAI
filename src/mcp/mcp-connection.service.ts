@@ -84,7 +84,7 @@ interface PoolEntry {
 }
 
 const IDLE_CLOSE_MS = 5 * 60_000;
-const CLIENT_INFO = { name: 'theoneai-agent', version: '0.1.0' };
+const CLIENT_INFO = { name: 'theonewidget-agent', version: '0.1.0' };
 
 /**
  * MCP 서버 연결 (Streamable HTTP, 공식 TypeScript SDK v2 `@modelcontextprotocol/client`).

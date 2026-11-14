@@ -1,26 +1,29 @@
-import { createServer, type IncomingMessage, type Server } from 'node:http';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
 /**
  * e2e 용 가짜 OpenAI 호환 LLM 서버 (POST /chat/completions).
  * 시스템 프롬프트 첫 줄(# Role: …)로 역할을 구분하고, 사용자 요청 속 표식으로 시나리오를 고른다.
- *   [분석]       reason 1단계 + respond
- *   [재계획]     reason → assess 가 한 번 replan → 수정 계획 → proceed
- *   [형식오류]   planner 가 두 번 모두 잘못된 JSON → 기본 계획
- *   [모델오류]   respond 스트림이 항상 500
- * Tool 시나리오 (작업 단계에서 모델이 tool_calls 를 돌려준다)
- *   [도구]       calculate 1회 → 결과로 메모
- *   [병렬]       읽기 Tool 2개를 한 응답에서 동시에
+ * Agent(# Role: Agent) 는 늘 스트리밍으로 답한다 — Tool 호출(tool_calls delta) 또는 최종 답변(텍스트).
+ * round = 이 작업에서 이미 끝난 Tool 호출 차례 수 (대화의 assistant tool_calls 메시지 수).
+ *   (표식 없음) 바로 답변
+ *   [분석]       todo(분석 진행 · 답변 대기) → todo(모두 완료) → 답변
+ *   [재계획]     todo(초기 분석) → todo(보완 분석 — 단계 구성이 바뀜) → todo(완료) → 답변
+ *   [중간안내]   "확인해 볼게요" 텍스트와 함께 calculate → 답변
+ *   [모델오류]   스트림이 항상 500
+ * Tool 시나리오
+ *   [도구]       calculate 1회 → 답변
+ *   [병렬]       읽기 Tool 2개를 한 차례에 동시에
  *   [무단]       Registry 에 없는 Tool 호출
- *   [승인필요]   send_note(쓰기) 1회 — 승인 대기 → 결정 후 같은 호출부터. Tool 이 차단돼 계획에 없으면 reason 으로 고친다
+ *   [승인필요]   send_note(쓰기) 1회 — 승인 대기 → 결정 후 같은 호출부터
  *   [승인두번]   send_note 를 두 번(다른 인자) — task 범위 승인이면 두 번째는 묻지 않는다
- *   [승인혼합]   한 응답에 calculate(읽기) + send_note(쓰기) — 계산은 한 번만 실행
+ *   [승인혼합]   한 차례에 calculate(읽기) + send_note(쓰기) — 계산은 한 번만 실행
  *   [운영자승인] 외부 도메인으로 send_note — 조건 규칙(require_operator)
  *   [파일]       builtin__create_file 로 리포트 파일(report.md)을 만든다 (산출물)
  *   [규칙차단]   정책 규칙(식에 666 포함 차단)에 걸리는 calculate
  *   [잘못된인자] 인자 오류 → 고쳐서 다시 호출
- *   [도구한도]   Tool 을 끝없이 호출 → 왕복 한도 후 tool_choice=none 으로 정리
- *   [대량계산]   한 응답에 calculate 8개씩 끝없이 → 단계당 호출 상한에서 멈추고 정리
+ *   [도구한도]   Tool 을 끝없이 호출 → 단계 · 토큰 · 시간 예산 끝에서 tool_choice=none 으로 답변
+ *   [대량계산]   첫 차례에 calculate 14개 → 차례당 상한(12) · 단계 상한을 넘는 호출은 not_run
  *   [재시도]     첫 시도에 실패하는 멱등 Tool (테스트가 등록) → 재시도 후 성공
  *   [시간초과]   시간 제한을 넘기는 Tool (테스트가 등록)
  * MCP 시나리오 (test/fake-mcp-server.ts 의 shop 서버)
@@ -28,17 +31,16 @@ import type { AddressInfo } from 'node:net';
  *   [MCP인자]    JSON Schema 에 맞지 않는 인자 → 고쳐서 다시 호출
  *   [MCP오류]    서버가 isError 로 실패를 알림 (읽기 Tool 이어도 재시도하지 않음)
  * Skill 시나리오 (test/skills.e2e-spec.ts 의 order-helper)
- *   [스킬]       planner 가 skill 단계를 계획(목록에 있을 때만) → Skill 파일 읽기 → 계산 → 메모
- *   [스킬범위]   Skill 단계에서 allowed-tools 밖의 Tool 호출 → not_allowed
- * 복구 · 재개 시나리오 (계획은 [분석] 과 같다: reason 1단계 + respond)
- *   [느린분석]   작업 단계 응답이 1.5초 걸린다 (일시정지 · 추가 지시)
+ *   [스킬]       목록에 있으면 load_skill → Skill 파일 읽기 → 계산 → 답변 (없으면 바로 답변)
+ *   [스킬범위]   load_skill 뒤 allowed-tools 밖의 Tool 호출 → not_allowed
+ * 복구 · 재개 시나리오 (흐름은 [분석] 과 같다)
+ *   [느린분석]   두 번째 차례 응답이 1.5초 걸린다 (일시정지 · 추가 지시)
  *   [느린답변]   답변 스트림이 조각마다 250ms (Worker 유실 시뮬레이션)
  *   [두번실패]   답변이 작업(#태그)마다 처음 두 번 500 → 재시도 후에도 실패 → 재개하면 성공
- * Reflection · Context Compression
- *   [긴메모]     reason 4단계, 단계마다 약 5천 자 메모 → 노트 압축(# Role: Compressor / Mode: notes)
- *   [반성]       reason 단계에서 없는 Tool 호출(거부) → assess 가 한 번 replan → 재계획 요청에 “Problems so far”
- *   [검증실패]   답변 검증이 구체적인 오류(issues)로 fail → 정정 메시지(# Role: Executor (correction)) → 다시 검증 pass
- *   대화 요약(# Role: Compressor / Mode: conversation) 은 합친 메시지 수를 요약에 적는다
+ * 작업 예산 (Tool 을 부르는 차례에만 적용, [도구한도] 와 함께 써서 여러 차례를 만든다)
+ *   [토큰소모]   차례마다 3천 토큰을 썼다고 알린다
+ *   [느린단계]   차례 응답이 3.5초 걸린다
+ * 대화 요약(# Role: Compressor / Mode: conversation) 은 합친 메시지 수를 요약에 적는다
  * 기억 추출 (# Role: Memory / Mode: extract)
  *   [기억]       semantic(user) · episodic(user) · procedural(agent) 3개
  *   [주입기억]   지시문처럼 보이는 내용 → 격리
@@ -87,20 +89,29 @@ export interface FakeLlm {
 }
 
 const USAGE = { prompt_tokens: 100, completion_tokens: 20 };
+const HEAVY_USAGE = { prompt_tokens: 2_900, completion_tokens: 100 };
+
+/** 예산이 다 되어 Tool 없이 답하라는 마지막 차례의 지시 (src/agent-runtime/prompts.ts BUDGET_REACHED_NOTE) */
+export const BUDGET_NOTE_PREFIX = 'This task has reached its step, token or time budget';
 
 type Call = [name: string, args: unknown];
+type Todo = Array<[title: string, status: 'pending' | 'in_progress' | 'completed' | 'cancelled']>;
 
-/** 작업 단계에서 시나리오별로 부를 Tool — round 는 이 단계에서 이미 끝난 Tool 왕복 수 */
-function scripted(text: string, round: number, toolsOffered: boolean): Call[] | null {
+const todo = (items: Todo): Call => [
+  'todo',
+  { items: items.map(([title, status]) => ({ title, status })) },
+];
+
+/** 시나리오별로 부를 Tool — round 는 이 작업에서 이미 끝난 Tool 호출 차례 수 */
+function scripted(text: string, round: number, offered: Set<string>): Call[] | null {
   if (text.includes('[대량계산]'))
-    return toolsOffered
-      ? Array.from({ length: 8 }, (_, i): Call => [
+    return round === 0
+      ? Array.from({ length: 14 }, (_, i): Call => [
           'builtin__calculate',
-          { expression: `${round}*10+${i}` },
+          { expression: `10+${i}` },
         ])
       : null;
-  if (text.includes('[도구한도]'))
-    return toolsOffered ? [['builtin__calculate', { expression: `${round}+1` }]] : null;
+  if (text.includes('[도구한도]')) return [['builtin__calculate', { expression: `${round}+1` }]];
   if (text.includes('[MCP인자]')) {
     if (round === 0) return [['shop__lookup_order', { order: 1001 }]]; // 필수 인자 누락 + 모르는 인자
     if (round === 1) return [['shop__lookup_order', { orderId: 'A-1002' }]];
@@ -111,7 +122,66 @@ function scripted(text: string, round: number, toolsOffered: boolean): Call[] | 
     if (round === 1) return [['test__send_note', { to: 'b@example.com', text: '두 번째 메모' }]];
     return null;
   }
+  if (
+    text.includes('[분석]') ||
+    text.includes('[느린분석]') ||
+    text.includes('[느린답변]') ||
+    text.includes('[두번실패]')
+  ) {
+    if (round === 0)
+      return [
+        todo([
+          ['요구사항 분석', 'in_progress'],
+          ['답변 작성', 'pending'],
+        ]),
+      ];
+    if (round === 1)
+      return [
+        todo([
+          ['요구사항 분석', 'completed'],
+          ['답변 작성', 'completed'],
+        ]),
+      ];
+    return null;
+  }
+  if (text.includes('[재계획]')) {
+    if (round === 0)
+      return [
+        todo([
+          ['초기 분석', 'in_progress'],
+          ['답변 작성', 'pending'],
+        ]),
+      ];
+    if (round === 1)
+      return [
+        todo([
+          ['보완 분석', 'in_progress'],
+          ['답변 작성', 'pending'],
+        ]),
+      ];
+    if (round === 2)
+      return [
+        todo([
+          ['보완 분석', 'completed'],
+          ['답변 작성', 'completed'],
+        ]),
+      ];
+    return null;
+  }
+  if (text.includes('[스킬')) {
+    const loaded = /## Skill: ([a-z0-9-]+)/.exec(text)?.[1];
+    // 불러오지 못했으면(변조 · 비활성) 다시 시도하지 않고 답한다
+    if (!loaded)
+      return round === 0 && offered.has('load_skill') && /^- order-helper: /m.test(text)
+        ? [['load_skill', { name: 'order-helper' }]]
+        : null;
+    if (text.includes('[스킬범위]')) return round === 1 ? [['builtin__current_time', {}]] : null;
+    if (round === 1) return [['skill__read_file', { skill: loaded, path: 'references/policy.md' }]];
+    if (round === 2) return [['builtin__calculate', { expression: '39000*2' }]];
+    return null;
+  }
   if (round > 0 && !text.includes('[잘못된인자]')) return null;
+  if (text.includes('[중간안내]')) return [['builtin__calculate', { expression: '6*7' }]];
   if (text.includes('[승인혼합]'))
     return [
       ['builtin__calculate', { expression: '2+3' }],
@@ -138,8 +208,7 @@ function scripted(text: string, round: number, toolsOffered: boolean): Call[] | 
       ['builtin__current_time', { timezone: 'Asia/Seoul' }],
     ];
   }
-  if (text.includes('[무단]') || text.includes('[반성]'))
-    return [['shell__exec', { cmd: 'cat /etc/passwd' }]];
+  if (text.includes('[무단]')) return [['shell__exec', { cmd: 'cat /etc/passwd' }]];
   if (text.includes('[승인필요]'))
     return [['test__send_note', { to: 'ops@example.com', text: '안녕하세요' }]];
   if (text.includes('[규칙차단]')) return [['builtin__calculate', { expression: '666+1' }]];
@@ -153,70 +222,62 @@ function scripted(text: string, round: number, toolsOffered: boolean): Call[] | 
   return null;
 }
 
-/** Tool 시나리오의 계획 — 계획 단계의 kind 를 tool 로 둔다 */
-function toolPlan(text: string, lastUser: string): Record<string, unknown> | null {
-  const tool = (title: string, name: string) => ({
-    title,
-    kind: 'tool',
-    tool: name,
-    instructions: title,
-  });
-  const respond = { title: '답변 작성', kind: 'respond', instructions: '' };
-  if (text.includes('[파일]'))
-    return {
-      goal: '리포트 파일',
-      steps: [tool('리포트 파일 만들기', 'builtin__create_file'), respond],
-    };
-  for (const tag of ['[승인두번]', '[승인혼합]', '[운영자승인]']) {
-    if (text.includes(tag))
-      return { goal: '메모 보내기', steps: [tool('메모 전송', 'test__send_note'), respond] };
-  }
-  if (text.includes('[승인필요]')) {
-    // 승인 필요 Tool 을 tool 단계로 계획 — 차단돼 목록에 없으면 계획 검증에 걸려 reason 으로 고친다
-    const corrected = lastUser.includes('is invalid');
-    return {
-      goal: '메모 보내기',
-      steps: [
-        corrected
-          ? { title: '메모 전송 시도', kind: 'reason', instructions: '' }
-          : tool('메모 전송', 'test__send_note'),
-        respond,
-      ],
-    };
-  }
-  if (text.includes('[병렬]'))
-    return {
-      goal: '계산과 시간',
-      steps: [tool('계산 · 시간 확인', 'builtin__calculate'), respond],
-    };
-  if (text.includes('[무단]'))
-    return {
-      goal: '파일 보기',
-      steps: [{ title: '파일 확인', kind: 'reason', instructions: '' }, respond],
-    };
-  for (const tag of ['[MCP조회]', '[MCP인자]', '[MCP오류]']) {
-    if (!text.includes(tag)) continue;
-    const name = tag === '[MCP오류]' ? 'shop__search_faq' : 'shop__lookup_order';
-    // 계획에 보이는 Tool 이면 tool 단계, 허용 목록 밖이면 reason 단계 — 그래도 모델이 부르는 경우를 시험한다
-    return {
-      goal: '주문 확인',
-      steps: [
-        text.includes(`- ${name} (`)
-          ? tool('주문 확인', name)
-          : { title: '주문 확인', kind: 'reason', instructions: '' },
-        respond,
-      ],
-    };
-  }
-  if (text.includes('[재시도]'))
-    return { goal: '재고 조회', steps: [tool('재고 조회', 'test__flaky'), respond] };
-  if (text.includes('[시간초과]'))
-    return { goal: '느린 조회', steps: [tool('느린 조회', 'test__slow'), respond] };
-  for (const tag of ['[도구]', '[규칙차단]', '[잘못된인자]', '[도구한도]', '[대량계산]']) {
-    if (text.includes(tag))
-      return { goal: '계산', steps: [tool('계산', 'builtin__calculate'), respond] };
-  }
-  return null;
+/** OpenAI 호환 스트림 — 텍스트 조각 · tool_calls delta · 마지막 usage */
+function streamReply(
+  res: ServerResponse,
+  model: string,
+  reply: {
+    text?: string;
+    calls?: Call[];
+    round?: number;
+    usage?: typeof USAGE;
+    chunkDelayMs: number;
+  },
+): void {
+  const pieces = reply.text ? (reply.text.match(/\S+\s*/g) ?? [reply.text]) : [];
+  const calls = reply.calls ?? [];
+  const chunk = (payload: unknown) => `data: ${JSON.stringify(payload)}\n\n`;
+  res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+  let i = 0;
+  const timer = setInterval(() => {
+    if (res.destroyed) return clearInterval(timer);
+    if (i < pieces.length) {
+      res.write(chunk({ model, choices: [{ delta: { content: pieces[i++] } }] }));
+      return;
+    }
+    clearInterval(timer);
+    calls.forEach(([name, args], k) => {
+      res.write(
+        chunk({
+          model,
+          choices: [
+            {
+              delta: {
+                tool_calls: [
+                  {
+                    index: k,
+                    id: `call_${reply.round ?? 0}_${k}`,
+                    type: 'function',
+                    function: {
+                      name,
+                      arguments: typeof args === 'string' ? args : JSON.stringify(args),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      );
+    });
+    res.write(
+      chunk({
+        choices: [{ delta: {}, finish_reason: calls.length ? 'tool_calls' : 'stop' }],
+        usage: reply.usage ?? USAGE,
+      }),
+    );
+    res.end('data: [DONE]\n\n');
+  }, reply.chunkDelayMs);
 }
 
 export async function startFakeLlm(options: { chunkDelayMs?: number } = {}): Promise<FakeLlm> {
@@ -243,165 +304,69 @@ export async function startFakeLlm(options: { chunkDelayMs?: number } = {}): Pro
       const mode = /Mode: (\w+)/.exec(system)?.[1];
       requests.push({ role: mode ? `${role}:${mode}` : role, headers: req.headers, body, images });
 
-      const reply = (content: string | null, toolCalls: WireToolCall[] = []) =>
+      const reply = (content: string) =>
         res.writeHead(200, { 'Content-Type': 'application/json' }).end(
           JSON.stringify({
             model: body.model,
-            choices: [
-              {
-                message: { content, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) },
-                finish_reason: toolCalls.length ? 'tool_calls' : 'stop',
-              },
-            ],
+            choices: [{ message: { content }, finish_reason: 'stop' }],
             usage: USAGE,
           }),
         );
+      const fail = (message: string) =>
+        res
+          .writeHead(500, { 'Content-Type': 'application/json' })
+          .end(JSON.stringify({ error: { message } }));
 
-      if (role === 'Planner') {
-        if (allText.includes('[형식오류]')) return reply('계획은 이렇습니다만 JSON 은 아닙니다');
-        if (allText.includes('[스킬')) {
-          const listed = /^- (order-helper): /m.exec(system)?.[1];
-          const respond = { title: '답변 작성', kind: 'respond', instructions: '' };
-          return reply(
-            JSON.stringify({
-              goal: '주문 금액 안내',
-              steps: listed
-                ? [
-                    { title: '주문 도우미', kind: 'skill', skill: listed, instructions: '' },
-                    respond,
-                  ]
-                : [{ title: '직접 정리', kind: 'reason', instructions: '' }, respond],
-            }),
-          );
-        }
-        const forTools = toolPlan(allText, lastUser);
-        if (forTools) return reply(JSON.stringify(forTools));
-        if (allText.includes('[재계획]')) {
-          const revised = lastUser.includes('Evaluator feedback');
-          return reply(
-            JSON.stringify({
-              goal: '재계획 시나리오',
-              steps: [
-                {
-                  title: revised ? '보완 분석' : '초기 분석',
-                  kind: 'reason',
-                  instructions: '분석',
-                },
-                { title: '답변 작성', kind: 'respond', instructions: '' },
-              ],
-            }),
-          );
-        }
-        if (allText.includes('[긴메모]')) {
-          return reply(
-            JSON.stringify({
-              goal: '긴 분석',
-              steps: [
-                ...['자료 정리', '비교 분석', '위험 검토', '결론 정리'].map((title) => ({
-                  title,
-                  kind: 'reason',
-                  instructions: '',
-                })),
-                { title: '답변 작성', kind: 'respond', instructions: '' },
-              ],
-            }),
-          );
-        }
-        if (allText.includes('[반성]')) {
-          return reply(
-            JSON.stringify({
-              goal: '파일 확인',
-              steps: [
-                { title: '파일 확인', kind: 'reason', instructions: '' },
-                { title: '답변 작성', kind: 'respond', instructions: '' },
-              ],
-            }),
-          );
-        }
-        if (
-          allText.includes('[분석]') ||
-          allText.includes('[느린분석]') ||
-          allText.includes('[느린답변]') ||
-          allText.includes('[두번실패]')
-        ) {
-          return reply(
-            '```json\n' +
-              JSON.stringify({
-                goal: '분석 후 답변',
-                steps: [
-                  { title: '요구사항 분석', kind: 'reason', instructions: '핵심을 정리' },
-                  { title: '답변 작성', kind: 'respond', instructions: '' },
-                ],
-              }) +
-              '\n```',
-          );
-        }
-        return reply(
-          JSON.stringify({
-            goal: '바로 답변',
-            steps: [{ title: '답변 작성', kind: 'respond', instructions: '' }],
-          }),
-        );
-      }
-
-      if (role.startsWith('Executor (work')) {
+      if (role === 'Agent') {
+        const tag = /#[\w-]+/.exec(allText)?.[0] ?? '';
+        if (allText.includes('[모델오류]')) return fail('upstream exploded');
         const round = body.messages.filter(
           (m) => m.role === 'assistant' && m.tool_calls?.length,
         ).length;
-        const skillStep = /## Skill: ([a-z0-9-]+)/.exec(system)?.[1];
-        const skillCalls: Call[] | null = !skillStep
+        const final = body.tool_choice === 'none';
+        // Tool 결과 · 대화 전체(불러온 Skill 지침 포함)로 다음 행동을 고른다
+        const calls = final
           ? null
-          : allText.includes('[스킬범위]')
-            ? round === 0
-              ? [['builtin__current_time', {}]]
-              : null
-            : allText.includes('[스킬]')
-              ? round === 0
-                ? [['skill__read_file', { skill: skillStep, path: 'references/policy.md' }]]
-                : round === 1
-                  ? [['builtin__calculate', { expression: '39000*2' }]]
-                  : null
-              : null;
-        if (skillCalls) {
-          return reply(
-            null,
-            skillCalls.map(([name, args], i) => ({
-              id: `call_${round}_${i}`,
-              type: 'function' as const,
-              function: { name, arguments: JSON.stringify(args) },
-            })),
-          );
-        }
-        const toolsOffered = (body.tools?.length ?? 0) > 0 && body.tool_choice !== 'none';
-        const calls = scripted(allText, round, toolsOffered);
+          : scripted(allText, round, new Set((body.tools ?? []).map((t) => t.function.name)));
         if (calls) {
-          return reply(
-            null,
-            calls.map(([name, args], i) => ({
-              id: `call_${round}_${i}`,
-              type: 'function' as const,
-              function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args) },
-            })),
-          );
-        }
-        const results = body.messages.filter((m) => m.role === 'tool').map((m) => m.content);
-        const stepTitle = /Current step \d+: ([^\n]+)/.exec(allText)?.[1] ?? '';
-        if (allText.includes('[긴메모]')) {
-          return reply(
-            `분석 메모: ${stepTitle} — 핵심 수치 42. ${'세부 근거를 정리한 문장입니다. '.repeat(280)}`,
-          );
-        }
-        if (allText.includes('[느린분석]')) {
-          setTimeout(() => {
-            if (!res.destroyed) reply(`분석 메모: ${stepTitle} 완료`);
-          }, 1_500);
+          const send = () =>
+            streamReply(res, body.model, {
+              ...(allText.includes('[중간안내]') ? { text: '확인해 볼게요.' } : {}),
+              calls,
+              round,
+              usage: allText.includes('[토큰소모]') ? HEAVY_USAGE : USAGE,
+              chunkDelayMs: 1,
+            });
+          const wait = allText.includes('[느린단계]')
+            ? 3_500
+            : allText.includes('[느린분석]') && round === 1
+              ? 1_500
+              : 0;
+          if (wait) {
+            setTimeout(() => {
+              if (!res.destroyed) send();
+            }, wait);
+          } else send();
           return;
         }
-        return reply(
-          results.length
-            ? `도구 메모: ${stepTitle} — ${results.join(' | ')}`
-            : `분석 메모: ${stepTitle} 완료`,
-        );
+        if (allText.includes('[두번실패]') && (failures.get(tag) ?? 0) < 2) {
+          failures.set(tag, (failures.get(tag) ?? 0) + 1);
+          return fail('temporary outage');
+        }
+        // 최종 답변 — 요청(예산 지시가 아닌 마지막 사용자 메시지)과 Tool 결과를 담는다
+        const request =
+          [...body.messages]
+            .reverse()
+            .find((m) => m.role === 'user' && !(m.content ?? '').startsWith(BUDGET_NOTE_PREFIX))
+            ?.content ?? '';
+        const results = body.messages
+          .filter((m) => m.role === 'tool' && !(m.content ?? '').includes('"items"'))
+          .map((m) => (m.content ?? '').slice(0, 200));
+        const answer = `요청하신 내용에 대한 답변입니다. ${request.slice(0, 40)} — ${results.length ? `도구 결과: ${results.join(' | ')} — ` : ''}차근차근 정리해 드릴게요. 끝.`;
+        return streamReply(res, body.model, {
+          text: answer,
+          chunkDelayMs: allText.includes('[느린답변]') ? 250 : delay,
+        });
       }
 
       if (role === 'Compressor' && mode === 'conversation') {
@@ -413,10 +378,6 @@ export async function startFakeLlm(options: { chunkDelayMs?: number } = {}): Pro
         return reply(
           `- ${continued ? '(이전 요약에 이어) ' : ''}이전 대화 메시지 ${count}개 요약: 사용자는 요금제 A를 골랐고 배송지는 부산이다`,
         );
-      }
-
-      if (role === 'Compressor' && mode === 'notes') {
-        return reply('앞 단계 요약: 자료 정리 · 비교 분석 · 위험 검토 완료, 핵심 수치 42');
       }
 
       if (role === 'Memory' && mode === 'extract') {
@@ -466,100 +427,6 @@ export async function startFakeLlm(options: { chunkDelayMs?: number } = {}): Pro
                 ]
               : [];
         return reply(JSON.stringify({ memories }));
-      }
-
-      if (role === 'Evaluator' && mode === 'assess') {
-        const replan =
-          (allText.includes('[재계획]') || allText.includes('[반성]')) &&
-          !allText.includes('### Note 2');
-        return reply(
-          JSON.stringify(
-            replan
-              ? { verdict: 'replan', reason: '근거가 부족합니다' }
-              : { verdict: 'proceed', reason: '' },
-          ),
-        );
-      }
-
-      if (role === 'Evaluator' && mode === 'verify') {
-        if (
-          allText.includes('[검증실패]') &&
-          !allText.includes('[Follow-up correction sent to the user]')
-        ) {
-          return reply(
-            JSON.stringify({
-              verdict: 'fail',
-              checks: [
-                { label: '요청에 답함', passed: true },
-                { label: '노트와 일치', passed: false },
-              ],
-              summary: '환불 기한이 노트와 다릅니다',
-              issues: ['환불 기한을 14일이라고 했지만 노트에는 7일이다'],
-            }),
-          );
-        }
-        return reply(
-          JSON.stringify({
-            verdict: 'pass',
-            checks: [
-              { label: '요청에 답함', passed: true },
-              { label: '사용자 언어로 작성', passed: true },
-            ],
-            summary: '요청에 맞게 답했습니다',
-          }),
-        );
-      }
-
-      if (role === 'Executor (correction)') {
-        const text = '정정합니다: 환불 기한은 14일이 아니라 7일입니다.';
-        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
-        for (const piece of text.match(/\S+\s*/g) ?? [text]) {
-          res.write(
-            `data: ${JSON.stringify({ model: body.model, choices: [{ delta: { content: piece } }] })}\n\n`,
-          );
-        }
-        res.write(
-          `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: USAGE })}\n\n`,
-        );
-        res.end('data: [DONE]\n\n');
-        return;
-      }
-
-      if (role.startsWith('Executor (respond')) {
-        const tag = /#[\w-]+/.exec(allText)?.[0] ?? '';
-        if (allText.includes('[두번실패]') && (failures.get(tag) ?? 0) < 2) {
-          failures.set(tag, (failures.get(tag) ?? 0) + 1);
-          res
-            .writeHead(500, { 'Content-Type': 'application/json' })
-            .end(JSON.stringify({ error: { message: 'temporary outage' } }));
-          return;
-        }
-        if (allText.includes('[모델오류]')) {
-          res
-            .writeHead(500, { 'Content-Type': 'application/json' })
-            .end(JSON.stringify({ error: { message: 'upstream exploded' } }));
-          return;
-        }
-        const answer = `요청하신 내용에 대한 답변입니다. ${lastUser.slice(0, 40)} — 차근차근 정리해 드릴게요. 끝.`;
-        const pieces = answer.match(/\S+\s*/g) ?? [answer];
-        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
-        let i = 0;
-        const chunkDelay = allText.includes('[느린답변]') ? 250 : delay;
-        const timer = setInterval(() => {
-          if (res.destroyed) return clearInterval(timer);
-          if (i < pieces.length) {
-            res.write(
-              `data: ${JSON.stringify({ model: body.model, choices: [{ delta: { content: pieces[i++] } }] })}\n\n`,
-            );
-            return;
-          }
-          clearInterval(timer);
-          res.write(
-            `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: USAGE })}\n\n`,
-          );
-          res.end('data: [DONE]\n\n');
-        }, chunkDelay);
-        return;
       }
 
       res

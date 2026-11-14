@@ -58,7 +58,7 @@ interface TaskSummary {
   id: string;
   title: string;
   status: TaskStatus;
-  progress: { completed: number; total: number | null }; // 재계획 시 total 이 바뀔 수 있음
+  progress: { completed: number; total: number | null }; // 할 일 목록(todo)이 있을 때만 — 목록을 고치면 total 이 바뀔 수 있음
   conversationId: string;
   pendingApproval: { id: string; expiresAt: string } | null;
   failure: { code: string; message: string; resumable: boolean } | null;
@@ -113,7 +113,7 @@ loader.js ──POST /v1/widget/bootstrap { publicKey, identityToken?, anonymous
 
 | 항목 | 값 |
 |---|---|
-| 서명 | HS256, Widget Secret (C-09 에서 발급, 재발급 후 24시간 동안 이전 Secret 도 허용) |
+| 서명 | HS256, Widget Secret (C-09 에서 발급) |
 | `sub` | 고객사 사용자 ID (필수) → `end_users.external_id` |
 | `aud` | 위젯 공개 키 (`wk_pub_...`) |
 | `exp` | 발급 후 10분 이내 |
@@ -127,7 +127,8 @@ loader.js ──POST /v1/widget/bootstrap { publicKey, identityToken?, anonymous
 
 | Method | Path | 설명 |
 |---|---|---|
-| POST | `/v1/admin/auth/login` | `{ tenantSlug, email, password }` → `{ accessToken, expiresAt, user }` + refresh 쿠키 |
+| POST | `/v1/admin/auth/login` | `{ email, password, tenantSlug? }` → `{ accessToken, expiresAt, user, workspace: { slug, name } }` + refresh 쿠키. `tenantSlug` 가 없으면 비밀번호가 맞는 워크스페이스 중 기본 워크스페이스(없으면 이름 순 첫 번째)로 들어간다 |
+| POST | `/v1/admin/auth/switch` | `{ slug, password? }` → 로그인과 같은 응답. 아래 §4.11 워크스페이스 전환 |
 | POST | `/v1/admin/auth/refresh` | refresh 쿠키 회전 → 새 accessToken |
 | POST | `/v1/admin/auth/logout` | refresh 무효화 |
 | GET | `/v1/admin/me` | 현재 멤버 · 역할 · 테넌트 |
@@ -149,7 +150,8 @@ loader.js ──POST /v1/widget/bootstrap { publicKey, identityToken?, anonymous
 | MCP · Skill 등록 · 정책 변경 | ✓ | ✓ | | |
 | Memory 수정 · 삭제 · 사용자 데이터 삭제 | ✓ | ✓ | | |
 | Widget 설정 | ✓ | ✓ | | |
-| Widget Secret 재발급 · 멤버 관리 | ✓ | | | |
+| 워크스페이스 이름 변경 | ✓ | ✓ | | |
+| 멤버 관리 · 워크스페이스 생성 · 삭제 | ✓ | | | |
 
 NestJS: `@Roles('admin')` 데코레이터 + `RolesGuard`. 모든 변경 요청은 `AuditInterceptor` 가 `audit_logs` 에 기록한다.
 
@@ -195,8 +197,8 @@ interface WidgetBootstrapResponse {
   expiresAt: string;
   endUser: { id: string; anonymous: boolean };
   agent: { id: string; name: string; avatarUrl: string | null; welcomeMessage: string };
-  theme: { brandColor: string; position: 'bottom-right' | 'bottom-left'; darkMode: 'system' | 'light' | 'dark' };
-  behavior: { autoOpen: boolean; language: string; attachments: { types: string[]; maxMb: number }; noticeText: string; showPoweredBy: boolean };
+  theme: { brandColor: string; position: 'bottom-right' | 'bottom-left'; darkMode: 'system' | 'light' | 'dark'; iconUrl: string | null }; // iconUrl: API 기준 경로 (위젯 헤더 아이콘 — 런처 버튼은 기본 아이콘)
+  behavior: { autoOpen: boolean; language: string; attachments: { types: string[]; maxMb: number }; noticeText: string; showPoweredBy: boolean; starterPrompts: string[] }; // starterPrompts: 새 대화 화면의 제시어 (누르면 바로 보냄)
   suggestions: Array<{ skillName: string; title: string; description: string; prompt: string }>; // 활성 Skill metadata
   activeTasks: TaskSummary[];  // 진행 중 + 승인 대기
 }
@@ -234,8 +236,6 @@ interface TaskDetail extends Omit<TaskSummary, 'pendingApproval'> {
   pendingApproval: ApprovalView | null;          // 대기 중이면 승인 카드 전체 데이터
   result: {
     messageId: string;
-    correctionMessageId?: string; // Reflection — 검증에서 나온 오류를 바로잡은 후속 메시지 (있을 때)
-    verification: Array<{ label: string; passed: boolean }>; // W-04 "결과 검증" (정정했으면 정정 후 검증)
     summary: { steps: number; toolCalls: number; retries: number; replans: number; durationMs: number };
     artifacts: ArtifactView[];
   } | null;
@@ -254,7 +254,7 @@ interface SteerRequest { text: string }
 interface ResumeRequest { mode: 'checkpoint' | 'restart' }
 ```
 
-오류: `TASK_NOT_ACTIVE`(409), `TASK_NOT_RESUMABLE`(409), `CHECKPOINT_NOT_FOUND`(409).
+오류: `TASK_NOT_ACTIVE`(409), `TASK_NOT_RESUMABLE`(409), `CHECKPOINT_NOT_FOUND`(409), `TASK_BUDGET_EXHAUSTED`(409).
 
 구현 메모 (7 · 8단계)
 
@@ -271,7 +271,7 @@ interface ResumeRequest { mode: 'checkpoint' | 'restart' }
 interface ApprovalDecisionRequest {
   decision: 'approve' | 'reject';
   scope?: 'once' | 'task';     // task 는 allowTaskScope = true 일 때만
-  comment?: string;            // 거절 · 수정 요청 내용 (W-03 입력창) → Planner 재계획 입력
+  comment?: string;            // 거절 · 수정 요청 내용 (W-03 입력창) → Tool 결과로 모델에게 (데이터)
 }
 // 200: ApprovalView
 ```
@@ -281,9 +281,9 @@ interface ApprovalDecisionRequest {
 
 구현 메모:
 
-- **승인 요청**: 작업 단계에서 모델이 승인 필요 Tool 을 부르면, Dispatcher 가 인자를 검증하고 권한 판단(차단 → 단계 범위 → 승인 필요) 뒤 `approvals` 를 만들고 `approval.required` 를 보낸다. 작업 단계는 진행 중이던 대화(모델의 Tool 호출 · 이미 끝난 호출 결과)를 checkpoint 의 `workingMemory.pendingWork` 에 남기고 `waiting_approval` 로 멈춘다. 작업은 `waiting_approval`, Worker 를 놓는다. 한 응답에 여러 호출이 있으면 승인이 필요 없는 앞 호출은 먼저 실행하고 결과를 함께 남긴다.
+- **승인 요청**: 작업 단계에서 모델이 승인 필요 Tool 을 부르면, Dispatcher 가 인자를 검증하고 권한 판단(차단 → 단계 범위 → 승인 필요) 뒤 `approvals` 를 만들고 `approval.required` 를 보낸다. 작업 단계는 이 단계에서 오간 대화(모델의 Tool 호출 · 이미 끝난 호출 결과 — 시스템 지침 · 요청은 재개할 때 다시 만든다)를 checkpoint 의 `workingMemory.pendingWork` 에 남기고 `waiting_approval` 로 멈춘다. 작업은 `waiting_approval`, Worker 를 놓는다. 한 응답에 여러 호출이 있으면 승인이 필요 없는 앞 호출은 먼저 실행하고 결과를 함께 남긴다.
 - **결정 후 재개**: 작업에 대기 중인 승인이 더 없으면 `queued` 로 바꾸고 재개 Job 을 넣는다. 재개하면 모델을 다시 부르지 않고 멈춘 호출부터 이어 간다 — 승인한 인자 그대로 실행된다(인자 해시 확인). `once` 승인은 실행에 한 번만 쓰이고(`consumed_at`), `task` 범위 승인은 같은 Tool 의 이후 호출(같은 승인자 요구, 조건 규칙에 걸리지 않은 호출)을 묻지 않는다.
-- **거절**: 실행하지 않고(`tool.denied` · `approval_rejected`) 모델에게 거절과 사유(데이터로)를 알린다. 모델은 다른 방법을 찾거나 사유에 맞게 고친 호출(새 승인)을 하거나 답변에서 밝힌다. 사유가 수정을 요구하는데 반영되지 않았으면 Evaluator 가 재계획한다.
+- **거절**: 실행하지 않고(`tool.denied` · `approval_rejected`) 모델에게 거절과 사유(데이터로)를 알린다. 모델은 다른 방법을 찾거나 사유에 맞게 고친 호출(새 승인)을 하거나 답변에서 밝힌다.
 - **경쟁**: 결정 · 만료 · 중지와 Worker 의 `waiting_approval` 전환은 모두 작업 행을 먼저 잠근다. Worker 가 멈추기 직전에 결정이 나면 Worker 가 대기 승인이 없음을 보고 바로 다시 큐에 넣는다.
 - **중지**: 대기 중인 승인은 `cancelled` (`approval.resolved`, `decidedBy: 'system'`).
 
@@ -330,8 +330,9 @@ NestJS: 컨트롤러에서 `@Sse()` 대신 `Response` 를 직접 쓰는 `SseStre
 | event | 시점 (Agent Loop) | data | UI 반영 |
 |---|---|---|---|
 | `task.status` | 상태 변경 | `{ status, reason? }` | 헤더 상태 · 배지 |
-| `plan.created` | Plan | `{ planVersion, steps: PlanStep[] }` | 실행 계획 카드 |
-| `plan.revised` | Evaluate → 재계획 | `{ planVersion, reason, steps: PlanStep[], diff: { added: number[]; removed: number[]; changed: number[] } }` | “계획 수정됨” 배지 |
+| `plan.created` | 모델이 `todo` 로 할 일 목록을 처음 만듦 (여러 단계가 필요할 때만) | `{ planVersion, steps: PlanStep[] }` | 실행 계획 카드 |
+| `plan.revised` | `todo` 로 단계 구성을 바꿈 (새 버전) | `{ planVersion, reason, steps: PlanStep[], diff: { added: number[]; removed: number[]; changed: number[] } }` | “계획 수정됨” 배지 |
+| `plan.updated` | `todo` 로 상태만 바꿈 (같은 버전) | `{ planVersion, steps: PlanStep[] }` | 단계 아이콘 · 진행률 |
 | `step.started` | Execute | `{ seq, planIndex, type, name, parallelGroup? }` | 현재 단계 강조 |
 | `step.completed` | Observe | `{ seq, planIndex, status, durationMs, summary, checkpointSaved }` | 단계 아이콘 · 진행률 |
 | `tool.called` | Execute | `{ seq, executionId, toolName, source, argsPreview }` | Tool 칩 |
@@ -427,7 +428,7 @@ interface TaskTrace {
     agentVersion: number;
     registryVersion: number;       // 고정된 Tool Registry 버전
     traceId: string | null;
-    usage: { inputTokens: number; outputTokens: number; byRole: Record<'planner' | 'executor' | 'evaluator', { inputTokens: number; outputTokens: number }> };
+    usage: { inputTokens: number; outputTokens: number };
     cost: { amount: string; currency: string };
   };
   stats: { steps: { completed: number; total: number | null }; toolCalls: number; retries: number; replans: number };
@@ -459,6 +460,8 @@ interface TaskTrace {
 | GET | `/v1/admin/agents` | Viewer | 목록 `[{ id, name, publishedVersion, publishedAt, draftVersion, draftUpdatedAt }]` — draftVersion 이 있으면 배포 안 된 변경 |
 | POST | `/v1/admin/agents` | Admin | 생성 (초안 v1 함께 생성) |
 | GET | `/v1/admin/agents/:id` | Viewer | 배포 버전 + 초안 |
+| PATCH | `/v1/admin/agents/:id` | Admin | 이름 변경 `{ name }` — 버전이 아니라 Agent 에 있어 배포 없이 바로 반영. 이름 중복 `409 NAME_TAKEN` |
+| DELETE | `/v1/admin/agents/:id` | Admin | 삭제(보관) → 204. 이 Agent 를 쓰는 위젯이 있으면 `409 AGENT_IN_USE` |
 | PATCH | `/v1/admin/agents/:id/draft` | Admin | 초안 수정 (자동 저장) |
 | POST | `/v1/admin/agents/:id/eval-runs` | Admin | 테스트 실행 `{ target: 'draft' \| 'published', caseIds? }` → `EvalRun` |
 | GET | `/v1/admin/eval-runs/:id` | Viewer | 테스트 결과 |
@@ -476,7 +479,7 @@ interface AgentDraftInput {
   description?: string;
   welcomeMessage?: string;
   systemPrompt?: string;                 // 플랫폼 보안 지침은 별도로 앞에 붙고 수정 불가
-  models?: Array<{ role: 'planner' | 'executor' | 'evaluator'; providerId: string; model: string; maxOutputTokens: number; temperature: number; fallback?: { providerId: string; model: string } }>;
+  models?: Array<{ role: 'executor'; providerId: string; model: string; maxOutputTokens: number; temperature: number; fallback?: { providerId: string; model: string } }>;
   mcpServers?: Array<{ id: string; enabled: boolean }>;   // 오류 · 검토 대기 서버는 enabled=true 불가
   skills?: Array<{ id: string; enabled: boolean }>;
   executionPolicy?: Partial<ExecutionPolicy>;             // data-model.md §4.1
@@ -486,7 +489,7 @@ interface AgentDraftInput {
 
 배포 규칙: 초안 검증(모델 3역할 지정, 허용 목록의 서버 · Skill 이 활성 상태) 통과 시 `agent_versions.status = published`, `agents.published_version_id` 교체. 실행 중 작업은 영향 없음.
 
-구현 상태: `GET /admin/agents` · `GET /admin/agents/:id`(배포 버전 · 초안 — 지침 · 환영 메시지 · 역할별 모델 · 실행 · Memory 정책(기본값 채움) · 허용 목록) · `PATCH …/draft` · `POST …/publish` · `GET …/versions`(배포자 · 실행 중 작업 수) · `POST …/versions/:versionId/restore`(그 버전 내용으로 초안을 다시 만듦 — 배포는 따로) · `DELETE …/draft`(초안 버리기) · `GET /admin/providers`(API Key 없이). 초안이 없으면 배포 버전을 복사해 만든다. 초안 필드: `systemPrompt` · `welcomeMessage` · `models`(executor 필수, 역할 중복 · 남의 Provider 거부, 대체 Provider 와 모델은 함께) · `executionPolicy` · `memoryPolicy`(바꿀 항목만 — 지금 값과 합쳐 스키마 검증, 범위 밖이면 422) · `mcpServers` · `skills` · `changeNote`. 모르는 필드는 400. 배포 시 executor 모델과 허용 서버 · Skill 상태를 확인하고, 이전 배포 버전은 `archived`. 생성 · diff · 평가셋 실행 · Provider 등록은 다음 단계.
+구현 상태: `GET /admin/agents` · `GET /admin/agents/:id`(배포 버전 · 초안 — 지침 · 환영 메시지 · 역할별 모델 · 실행 · Memory 정책(기본값 채움) · 허용 목록) · `PATCH …/draft` · `POST …/publish` · `GET …/versions`(배포자 · 실행 중 작업 수) · `POST …/versions/:versionId/restore`(그 버전 내용으로 초안을 다시 만듦 — 배포는 따로) · `DELETE …/draft`(초안 버리기 — 배포 버전이 없으면 422) · `POST /admin/agents`(`{ name }` → 초안 v1 만 있는 Agent, 이름 중복 `409 NAME_TAKEN`) · `DELETE /admin/agents/:id`(`archivedAt` 만 채우고 초안은 지운다 — 버전은 작업이 가리키므로 남고, 실행 중인 작업은 그 버전으로 끝난다. 이름은 보관되지 않은 Agent 끼리만 유니크) · `GET /admin/providers`(API Key 없이). 초안이 없으면 배포 버전을 복사해 만든다. 초안 필드: `systemPrompt` · `welcomeMessage` · `models`(executor 하나 — Agent Loop 가 이 모델 하나로 계획 · 실행 · 답변, 남의 Provider 거부, 대체 Provider 와 모델은 함께) · `executionPolicy` · `memoryPolicy`(바꿀 항목만 — 지금 값과 합쳐 스키마 검증, 범위 밖이면 422) · `mcpServers` · `skills` · `changeNote`. 모르는 필드는 400. 배포 시 executor 모델과 허용 서버 · Skill 상태를 확인하고, 이전 배포 버전은 `archived`. diff · 평가셋 실행 · Provider 등록은 다음 단계.
 
 ### 4.5 MCP · Tool Registry (C-04 · C-05)
 
@@ -504,7 +507,7 @@ interface AgentDraftInput {
 | PUT | `/v1/admin/mcp-tools/:id/policy` | `{ permissionLevel?, approvalModeOverride?, enabled? }` → 새 Registry 버전 |
 | GET | `/v1/admin/mcp-servers/:id/changes` | 재탐색에서 감지된 변경 |
 | POST | `/v1/admin/mcp-servers/:id/changes/approve` | `{ toolNames }` 변경 반영 → 새 Registry 버전 |
-| POST | `/v1/admin/mcp-servers/:id/disable` | 비활성화 (Planner 에서 즉시 제외) |
+| POST | `/v1/admin/mcp-servers/:id/disable` | 비활성화 (Agent 에게서 즉시 제외) |
 | DELETE | `/v1/admin/mcp-servers/:id` | 삭제 (soft delete) |
 | GET | `/v1/admin/tool-registry/versions` | Registry 버전 목록 |
 | GET | `/v1/admin/tool-registry/versions/:version` | 스냅샷 |
@@ -698,7 +701,9 @@ LIMIT $4;
 | POST | `/v1/admin/widget-configs` | Admin | 생성 → 공개 키 · Secret(1회 표시) 발급 |
 | GET | `/v1/admin/widget-configs/:id` | Viewer | 상세 (Secret 제외) |
 | PATCH | `/v1/admin/widget-configs/:id` | Admin | 허용 도메인 · 사용자 연동 · 테마 · 동작 |
-| POST | `/v1/admin/widget-configs/:id/rotate-secret` | Owner | 새 Secret(1회 표시), 이전 Secret 24시간 유예 |
+| POST | `/v1/admin/widget-configs/:id/icon` | Admin | 위젯 아이콘 올리기 — multipart `file`, PNG · JPEG · WebP(내용으로 판별, SVG 불가) 256KB 이하 → 저장소 `widget-icons/<tenant>/<sha256>` |
+| DELETE | `/v1/admin/widget-configs/:id/icon` | Admin | 위젯 아이콘 지우기 (기본 아이콘) |
+| GET | `/v1/widget/icons/:publicKey/:sha256` | 공개 | 지금 설정된 아이콘만 (`Cache-Control: immutable`, `Cross-Origin-Resource-Policy: cross-origin`) — 아니면 404 |
 
 ```ts
 interface WidgetConfigInput {
@@ -706,12 +711,12 @@ interface WidgetConfigInput {
   allowedOrigins?: string[];        // https://host[:port], 와일드카드는 서브도메인 1단계만 (https://*.example.com)
   identityMode?: 'anonymous' | 'signed_token';
   theme?: { brandColor: string; position: 'bottom-right' | 'bottom-left'; darkMode: 'system' | 'light' | 'dark' };
-  behavior?: { autoOpen: boolean; language: string; attachments: { types: string[]; maxMb: number }; noticeText: string; showPoweredBy: boolean };
+  behavior?: { autoOpen: boolean; language: string; attachments: { types: string[]; maxMb: number }; noticeText: string; showPoweredBy: boolean; starterPrompts: string[] }; // 제시어 6개 · 100자 이하
 }
 // 응답에 contrast: { ratio: number; passes: boolean } 포함 (브랜드 색 vs 흰 글자, 4.5:1 기준)
 ```
 
-구현 상태: `GET` 목록(에이전트 이름 · 공개 키 · 테마 · 동작, Secret 값 없음) · `PATCH`(이름 · Agent · 허용 도메인 · 사용자 연동 · 사용 여부 · 테마 · 동작 — 테마 · 동작은 바꿀 항목만, bootstrap 에 바로 반영) · `POST …/rotate-secret`(Owner, 새 Secret 은 이 응답에서만 · 이전 Secret 24시간 허용). 대비 계산은 콘솔에서 한다. 생성 · 단건 조회는 다음 단계.
+구현 상태: `GET` 목록(에이전트 이름 · 공개 키 · 테마 · 동작, Secret 값 없음) · `PATCH`(이름 · Agent · 허용 도메인 · 사용자 연동 · 사용 여부 · 테마 · 동작 — 테마 · 동작은 바꿀 항목만, bootstrap 에 바로 반영). 대비 계산은 콘솔에서 한다. 생성 · 단건 조회는 다음 단계.
 
 ### 4.9.1 사용량 · 과금 (Billing)
 
@@ -748,13 +753,31 @@ interface WidgetConfigInput {
 |---|---|---|
 | GET | `/v1/admin/audit-logs` | `?action&actorType&targetType&targetId&from&to&cursor` |
 
+### 4.11 워크스페이스
+
+| Method | Path | 권한 | 설명 |
+|---|---|---|---|
+| GET | `/v1/admin/workspace` | Viewer | 현재 워크스페이스 `{ id, slug, name, plan, isDefault, createdAt }` |
+| PATCH | `/v1/admin/workspace` | Admin | `{ name }` 이름 변경 |
+| DELETE | `/v1/admin/workspace` | Owner | `{ confirmSlug }` 워크스페이스와 모든 데이터 삭제 → `204`. 기본 워크스페이스는 `409 DEFAULT_WORKSPACE_PROTECTED`, 주소가 다르면 `400 VALIDATION_FAILED` |
+| GET | `/v1/admin/workspaces` | Viewer | 내 이메일이 활성 멤버인 워크스페이스 `[{ slug, name, role, isDefault, current, switchable }]` — 기본 먼저, 그다음 이름 순. `switchable` 은 이 로그인에서 비밀번호를 확인해 바로 전환할 수 있는지 |
+| POST | `/v1/admin/workspaces` | Owner | `{ slug, name }` 새 워크스페이스 → `201 { accessToken, expiresAt, user, workspace, slug }` (새 워크스페이스의 로그인 결과). 주소가 이미 있으면 `409 WORKSPACE_SLUG_TAKEN` |
+| POST | `/v1/admin/auth/switch` | 토큰만 | `{ slug, password? }` 다른 워크스페이스로 → 로그인과 같은 응답 |
+
+- 워크스페이스 = 테넌트. 처음부터 `default`(기본 워크스페이스)가 있다. slug(주소)는 영문 소문자 · 숫자 · 하이픈 40자 이하이고 만든 뒤 바꿀 수 없으므로, `default` 는 늘 기본이고 지울 수 없다.
+- 새 워크스페이스는 Registry v1 · 기본 권한 정책 · 배포된 Agent v1 · 기본 위젯(공개 키 `wk_pub_…`, Secret 참조 `vault://widgets/<slug>`, 허용 도메인 없음)으로 시작하고, 만든 멤버를 같은 이메일 · 이름 · 비밀번호로 Owner 로 넣는다. 모델 설정은 없다.
+- 같은 이메일이라도 워크스페이스마다 다른 계정이다. 로그인은 이 이메일의 모든 워크스페이스 계정(`app_member_workspaces` SECURITY DEFINER 함수)과 비밀번호를 대조하고, 맞은 멤버십만 access token 의 `ws` 에 넣는다. 전환은 `ws` 안이면 비밀번호 없이, 밖이면 그 워크스페이스의 `password` 를 받아 확인한 뒤 `ws` 에 더한다 — 다른 워크스페이스가 같은 이메일로 만든 계정으로 넘어가지 못하게.
+- 전환 오류: 멤버가 아니거나 없는 주소 `404 NOT_FOUND`, 비밀번호가 없거나 틀리면 `403 WORKSPACE_PASSWORD_REQUIRED`(지금 로그인은 그대로 유효). 전환 · 새 워크스페이스 토큰의 만료 시각은 처음 로그인의 만료 시각을 넘지 않는다.
+- 전환은 가드 없이 토큰 서명만 확인한다 — 지금 워크스페이스를 지운 뒤에도 `ws` 의 다른 워크스페이스로 옮겨 갈 수 있다.
+- 감사 로그 `workspace.rename` · `workspace.create`(새 워크스페이스에). 삭제는 감사 로그도 함께 지워지므로 서버 로그에 남긴다.
+
 ---
 
 ## 5. 오류
 
 ```json
 {
-  "type": "urn:theoneai:problem:approval-expired",
+  "type": "urn:theonewidget:problem:approval-expired",
   "title": "승인 기한이 지났습니다",
   "status": 410,
   "code": "APPROVAL_EXPIRED",
@@ -776,6 +799,7 @@ interface WidgetConfigInput {
 | `TASK_NOT_ACTIVE` | 409 | 이미 끝난 작업에 steer · cancel | 상태 새로고침 |
 | `TASK_NOT_RESUMABLE` | 409 | failed · paused 가 아님 | |
 | `CHECKPOINT_NOT_FOUND` | 409 | 재개할 checkpoint 없음 | “처음부터”만 노출 |
+| `TASK_BUDGET_EXHAUSTED` | 409 | `STEP_LIMIT_EXCEEDED` · `TOKEN_BUDGET_EXCEEDED` 로 실패한 작업 — 예산은 작업 전체 기준이라 재개 · 처음부터 모두 바로 다시 실패한다 (`resumable: false`) | 재개 · 처음부터 버튼 숨김 |
 | `APPROVAL_ALREADY_RESOLVED` | 409 | 이미 처리됨 | 카드 갱신 |
 | `IDEMPOTENCY_KEY_REUSED` | 409 | 같은 키, 다른 본문 | |
 | `APPROVAL_EXPIRED` | 410 | 승인 만료 | W-05 재개 안내 |
@@ -788,7 +812,8 @@ interface WidgetConfigInput {
 | `MCP_AUTH_UNSUPPORTED` | 422 | 아직 지원하지 않는 인증 (OAuth) | C-05 ① |
 | `MCP_TOOL_INVALID` | 422 | 스키마 오류 · 보안 실패 Tool 을 포함하거나 켬 | C-05 ③ · C-04 |
 | `MCP_SERVER_STATE` | 409 | 상태에 맞지 않는 단계 (예: 탐색 전 등록) | 마법사 단계 이동 |
-| `NAME_TAKEN` | 409 | 같은 이름의 MCP 서버 | 이름 입력 오류 |
+| `NAME_TAKEN` | 409 | 같은 이름의 MCP 서버 · Agent | 이름 입력 오류 |
+| `AGENT_IN_USE` | 409 | 위젯이 쓰는 Agent 삭제 (`detail` 에 위젯 이름) | 삭제 확인 창 오류 |
 | `MCP_IMAGE_UNSIGNED` | 422 | 이미지 서명 없음 · 불일치 | C-05 ① 오류 |
 | `SKILL_PARSE_FAILED` | 422 | zip · 번들 규칙 위반 또는 SKILL.md 파싱 실패 (`errors[].line`) | C-06 미리보기 |
 | `SKILL_VERSION_EXISTS` | 409 | 같은 버전 번호 · 다른 내용 | version 올리기 안내 |
@@ -806,12 +831,14 @@ interface WidgetConfigInput {
 | `MODEL_TIMEOUT` | 응답 시간 초과 (`LLM_REQUEST_TIMEOUT_MS` · `LLM_IDLE_TIMEOUT_MS`) |
 | `MODEL_ERROR` | 그 밖의 provider 오류 (재시도 · 대체 모델 후에도) |
 | `MODEL_EMPTY_RESPONSE` | 모델이 빈 결과를 돌려줌 |
-| `STEP_LIMIT_EXCEEDED` · `TOKEN_BUDGET_EXCEEDED` · `TIME_LIMIT_EXCEEDED` | 실행 정책(`execution_policy`) 한도 초과 |
+| `STEP_LIMIT_EXCEEDED` · `TOKEN_BUDGET_EXCEEDED` · `TIME_LIMIT_EXCEEDED` | 실행 정책(`execution_policy`) 한도 초과. 토큰 · 시간을 80% 쓰면 남은 작업 단계를 건너뛰고 지금까지의 노트로 답한다. 답변을 보낸 뒤의 검증 · 정정은 단계 수 · 토큰 상한에 걸릴 것 같으면 건너뛴다 |
 | `QUEUE_UNAVAILABLE` · `RUNTIME_ERROR` | 작업 큐 등록 실패 · 그 밖의 내부 오류 |
 | `AGENT_NOT_PUBLISHED` | 503 | 배포된 Agent 버전 없음 | 위젯 “준비 중” 표시 |
 | `RATE_LIMITED` | 429 | 요청 제한 | 재시도 안내 |
 | `BUDGET_EXCEEDED` | 402 | 이번 달 사용 한도 도달 | 운영자에게 문의 안내 |
 | `MARKETPLACE_SIGNATURE_INVALID` | 422 | 마켓플레이스 서명 · 파일 해시 불일치 | 설치 중단 |
+| `WORKSPACE_SLUG_TAKEN` | 409 | 같은 주소(slug)의 워크스페이스가 있음 | 주소 입력 오류 |
+| `DEFAULT_WORKSPACE_PROTECTED` | 409 | 기본 워크스페이스 삭제 시도 | 삭제 버튼 숨김 |
 | `SERVICE_UNAVAILABLE` | 503 | 작업 큐 등 내부 의존성 장애 (작업은 `failed · QUEUE_UNAVAILABLE`) | 잠시 후 재시도 |
 
 ---
@@ -829,28 +856,29 @@ agent.worker (queue: agent-tasks)
   1. forTenant(tenantId) · tasks 잠금(SELECT … FOR UPDATE SKIP LOCKED) · status = running
   2. checkpoint 로드 (재개면 last_checkpoint_step_id, 아니면 빈 상태)
   3. Context 구성 (지침 + Memory 검색 + Skill metadata + 대화 + 추가 지시)
-  4. Plan 생성/재사용 → plan.created
-  5. 단계마다:
+  4. 모델 차례(agent.turn) 반복 — 모델 하나가 한 대화 안에서 Tool 을 부르고 결과를 보며 이어 간다
+     (여러 단계가 필요하면 todo Tool 로 할 일 목록을 만들고 고친다 → plan.created · plan.updated · plan.revised,
+      Skill 은 시스템 프롬프트에 metadata 만 두고 load_skill 로 본문 · 파일 목록을 불러온다 — 이후 Tool 은 allowed-tools 로 좁힌다)
+  5. 모델이 부른 Tool 마다:
        권한 검증 (allowlist → 등급 정책 → Tool 재정의 → 조건 규칙)
          ├ block           → tool_executions(denied) · tool.denied → 거부 결과를 모델에게 돌려줌 (같은 단계에서 계속)
          ├ 승인 필요        → approvals INSERT · approval.required · status = waiting_approval · Job 종료 (Worker 점유 안 함)
-         │                   진행 중 대화는 checkpoint 의 pendingWork 로 — 결정 후 같은 Tool 호출부터 재개
+         │                   진행 중 대화는 checkpoint 의 workingMemory.loop 로 — 결정 후 같은 Tool 호출부터 재개
          └ 허용            → 실행 (MCP · Sandbox · Skill) → tool.called / tool.result
                               읽기 등급 호출이 여러 개면 parallelTools.max 만큼 동시에 (같은 parallelGroup)
-       Observe → Evaluate(pass / replan / fail) → task_steps checkpoint 저장 → step.completed
+       결과를 대화에 붙이고 차례 단계에 checkpoint 저장 → step.completed
+       단계 수 · 토큰 · 시간 예산이 답변할 몫만 남으면 마지막 차례는 Tool 없이(tool_choice=none) 답하게 한다
        cancel_requested_at · pause_requested_at 확인 (단계 사이 + AbortSignal 로 Tool 호출 중단)
-  6. 최종 응답 생성(message.delta …) → Evaluator 검증 → (구체적인 오류가 있으면) 정정 메시지 · 다시 검증 → task.completed
-  7. memory-ingest 잡 등록 (Reflection → Episodic · Procedural 기억 — 실패 · 거부된 Tool 호출 · 재계획 사유 · 검증 오류를 처리 요령의 근거로)
+  6. 모델이 Tool 없이 답하면 그 답이 최종 답변(message.delta …) → task.completed (별도 계획 · 평가 · 검증 호출 없음)
+     Tool 호출과 함께 온 텍스트는 중간 안내 메시지로 남는다
+  7. memory-ingest 잡 등록 (Reflection → Episodic · Procedural 기억 — 실패 · 거부된 Tool 호출 · 할 일 목록 수정을 처리 요령의 근거로)
 
 Context Compression (구현):
   - 대화: 최근 대화 창(메시지 12개 · 1만2천 자)은 그대로, 창 밖으로 밀려난 메시지는 대화별 누적 요약(conversations.summary)에 합친다
-          (Context 단계, Evaluator 모델, 한 번에 40개씩 · 최대 3번, 민감정보 가림 · 지시문 의심이면 저장 안 함). 요약은 시스템 프롬프트에 데이터로
-  - 작업 노트: 1만2천 자를 넘으면 최근 2개만 남기고 앞 단계 노트를 하나로 줄인다 (context.compress_notes 단계 — 작업 단계 · 평가 · 답변 전)
-  - 작업 단계의 Tool 결과: 합계 1만6천 자를 넘으면 마지막 호출 묶음보다 앞선 결과를 앞부분 600자만 (모델 호출 없음)
+          (Context 단계, Agent 모델, 한 번에 40개씩 · 최대 3번, 민감정보 가림 · 지시문 의심이면 저장 안 함). 요약은 시스템 프롬프트에 데이터로
+  - 작업 대화의 Tool 결과: 합계 1만6천 자를 넘으면 마지막 호출 묶음보다 앞선 결과를 앞부분 600자만 (모델 호출 없음)
 Reflection (구현):
-  - 재계획 입력에 이 작업에서 실패 · 거부 · 시간 초과된 Tool 호출 목록(Problems so far) — 같은 시도를 반복하지 않게
-  - 답변 검증(verify)이 구체적인 오류(issues)를 돌려주면 executor.correct 단계가 정정 메시지를 한 번 스트리밍 → evaluator.verify_correction
-    (실행 정책 selfCorrection, 기본 켜짐)
+  - 실패 · 거부된 Tool 결과는 다음 차례 대화에 그대로 이어져 모델이 같은 호출을 되풀이하지 않게 한다
 
 승인 결정 / 재개 / 복구 → 같은 큐에 { mode: 'resume', fromStepId? } 로 다시 넣는다.
 ```
@@ -860,7 +888,7 @@ Reflection (구현):
 | `agent-tasks` | 메시지 · 승인 결정 · 재개 | Agent Loop 실행. BullMQ `attempts: 1` — 재시도는 Loop 안에서 단계 단위로 처리 |
 | `agent-recovery` | 1분 주기 | `app_find_stalled_tasks('60 seconds')` → `recovering` 으로 바꾸고 `mode: 'resume'` 재투입 (복구 한도 3회). 구현: `RECOVERY_TICK_SEC`(30초)마다 heartbeat 가 `RECOVERY_STALE_SEC`(60초) 넘게 끊긴 작업을 잠그고, 실행 중이던 단계를 `failed(worker_lost)` 로 닫은 뒤 `task.recovering` → 재개 Job(`<taskId>:recover:<n>`, 대기 중이면 다시 넣지 않음). 한도(`RECOVERY_MAX_ATTEMPTS`)를 넘으면 `failed(RECOVERY_LIMIT_EXCEEDED)` — checkpoint 가 있으면 사용자가 재개할 수 있다. Worker 는 heartbeat 때 자신이 아직 주인인지(`worker_id`) 확인하고 아니면 멈춘다. Worker 가 SIGTERM 을 받으면 새 Job 을 멈추고 실행 중 작업을 `recovering` 으로 넘겨 바로 재개 Job 을 넣는다 |
 | `approval-expiry` | 1분 주기 | 만료 승인 → `expired`, 작업 `paused` + checkpoint 유지. 구현: `APPROVAL_EXPIRY_TICK_SEC`(60초)마다 `app_find_expired_approvals` 로 찾는다. 승인 요청 단계는 `skipped`, `approval.resolved`(`expired`, `system`) → 대기 중인 승인이 더 없으면 작업 `paused`(`approval_expired`). 사용자가 재개하면 같은 호출로 새 승인을 요청한다. 만료 시각이 지난 승인에 결정하면 같은 처리 후 410 |
-| `memory-ingest` | 작업 완료 | Reflection 요약 · 임베딩 · 지시문 패턴 검사 후 저장 또는 격리. 구현: 작업이 `completed` 로 끝나고 `memoryPolicy.enabled` 이면 Job(`memory-<taskId>`, 3회 재시도)을 넣는다. Memory 역할(Evaluator 모델, JSON)이 요청 · 작업 노트 · 최종 답변에서 최대 4개를 뽑는다 — `semantic`+`user`(사용자가 스스로 밝힌 사실 · 선호), `episodic`+`user`(요청과 결과 요약), `procedural`+`agent`(모든 사용자에게 도움이 되는 처리 요령 — 한 사용자의 선호는 넣지 않음). 정책의 `types` 밖이거나, 익명(외부 ID 없음) · 삭제된 사용자의 user 범위 기억은 버린다. 마스킹 → 지시문 검사(격리) → 임베딩 → 같은 범위 · 종류에서 유사도 0.9 이상이면 새로 만들지 않고 내용 · 출처(`source_task_ids`)를 합친다. 확신도 0.8 미만은 `needsVerification`, 만료일은 `retentionDays` |
+| `memory-ingest` | 작업 완료 | Reflection 요약 · 임베딩 · 지시문 패턴 검사 후 저장 또는 격리. 구현: 작업이 `completed` 로 끝나고 `memoryPolicy.enabled` 이면 Job(`memory-<taskId>`, 3회 재시도)을 넣는다. Memory 역할(Agent 모델, JSON)이 요청 · 작업에서 부른 Tool · 최종 답변에서 최대 4개를 뽑는다 — `semantic`+`user`(사용자가 스스로 밝힌 사실 · 선호), `episodic`+`user`(요청과 결과 요약), `procedural`+`agent`(모든 사용자에게 도움이 되는 처리 요령 — 한 사용자의 선호는 넣지 않음). 정책의 `types` 밖이거나, 익명(외부 ID 없음) · 삭제된 사용자의 user 범위 기억은 버린다. 마스킹 → 지시문 검사(격리) → 임베딩 → 같은 범위 · 종류에서 유사도 0.9 이상이면 새로 만들지 않고 내용 · 출처(`source_task_ids`)를 합친다. 확신도 0.8 미만은 `needsVerification`, 만료일은 `retentionDays` |
 | `mcp-sync` | 서버별 1시간 | 재탐색 → 변경이 있으면 `mcp_tools.pending_change` 기록 · 헬스 갱신. 구현: `MCP_SYNC_TICK_SEC`(기본 60초)마다 `app_list_mcp_servers_due_for_sync` 로 시기가 된 서버(연결됨 `MCP_SYNC_INTERVAL_SEC`, 오류 상태는 최대 5분)를 확인. 연결 실패 → `error`(Tool 제외), 성공 → `connected`(복구). 헬스 = 최근 24시간 호출 p95 · 오류율(모델의 인자 오류 제외) |
 | `skill-verify` | 업로드 · Git 등록 | 파싱 · 해시 · 서명 · 정적 검사 → `skill_versions.verification` |
 | `eval-runs` | C-03 테스트 실행 | 평가셋 실행 (실제 외부 쓰기 Tool 은 dry-run) |
@@ -888,8 +916,7 @@ Reflection (구현):
 | `conversations` · `messages` | `conversations`, `admin/conversations` | `ConversationsService`, `MessagesService` |
 | `tasks` | `tasks`, `admin/tasks` | `TasksService`, `TaskControlService`(pause · cancel · resume · steer) |
 | ★ `events` | `tasks/:id/events`, `admin/stream` | `TaskEventsService`, `SseStreamService` |
-| `agent-runtime` | — | `AgentLoopService`, `ContextService`, `ExecutionService` |
-| `planner` · `evaluator` | — | `PlannerService`, `EvaluatorService`(Reflection) |
+| `agent-runtime` | — | `AgentLoopRuntime`(단일 Agent 루프 · todo · load_skill), `ContextBuilder`, `ModelRouterFactory` |
 | `tools` | `admin/tool-registry` | `ToolRegistryService`, `ToolDispatcherService`, `ToolPermissionService` |
 | `mcp` | `admin/mcp-servers`, `admin/mcp-tools` | `McpManagerService`, `McpConnectionService`, `McpDiscoveryService`, `SsrfGuard` |
 | `skills` | `admin/skills` | `SkillLoaderService`, `SkillParserService`, `SkillSelectorService`, `SkillVerifierService` |
@@ -920,4 +947,5 @@ Reflection (구현):
 | C-06 Skill | `GET /admin/skills` · `POST /admin/skills` · `POST /admin/skills/git` · `GET …/versions/:versionId` · `POST …/activate` · `POST …/test-runs` |
 | C-07 승인 · 정책 | `GET /admin/approvals` · `POST /admin/approvals/:id/decision` · `PUT /admin/tool-policies` · `/admin/tool-policy-rules` |
 | C-08 Memory | `GET /admin/memories/search` · `PATCH\|DELETE /admin/memories/:id` · `POST /admin/end-users/:id/erase` |
-| C-09 Widget 설치 | `GET\|PATCH /admin/widget-configs/:id` · `POST /admin/widget-configs/:id/rotate-secret` |
+| C-09 Widget 설치 | `GET\|PATCH /admin/widget-configs/:id` |
+| 워크스페이스 | `GET\|PATCH\|DELETE /admin/workspace` · `GET\|POST /admin/workspaces` |

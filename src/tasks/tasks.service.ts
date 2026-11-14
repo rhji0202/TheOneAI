@@ -36,17 +36,12 @@ export const taskListQuerySchema = z.object({
 });
 export type TaskListQuery = z.infer<typeof taskListQuerySchema>;
 
-const verificationSchema = z.object({
-  checks: z.array(z.object({ label: z.string(), passed: z.boolean() })).default([]),
-});
-
 /** docs/api-spec.md §2.3 TaskDetail */
 export interface TaskDetailView extends Omit<TaskSummaryView, 'pendingApproval'> {
   plan: { version: number; steps: PlanStep[]; revisedReason: string | null } | null;
   pendingApproval: ApprovalView | null;
   result: {
     messageId: string | null;
-    verification: Array<{ label: string; passed: boolean }>;
     summary: {
       steps: number;
       toolCalls: number;
@@ -215,11 +210,6 @@ export class TasksService {
       orderBy: { createdAt: 'desc' },
       select: { id: true },
     });
-    const evaluation = await tx.taskStep.findFirst({
-      where: { taskId: task.id, type: 'evaluate', status: 'succeeded' },
-      orderBy: { seq: 'desc' },
-      select: { evaluation: true },
-    });
     const toolCalls = await tx.toolExecution.count({ where: { taskId: task.id } });
     const artifacts = await tx.artifact.findMany({
       where: { taskId: task.id, origin: 'task_output', uploadedAt: { not: null } },
@@ -229,8 +219,6 @@ export class TasksService {
       task.startedAt && task.finishedAt ? task.finishedAt.getTime() - task.startedAt.getTime() : 0;
     return {
       messageId: message?.id ?? null,
-      verification: verificationSchema.catch({ checks: [] }).parse(evaluation?.evaluation ?? {})
-        .checks,
       summary: {
         steps: task.completedSteps,
         toolCalls,

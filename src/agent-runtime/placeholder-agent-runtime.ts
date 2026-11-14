@@ -23,14 +23,7 @@ export class PlaceholderAgentRuntime implements AgentRuntime {
       output: { systemPromptChars: ctx.task.systemPrompt.length, memories: 0, skills: 0 },
     }));
 
-    await ctx.step({ type: 'plan', name: 'planner.create' }, async () => {
-      await ctx.setPlan([
-        { index: 1, title: '요청 확인 · 응답 작성', kind: 'respond', requiresApproval: false },
-      ]);
-      return { value: undefined, summary: '1단계 계획' };
-    });
-
-    const message = await ctx.step({ type: 'respond', name: 'respond', planIndex: 1 }, async () => {
+    const message = await ctx.step({ type: 'respond', name: 'respond' }, async () => {
       const reply = placeholderReply(ctx.task.triggerText);
       const msg = await ctx.streamAssistantMessage(chunked(reply, this.delayMs, ctx.signal));
       ctx.workingMemory.lastReplyMessageId = msg.id;
@@ -42,14 +35,7 @@ export class PlaceholderAgentRuntime implements AgentRuntime {
       };
     });
 
-    const verification = [{ label: '응답 메시지 생성', passed: message.text.length > 0 }];
-    await ctx.step({ type: 'evaluate', name: 'evaluator.check' }, async () => ({
-      value: undefined,
-      summary: '결과 확인',
-      evaluation: { verdict: 'pass', checks: verification },
-    }));
-
-    return { messageId: message.id, verification };
+    return { messageId: message.id };
   }
 }
 
@@ -59,7 +45,7 @@ export function placeholderReply(request: string): string {
     `요청을 받았어요: “${quoted}”`,
     '',
     '지금은 실행 파이프라인(작업 큐 → Worker → 단계 기록 → 실시간 스트리밍)을 확인하는 임시 응답입니다.',
-    '계획 수립 · Tool 실행 · 결과 검증을 하는 Agent Loop 는 다음 개발 단계에서 연결됩니다.',
+    'Tool 을 부르며 답하는 Agent Loop 는 AGENT_RUNTIME=loop 일 때 동작합니다.',
   ].join('\n');
 }
 

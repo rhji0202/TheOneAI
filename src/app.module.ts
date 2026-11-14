@@ -26,6 +26,7 @@ import { SecretsModule } from './infrastructure/secrets/secrets.module.js';
 import { TasksModule } from './tasks/tasks.module.js';
 import { ToolsModule } from './tools/tools.module.js';
 import { WidgetModule } from './widget/widget.module.js';
+import { WorkspacesAdminModule } from './workspaces/admin/workspaces-admin.module.js';
 
 /** API 서버. Agent 실행은 하지 않는다 (WorkerModule 이 담당). */
 @Module({
@@ -56,6 +57,7 @@ import { WidgetModule } from './widget/widget.module.js';
     WidgetAdminModule,
     ArtifactsModule,
     ArtifactsHttpModule,
+    WorkspacesAdminModule,
   ],
   controllers: [HealthController],
 })

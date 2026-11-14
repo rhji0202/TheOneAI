@@ -17,6 +17,11 @@ export const BLOCKING_STATUSES: TaskStatus[] = [
 ];
 export const TERMINAL_STATUSES: TaskStatus[] = ['completed', 'failed', 'cancelled'];
 
+/** 작업 예산(단계 수 · 토큰)을 다 써 실패 — 예산은 작업 전체 기준이라 재개 · 다시 실행해도 바로 다시 실패한다 */
+export function isBudgetExhausted(failureCode: string | null): boolean {
+  return failureCode === 'STEP_LIMIT_EXCEEDED' || failureCode === 'TOKEN_BUDGET_EXCEEDED';
+}
+
 export const TASK_GROUPS = {
   active: ACTIVE_STATUSES,
   completed: ['completed'] as TaskStatus[],
@@ -75,7 +80,7 @@ export function toTaskSummary(task: TaskSummaryRow): TaskSummaryView {
         ? {
             code: task.failureCode ?? 'RUNTIME_ERROR',
             message: task.failureMessage ?? '',
-            resumable: task.lastCheckpointStepId !== null,
+            resumable: task.lastCheckpointStepId !== null && !isBudgetExhausted(task.failureCode),
           }
         : null,
     createdAt: task.createdAt.toISOString(),

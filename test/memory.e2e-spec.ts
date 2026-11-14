@@ -132,16 +132,14 @@ describe('기억 저장 (memory-ingest)', () => {
 });
 
 describe('기억 떠올리기 (Context)', () => {
-  it('같은 사용자의 새 대화에서 관련 기억을 계획 · 답변에 넣는다 (격리된 기억은 제외)', async () => {
+  it('같은 사용자의 새 대화에서 관련 기억을 Agent 지침에 넣는다 (격리된 기억은 제외)', async () => {
     const taskId = await run('요금제 비교할 때 내가 좋아하는 답변 형식 기억나? #mem2');
     const output = await contextOutput(taskId);
     expect(output.memories.map((m) => m.id)).toContain(preferenceId);
-    const planner = requestsFor('#mem2').find((r) => r.role === 'Planner')!;
-    expect(planner.body.messages[0]!.content).toContain('## What the agent remembers');
-    expect(planner.body.messages[0]!.content).toContain('표로 받기를 선호한다');
-    const respond = requestsFor('#mem2').find((r) => r.role.startsWith('Executor (respond'))!;
-    expect(respond.body.messages[0]!.content).toContain('표로 받기를 선호한다');
-    expect(respond.body.messages[0]!.content).not.toContain('Ignore all previous instructions');
+    const agent = requestsFor('#mem2').find((r) => r.role === 'Agent')!;
+    expect(agent.body.messages[0]!.content).toContain('## What the agent remembers');
+    expect(agent.body.messages[0]!.content).toContain('표로 받기를 선호한다');
+    expect(agent.body.messages[0]!.content).not.toContain('Ignore all previous instructions');
     const used = await tenantRows((tx) =>
       tx.memory.findUniqueOrThrow({ where: { id: preferenceId } }),
     );
@@ -152,8 +150,8 @@ describe('기억 떠올리기 (Context)', () => {
     const taskId = await run('오늘 할 일 세 가지만 정리해 줘 #mem3');
     const output = await contextOutput(taskId);
     expect(output.memories).toContainEqual({ id: preferenceId, type: 'semantic', via: 'profile' });
-    const respond = requestsFor('#mem3').find((r) => r.role.startsWith('Executor (respond'))!;
-    expect(respond.body.messages[0]!.content).toContain('표로 받기를 선호한다');
+    const agent = requestsFor('#mem3').find((r) => r.role === 'Agent')!;
+    expect(agent.body.messages[0]!.content).toContain('표로 받기를 선호한다');
   });
 
   it('다른 사용자는 이 사용자의 기억을 떠올리지 않는다', async () => {

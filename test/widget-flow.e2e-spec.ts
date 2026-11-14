@@ -30,10 +30,7 @@ interface BootstrapBody {
 interface TaskDetailBody {
   status: string;
   lastEventId: string | null;
-  result: {
-    messageId: string | null;
-    verification: Array<{ label: string; passed: boolean }>;
-  } | null;
+  result: { messageId: string | null } | null;
 }
 
 let ctx: TestContext;
@@ -201,8 +198,9 @@ describe('메시지 → 작업 → SSE', () => {
     const types = events.map((e) => e.event);
     expect(types[0]).toBe('task.status');
     expect(events[0]!.data).toEqual({ status: 'queued' });
-    expect(types).toContain('plan.created');
-    expect(types.indexOf('plan.created')).toBeLessThan(types.indexOf('message.completed'));
+    // 간단한 요청은 할 일 목록 없이 모델 차례 한 번에 답한다
+    expect(types).not.toContain('plan.created');
+    expect(types.indexOf('step.started')).toBeLessThan(types.indexOf('message.completed'));
     expect(types.at(-1)).toBe('task.completed');
     expect(types.filter((t) => t === 'step.started').length).toBe(
       types.filter((t) => t === 'step.completed').length,
@@ -230,20 +228,11 @@ describe('메시지 → 작업 → SSE', () => {
     expect(completed.message.content[0]!.text).toBe(streamed);
   });
 
-  it('GET /v1/tasks/:id 는 완료 상태 · 계획 · 결과를 준다', async () => {
+  it('GET /v1/tasks/:id 는 완료 상태 · 결과를 준다', async () => {
     const res = await api<TaskDetailBody>(ctx.baseUrl, 'GET', `/v1/tasks/${taskId}`, { token });
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({
-      status: 'completed',
-      progress: { completed: 1, total: 1 },
-      plan: { version: 1, steps: [expect.objectContaining({ index: 1, status: 'succeeded' })] },
-      result: {
-        verification: [
-          { label: '요청에 답함', passed: true },
-          { label: '사용자 언어로 작성', passed: true },
-        ],
-      },
-    });
+    expect(res.body).toMatchObject({ status: 'completed', plan: null });
+    expect(res.body.result).not.toHaveProperty('verification');
     const completed = events.find((e) => e.event === 'message.completed')!.data as {
       message: { id: string };
     };
@@ -256,10 +245,13 @@ describe('메시지 → 작업 → SSE', () => {
       await tx.$executeRaw`SELECT set_config('app.tenant_id', ${ctx.tenantA.tenantId}, true)`;
       return tx.taskStep.findMany({ where: { taskId }, orderBy: { seq: 'asc' } });
     });
-    expect(steps.map((s) => s.type)).toEqual(['context', 'plan', 'respond', 'evaluate']);
+    expect(steps.map((s) => s.name)).toEqual(['context.build', 'agent.turn']);
     expect(steps.every((s) => s.status === 'succeeded')).toBe(true);
-    const respond = steps.find((s) => s.type === 'respond')!;
-    expect(respond.checkpoint).toMatchObject({ planVersion: 1, nextPlanIndex: 2 });
+    const respond = steps.find((s) => s.name === 'agent.turn')!;
+    expect(respond.checkpoint).toMatchObject({
+      planVersion: 0,
+      workingMemory: { answer: { id: expect.any(String) } },
+    });
 
     const task = await ctx.owner.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.tenant_id', ${ctx.tenantA.tenantId}, true)`;
@@ -269,11 +261,11 @@ describe('메시지 → 작업 → SSE', () => {
   });
 
   it('Last-Event-ID 로 다시 연결하면 그 이후 저장 이벤트만 중복 없이 받는다', async () => {
-    const planCreated = events.find((e) => e.event === 'plan.created')!;
+    const contextDone = events.find((e) => e.event === 'step.completed')!;
     const replay = await readSse(`${ctx.baseUrl}/v1/tasks/${taskId}/events`, token, {
-      lastEventId: planCreated.id!,
+      lastEventId: contextDone.id!,
     });
-    const expected = events.filter((e) => e.id !== null && BigInt(e.id) > BigInt(planCreated.id!));
+    const expected = events.filter((e) => e.id !== null && BigInt(e.id) > BigInt(contextDone.id!));
     expect(replay.map((e) => e.id)).toEqual(expected.map((e) => e.id));
     expect(replay.at(-1)!.event).toBe('task.completed');
   });

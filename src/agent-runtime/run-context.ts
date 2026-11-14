@@ -39,8 +39,8 @@ export interface StepDefinition {
   /** false 면 planIndex 를 기록만 하고 계획 카드 상태 · 진행률은 바꾸지 않는다 (작업 단계 안의 Tool 호출) */
   trackPlan?: boolean;
   /**
-   * 승인 대기로 멈추면 이 단계부터 다시 하도록 checkpoint 를 남긴다 (작업 단계).
-   * Executor 가 workingMemory.pendingWork 에 진행 중이던 대화를 넣어 두어, 재개하면 같은 Tool 호출부터 이어 간다.
+   * 승인 대기로 멈추면 이 단계부터 다시 하도록 checkpoint 를 남긴다 (모델 차례).
+   * Agent Loop 가 workingMemory.loop 에 진행 중이던 대화를 넣어 두어, 재개하면 같은 Tool 호출부터 이어 간다.
    */
   checkpointOnApproval?: boolean;
 }
@@ -81,6 +81,8 @@ export interface ResumeState {
 export type EmitEvent = (type: string, data: unknown) => Promise<void>;
 
 const CANCEL_POLL_MS = 500;
+/** 이만큼 쓰면 Tool 을 더 부르지 않고 답변으로 간다 (나머지는 답변 몫) */
+const SOFT_BUDGET_RATIO = 0.8;
 
 /**
  * Agent Runtime 이 작업 상태를 바꾸는 유일한 통로.
@@ -94,7 +96,9 @@ export class RunContext {
   private plan: StoredPlan | null;
   private nextSeq: number;
   private lastCancelPoll = 0;
-  /** 재개면 checkpoint (Agent Loop 가 계획 · 노트 · 다음 단계를 여기서 이어받는다) */
+  /** 이번 실행 시작 (Worker 의 maxDurationSec 제한도 실행마다 새로 잰다) */
+  private readonly startedAt = Date.now();
+  /** 재개면 checkpoint (Agent Loop 가 대화 · 할 일 목록을 여기서 이어받는다) */
   readonly resume: ResumeState | null;
   /** 이전 실행들이 이미 쓴 토큰 (토큰 예산은 작업 전체 기준) */
   private readonly priorUsage: { inputTokens: number; outputTokens: number };
@@ -132,34 +136,70 @@ export class RunContext {
     return this.task.executionPolicy.maxSteps - this.nextSeq + 1;
   }
 
-  /** 계획 생성 · 수정 → plan.created / plan.revised */
-  async setPlan(steps: Array<Omit<PlanStep, 'status'>>, revisedReason?: string): Promise<void> {
+  /** 이전 실행을 포함해 이 작업이 쓴 토큰 */
+  private get tokensUsed(): number {
+    return (
+      this.priorUsage.inputTokens +
+      this.priorUsage.outputTokens +
+      this.usage.inputTokens +
+      this.usage.outputTokens
+    );
+  }
+
+  /**
+   * 토큰 예산이나 이번 실행 시간을 80% 넘게 썼다 — Tool 을 더 부르지 않고 지금까지 얻은 것으로 답한다.
+   * 상한 자체는 step()(토큰) · Worker 의 시간 제한이 그대로 지킨다.
+   */
+  get budgetNearlySpent(): boolean {
+    const { tokenBudget, maxDurationSec } = this.task.executionPolicy;
+    return (
+      this.tokensUsed >= tokenBudget * SOFT_BUDGET_RATIO ||
+      Date.now() - this.startedAt >= maxDurationSec * 1_000 * SOFT_BUDGET_RATIO
+    );
+  }
+
+  /**
+   * 할 일 목록(계획) 반영 — 처음이면 plan.created, 단계 구성이 바뀌면 plan.revised(새 버전),
+   * 상태만 바뀌면 같은 버전으로 plan.updated. 바뀐 것이 없으면 아무것도 하지 않는다.
+   */
+  async updatePlan(steps: PlanStep[], revisedReason = '할 일 목록을 고쳤어요'): Promise<void> {
     const previous = this.plan;
-    const next: StoredPlan = {
-      version: (previous?.version ?? 0) + 1,
-      steps: steps.map((s) => ({ ...s, status: 'pending' as const })),
-      revisedReason: revisedReason ?? null,
-    };
+    const sameSteps =
+      previous !== null &&
+      previous.steps.length === steps.length &&
+      previous.steps.every((s, i) => planKey(s) === planKey(steps[i]!));
+    if (sameSteps && previous.steps.every((s, i) => s.status === steps[i]!.status)) return;
+    const next: StoredPlan = sameSteps
+      ? { ...previous, steps }
+      : {
+          version: (previous?.version ?? 0) + 1,
+          steps,
+          revisedReason: previous ? revisedReason : null,
+        };
     await this.commit(async (tx) => {
       await tx.task.update({
         where: { id: this.task.id },
         data: {
           plan: next as unknown as Prisma.InputJsonValue,
           planVersion: next.version,
-          totalSteps: next.steps.length,
-          ...(previous ? { replanCount: { increment: 1 } } : {}),
+          totalSteps: steps.length,
+          completedSteps: steps.filter((s) => s.status === 'succeeded').length,
+          ...(previous && !sameSteps ? { replanCount: { increment: 1 } } : {}),
         },
       });
+      if (sameSteps) {
+        return [await this.append(tx, 'plan.updated', { planVersion: next.version, steps })];
+      }
       return previous
         ? [
             await this.append(tx, 'plan.revised', {
               planVersion: next.version,
-              reason: revisedReason ?? '',
-              steps: next.steps,
-              diff: diffPlans(previous.steps, next.steps),
+              reason: revisedReason,
+              steps,
+              diff: diffPlans(previous.steps, steps),
             }),
           ]
-        : [await this.append(tx, 'plan.created', { planVersion: next.version, steps: next.steps })];
+        : [await this.append(tx, 'plan.created', { planVersion: next.version, steps })];
     });
     this.plan = next;
   }
@@ -177,12 +217,7 @@ export class RunContext {
         `최대 단계 수(${this.task.executionPolicy.maxSteps})를 넘었습니다`,
       );
     }
-    const used =
-      this.priorUsage.inputTokens +
-      this.priorUsage.outputTokens +
-      this.usage.inputTokens +
-      this.usage.outputTokens;
-    if (used >= this.task.executionPolicy.tokenBudget) {
+    if (this.tokensUsed >= this.task.executionPolicy.tokenBudget) {
       throw new RuntimeError(
         'TOKEN_BUDGET_EXCEEDED',
         `작업당 토큰 예산(${this.task.executionPolicy.tokenBudget})을 모두 썼습니다`,
@@ -241,9 +276,7 @@ export class RunContext {
         this.usage.outputTokens += usage.outputTokens;
       }
       const checkpoint =
-        waiting && def.checkpointOnApproval && def.planIndex
-          ? this.buildCheckpoint(def.planIndex - 1)
-          : null;
+        waiting && def.checkpointOnApproval ? this.buildCheckpoint(def.planIndex) : null;
       await this.commit(async (tx) => {
         await tx.taskStep.update({
           where: { id: stepId },
@@ -459,8 +492,9 @@ export class RunContext {
   }
 }
 
+const planKey = (s: PlanStep) => `${s.title}|${s.kind}|${s.toolName ?? ''}|${s.skill?.name ?? ''}`;
+
 function diffPlans(before: PlanStep[], after: PlanStep[]) {
-  const key = (s: PlanStep) => `${s.title}|${s.kind}|${s.toolName ?? ''}|${s.skill?.name ?? ''}`;
   const beforeByIndex = new Map(before.map((s) => [s.index, s]));
   const afterIndexes = new Set(after.map((s) => s.index));
   return {
@@ -469,7 +503,7 @@ function diffPlans(before: PlanStep[], after: PlanStep[]) {
     changed: after
       .filter((s) => {
         const prev = beforeByIndex.get(s.index);
-        return prev !== undefined && key(prev) !== key(s);
+        return prev !== undefined && planKey(prev) !== planKey(s);
       })
       .map((s) => s.index),
   };

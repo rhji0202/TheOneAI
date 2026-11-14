@@ -77,5 +77,5 @@ export class ProblemDetailsFilter implements ExceptionFilter {
 }
 
 function problemType(code: string): string {
-  return `urn:theoneai:problem:${code.toLowerCase().replace(/_/g, '-')}`;
+  return `urn:theonewidget:problem:${code.toLowerCase().replace(/_/g, '-')}`;
 }

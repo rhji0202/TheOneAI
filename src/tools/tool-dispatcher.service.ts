@@ -504,6 +504,13 @@ export class ToolDispatcherService {
           durationMs: detail.durationMs,
         },
       });
+      // 완료 요약의 재시도 수(tasks.retry_count) — 첫 시도 뒤에 다시 실행한 횟수
+      if (detail.attempt && detail.attempt > 1) {
+        await tx.task.update({
+          where: { id: base.taskId },
+          data: { retryCount: { increment: detail.attempt - 1 } },
+        });
+      }
       await emit('tool.result', {
         seq,
         executionId: base.id,

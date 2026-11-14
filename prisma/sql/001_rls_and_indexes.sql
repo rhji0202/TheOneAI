@@ -26,7 +26,7 @@
 --   app_maintenance recovery · metrics-rollup · 보존 정리 잡 전용. 테넌트 횡단이 필요해 BYPASSRLS.
 --                   아래 SECURITY DEFINER 함수의 소유자이기도 하다.
 --   실제 접속 계정은 운영 환경에서 만들고 이 역할을 부여한다:
---     CREATE ROLE theoneai_api LOGIN PASSWORD '...' IN ROLE app_rw;
+--     CREATE ROLE theonewidget_api LOGIN PASSWORD '...' IN ROLE app_rw;
 -- ─────────────────────────────────────────────────────────────────────────────
 DO $$
 BEGIN

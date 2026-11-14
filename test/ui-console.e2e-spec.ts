@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { seedTenant } from '../prisma/seed.js';
 import { BuiltinToolCatalog } from '../src/tools/builtin-tool.catalog.js';
 import { type FakeMcp, startFakeMcp } from './fake-mcp-server.js';
 import {
@@ -77,7 +78,6 @@ async function newPage(): Promise<Page> {
 
 async function login(p: Page, member: { email: string; password: string }) {
   await p.goto(`${ctx.baseUrl}/console/login`);
-  await p.getByLabel('워크스페이스').fill(ctx.slugs.A);
   await p.getByLabel('이메일').fill(member.email);
   await p.getByLabel('비밀번호').fill(member.password);
   await p.getByRole('button', { name: '로그인' }).click();
@@ -126,7 +126,7 @@ describe('콘솔 로그인 · 대시보드 (C-01)', () => {
   it('틀린 비밀번호는 오류, 맞으면 대시보드 — KPI · 날짜별 작업 · 최근 실패', async () => {
     await go('/tasks');
     await page.waitForURL(/\/console\/login$/);
-    await page.getByLabel('워크스페이스').fill(ctx.slugs.A);
+    expect(await page.getByLabel('워크스페이스').count()).toBe(0);
     await page.getByLabel('이메일').fill(CONSOLE_MEMBERS.owner.email);
     await page.getByLabel('비밀번호').fill('wrong-password');
     await page.getByRole('button', { name: '로그인' }).click();
@@ -211,6 +211,28 @@ describe('Agent 설정 (C-03)', () => {
       { token: ownerToken },
     );
     expect(agents.body.find((a) => a.id === ctx.tenantA.agentId)!.publishedVersion).toBe(2);
+  });
+
+  it('Agent 추가 → 새 Agent 상세(배포 안 됨) → 삭제 → 목록에서 사라짐', async () => {
+    await go('/agents');
+    await page.getByRole('button', { name: 'Agent 추가' }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByLabel('이름').fill('UI 환불 도우미');
+    await dialog.getByRole('button', { name: '추가', exact: true }).click();
+    await heading('UI 환불 도우미');
+    await page.getByText('배포 안 됨').first().waitFor();
+    expect(await page.getByRole('button', { name: '초안 버리기' }).count()).toBe(0);
+    await snap(page, 'c03-agent-new');
+
+    await page.getByRole('button', { name: 'Agent 삭제' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Agent 삭제' }).click();
+    await heading('Agent 설정');
+    await page.getByText('Agent 를 삭제했어요').waitFor();
+    await page
+      .getByText(/배포 중/)
+      .first()
+      .waitFor();
+    expect(await page.getByText('UI 환불 도우미').count()).toBe(0);
   });
 });
 
@@ -371,5 +393,75 @@ describe('역할 (Viewer)', () => {
     await heading('MCP 서버', viewer);
     expect(await viewer.getByRole('link', { name: /MCP 서버 연결/ }).count()).toBe(0);
     expect(await viewer.getByRole('button', { name: /MCP 서버 연결/ }).count()).toBe(0);
+  });
+});
+
+describe('워크스페이스', () => {
+  it('로그인에는 워크스페이스가 없고, 사이드바 메뉴로 바로 오가며, 비밀번호가 다른 워크스페이스는 그 비밀번호를 묻는다', async () => {
+    const p = await newPage();
+    const suffix = Date.now().toString(36);
+    const slug = `ui-ws-${suffix}`;
+    const otherSlug = `ui-other-${suffix}`;
+    // 같은 이메일로 다른 워크스페이스가 만든 계정 — 비밀번호가 다르다
+    await seedTenant(ctx.owner, {
+      slug: otherSlug,
+      name: 'UI 다른 워크스페이스',
+      widget: {
+        publicKey: `wk_pub_ui_other_${suffix}`,
+        secretRef: 'vault://widgets/ui-other',
+        allowedOrigins: [],
+      },
+      members: [{ ...CONSOLE_MEMBERS.owner, password: 'other-pass-1234' }],
+    });
+    const menu = (name: RegExp) => p.getByRole('button', { name }).first();
+    const inWorkspace = async (name: RegExp) => {
+      await p.waitForURL(/\/console\/$/);
+      await menu(name).waitFor();
+    };
+
+    await login(p, CONSOLE_MEMBERS.owner);
+    await menu(/테넌트 A/).click();
+    await p.getByRole('menuitem', { name: '워크스페이스', exact: true }).click();
+    await p.waitForURL(/\/console\/workspace$/);
+    await heading('워크스페이스', p);
+    await p.getByRole('button', { name: '새 워크스페이스' }).click();
+    await p.getByPlaceholder('예: 쇼핑몰 고객지원').fill('UI 워크스페이스');
+    await p.getByPlaceholder('예: shop').fill(slug);
+    await p.getByRole('button', { name: '만들고 이동' }).click();
+    await menu(/UI 워크스페이스/).waitFor();
+    await p.getByText(slug).first().waitFor();
+    await snap(p, 'c12-workspace');
+
+    await menu(/UI 워크스페이스/).click();
+    await snap(p, 'c12-workspace-menu');
+    await p.getByRole('menuitem', { name: new RegExp(ctx.slugs.A) }).click();
+    await inWorkspace(/테넌트 A/);
+
+    await menu(/테넌트 A/).click();
+    await p.getByRole('menuitem', { name: new RegExp(otherSlug) }).click();
+    const dialog = p.getByRole('dialog');
+    await dialog.getByLabel('비밀번호').fill(CONSOLE_MEMBERS.owner.password);
+    await dialog.getByRole('button', { name: '이동' }).click();
+    await dialog.getByText('비밀번호가 맞지 않습니다').waitFor();
+    await snap(p, 'c12-workspace-password');
+    await dialog.getByLabel('비밀번호').fill('other-pass-1234');
+    await dialog.getByRole('button', { name: '이동' }).click();
+    await inWorkspace(/UI 다른 워크스페이스/);
+
+    await menu(/UI 다른 워크스페이스/).click();
+    await p.getByRole('menuitem', { name: new RegExp(slug) }).click();
+    await inWorkspace(/UI 워크스페이스/);
+    await go('/workspace', p);
+    await p.getByRole('button', { name: '워크스페이스 삭제' }).click();
+    await p.getByLabel(/확인을 위해 주소/).fill(slug);
+    await p.getByRole('button', { name: '삭제', exact: true }).click();
+    // 지운 뒤에는 이 로그인에서 확인한 다른 워크스페이스로 옮겨 간다
+    await p.waitForURL(/\/console\/$/);
+    await p.getByRole('navigation').first().waitFor();
+    expect(await menu(/UI 워크스페이스/).count()).toBe(0);
+    const gone = await api(ctx.baseUrl, 'POST', '/v1/admin/auth/login', {
+      body: { tenantSlug: slug, ...CONSOLE_MEMBERS.owner },
+    });
+    expect(gone.status).toBe(401);
   });
 });

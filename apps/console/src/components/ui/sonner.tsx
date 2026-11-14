@@ -1,3 +1,5 @@
+'use client';
+
 import {
   CircleCheckIcon,
   InfoIcon,
@@ -5,7 +7,6 @@ import {
   OctagonXIcon,
   TriangleAlertIcon,
 } from 'lucide-react';
-import type { CSSProperties } from 'react';
 import { Toaster as Sonner, type ToasterProps } from 'sonner';
 
 const Toaster = ({ ...props }: ToasterProps) => {
@@ -26,8 +27,13 @@ const Toaster = ({ ...props }: ToasterProps) => {
           '--normal-text': 'var(--popover-foreground)',
           '--normal-border': 'var(--border)',
           '--border-radius': 'var(--radius)',
-        } as CSSProperties
+        } as React.CSSProperties
       }
+      toastOptions={{
+        classNames: {
+          toast: 'cn-toast',
+        },
+      }}
       {...props}
     />
   );

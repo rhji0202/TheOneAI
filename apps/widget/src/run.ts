@@ -28,6 +28,11 @@ export interface RunState {
   trackedSeqs: Record<number, boolean>;
 }
 
+/** 작업 예산(단계 수 · 토큰)을 다 써 실패하면 재개 · 처음부터 모두 서버가 거부한다 (TASK_BUDGET_EXHAUSTED) */
+export function canRerun(failure: { code: string }): boolean {
+  return failure.code !== 'STEP_LIMIT_EXCEEDED' && failure.code !== 'TOKEN_BUDGET_EXCEEDED';
+}
+
 type Action =
   | { type: 'reset' }
   | { type: 'loaded'; detail: TaskDetail }
@@ -106,6 +111,11 @@ function applyEvent(state: RunState, { event, data }: SseMessage): RunState {
             : state.revisions,
       };
     }
+    // 할 일 목록의 상태만 바뀜 (같은 버전) — 고친 이유는 그대로 둔다
+    case 'plan.updated':
+      return state.plan
+        ? { ...state, plan: { ...state.plan, steps: (d.steps ?? []) as PlanStep[] } }
+        : state;
     case 'step.started': {
       // Tool 호출 단계는 계획 카드 상태를 바꾸지 않는다 (서버의 trackPlan=false 와 같게)
       const tracked = d.type !== 'tool' && d.planIndex != null;

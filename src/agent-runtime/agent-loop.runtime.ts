@@ -1,80 +1,120 @@
 import { Injectable } from '@nestjs/common';
-import { EvaluatorService } from '../evaluator/evaluator.service.js';
-import type { LlmUsage } from '../llm/llm.types.js';
-import { PlannerService } from '../planner/planner.service.js';
+import { z } from 'zod';
+import type { LlmMessage, LlmResponse, LlmToolCall, LlmUsage } from '../llm/llm.types.js';
 import { SkillFileIntegrityError } from '../skills/skill-store.service.js';
 import { SKILL_READ_FILE } from '../skills/skill-read-file.tool.js';
-import {
-  type LoadedSkill,
-  SkillRuntimeService,
-  SkillUnavailableError,
-} from '../skills/skill-runtime.service.js';
-import { matchesToolPattern } from '../tools/tool-names.js';
-import type { SnapshotSkill } from '../tools/tool.types.js';
+import { SkillRuntimeService, SkillUnavailableError } from '../skills/skill-runtime.service.js';
 import type { PlanStep } from '../tasks/plan.js';
 import { ToolAvailabilityService } from '../tools/tool-availability.service.js';
-import {
-  type PolicySet,
-  type PolicySnapshot,
-  ToolPermissionService,
-} from '../tools/tool-permission.service.js';
+import { ToolDispatcherService } from '../tools/tool-dispatcher.service.js';
+import { matchesToolPattern } from '../tools/tool-names.js';
+import { type PolicySnapshot, ToolPermissionService } from '../tools/tool-permission.service.js';
 import {
   type ResolvedTool,
   ToolRegistryService,
   type Toolset,
 } from '../tools/tool-registry.service.js';
-import { type AgentRuntime, RuntimeError, type RunResult } from './agent-runtime.js';
-import { type AgentContext, ContextBuilder } from './context-builder.js';
-import { ContextCompressor, NOTES_COMPRESS_CHARS } from './context-compressor.js';
-import { ExecutorService, type PendingWork } from './executor.service.js';
-import { type ModelRouter, ModelRouterFactory } from './model-router.js';
+import type { SnapshotSkill } from '../tools/tool.types.js';
 import {
-  type PlanView,
-  type PromptSkill,
-  type PromptTool,
-  renderNotes,
+  type AgentRuntime,
+  RuntimeError,
+  type RunResult,
+  TaskWaitingApprovalError,
+} from './agent-runtime.js';
+import { type AgentContext, ContextBuilder } from './context-builder.js';
+import { compactToolResults } from './context-compressor.js';
+import { type ModelCall, type ModelRouter, ModelRouterFactory } from './model-router.js';
+import {
+  agentRole,
+  BUDGET_REACHED_NOTE,
+  LOAD_SKILL_TOOL,
+  LOAD_SKILL_TOOL_DEFINITION,
+  MAX_TODO_ITEMS,
+  MAX_TOOL_CALLS_PER_TURN,
+  skillSection,
   STEPS_RESERVED_FOR_ANSWER,
-  type WorkNote,
+  systemPrompt,
+  TODO_TOOL,
+  TODO_TOOL_DEFINITION,
 } from './prompts.js';
 import type { RunContext } from './run-context.js';
 
 /**
- * Agent Loop — Context → Plan → Execute(reason · tool · skill …) → Observe → Evaluate → (재계획) → Respond → Verify
- *
- * 단일 Agent 가 역할별 모델(planner · executor · evaluator)을 번갈아 쓴다.
- * Tool 은 작업 단계에서 모델이 요청하고, 서버의 Tool Dispatcher 가 검증 · 실행한다.
- * 사용할 수 있는 Tool 은 작업 생성 시 고정한 Registry 버전(tasks.registry_version_id)으로 정해진다.
+ * 진행 중인 대화 (checkpoint 의 workingMemory.loop).
+ * 시스템 지침 · 대화 기록 · 요청(첨부 이미지)은 남기지 않고 차례마다 다시 만든다.
+ */
+interface LoopState {
+  /** 요청 뒤에 이어진 대화 — assistant 의 Tool 호출 · Tool 결과 */
+  messages: LlmMessage[];
+  /** Tool 을 부른 모델 차례 수 */
+  turns: number;
+  /** load_skill 로 불러온 Skill — 이후 Tool 은 그 allowed-tools 로 좁힌다 */
+  skill?: { name: string; allowedTools: string[] };
+  /** 승인 대기로 멈춘 Tool 호출 묶음 — 재개하면 결과가 없는(null) 호출부터 승인한 인자 그대로 실행한다 */
+  pending?: { calls: LlmToolCall[]; results: Array<string | null> };
+}
+
+type Answer = { id: string; text: string };
+
+const CALL_NOT_RUN = JSON.stringify({
+  error: 'not_run',
+  message: 'The tool call limit for this turn or task was reached, so this call was not run.',
+});
+
+const TODO_STATUS = {
+  pending: 'pending',
+  in_progress: 'running',
+  completed: 'succeeded',
+  cancelled: 'skipped',
+} as const;
+
+const todoInput = z.object({
+  items: z
+    .array(
+      z.object({
+        title: z.string().trim().min(1).max(200),
+        status: z.enum(['pending', 'in_progress', 'completed', 'cancelled']),
+      }),
+    )
+    .min(1)
+    .max(MAX_TODO_ITEMS),
+});
+
+const loadSkillInput = z.object({ name: z.string().min(1).max(64) });
+
+/**
+ * Agent Loop — 모델 하나가 한 대화 안에서 Tool 을 부르고 결과를 보며 이어 가다가,
+ * Tool 없이 답하면 그 답을 최종 답변으로 스트리밍하고 끝난다 (별도 계획 · 평가 · 검증 호출 없음).
+ *  - 계획: 여러 단계가 필요하면 모델이 todo Tool 로 할 일 목록을 만들고 고친다 → 위젯 계획 카드
+ *  - Skill: 시스템 프롬프트에는 이름 · 설명만, 전체 지침은 모델이 load_skill 로 불러온다
+ *  - Tool 은 서버의 Tool Dispatcher 가 검증 · 실행한다. 사용할 수 있는 Tool 은 작업 생성 시 고정한
+ *    Registry 버전(tasks.registry_version_id)으로 정해진다.
+ *  - 모델 차례마다 단계(agent.turn)로 기록하고 checkpoint 를 남긴다. 승인 대기 뒤에는 같은 Tool 호출부터 이어 간다.
  */
 @Injectable()
 export class AgentLoopRuntime implements AgentRuntime {
   constructor(
     private readonly routers: ModelRouterFactory,
     private readonly contextBuilder: ContextBuilder,
-    private readonly planner: PlannerService,
-    private readonly executor: ExecutorService,
-    private readonly evaluator: EvaluatorService,
     private readonly registry: ToolRegistryService,
     private readonly permissions: ToolPermissionService,
     private readonly availability: ToolAvailabilityService,
     private readonly skills: SkillRuntimeService,
-    private readonly compressor: ContextCompressor,
+    private readonly dispatcher: ToolDispatcherService,
   ) {}
 
   async run(ctx: RunContext): Promise<RunResult> {
     const router = await this.routers.forTask(ctx.task, ctx.meter);
-    const { signal } = ctx;
 
-    // 1) Context — 지침 · 대화 · 사용할 수 있는 Tool
-    const { context, toolset, policies, offered, promptTools, skills, promptSkills } =
-      await ctx.step({ type: 'context', name: 'context.build' }, async () => {
+    // 1) Context — 지침 · 대화 · 사용할 수 있는 Tool · Skill
+    const { context, toolset, policies, offered, skills } = await ctx.step(
+      { type: 'context', name: 'context.build' },
+      async () => {
         const {
           context: built,
           compression,
           usage,
-        } = await this.contextBuilder.build(ctx.task, {
-          router,
-          signal,
-        });
+        } = await this.contextBuilder.build(ctx.task, { router, signal: ctx.signal });
         const tools = await this.registry.loadToolset(
           ctx.task.tenantId,
           ctx.task.registryVersionId,
@@ -87,38 +127,25 @@ export class AgentLoopRuntime implements AgentRuntime {
         ctx.workingMemory.policySnapshot = snapshot;
         // MCP Tool 은 이 Agent 버전의 허용 목록에 있고 서버 · Tool 이 지금 사용 가능한 것만 보여 준다
         const live = await this.availability.load(ctx.task.tenantId, ctx.task.agentVersionId);
-        // Skill 전용 Tool(skill.*)은 Skill 단계에서만 준다
+        // Skill 전용 Tool(skill.*)은 Skill 이 있을 때만 따로 준다
         const usable = tools.available.filter(
           (t) =>
             policy.planningMode(t) !== 'blocked' &&
             live.check(t) === 'ok' &&
             !t.name.startsWith('skill.'),
         );
-        // Skill 은 metadata(이름 · 설명)만 계획에 보여 준다 — 전체 지침은 Skill 단계에서 로딩
         const allowedSkills = await this.skills.available(
           ctx.task.tenantId,
           ctx.task.agentVersionId,
           tools.skills,
         );
-        const skillsForPrompt: PromptSkill[] = allowedSkills.map((k) => ({
-          name: k.name,
-          description: k.description,
-        }));
-        const prompt: PromptTool[] = usable.map((t) => ({
-          llmName: t.llmName,
-          level: t.level,
-          description: t.description,
-          requiresApproval: policy.planningMode(t) === 'approval',
-        }));
         return {
           value: {
             context: built,
             toolset: tools,
             policies: policy,
             offered: usable,
-            promptTools: prompt,
             skills: allowedSkills,
-            promptSkills: skillsForPrompt,
           },
           summary: `최근 대화 ${built.history.length}개${compression ? ` · 이전 대화 ${compression.messages}개 요약` : ''} · Tool ${usable.length}개`,
           usage: stepUsage(usage),
@@ -132,7 +159,10 @@ export class AgentLoopRuntime implements AgentRuntime {
               : null,
             tenantPromptChars: built.tenantPrompt.length,
             registryVersionId: ctx.task.registryVersionId,
-            tools: prompt.map((t) => ({ name: t.llmName, requiresApproval: t.requiresApproval })),
+            tools: usable.map((t) => ({
+              name: t.llmName,
+              requiresApproval: policy.planningMode(t) === 'approval',
+            })),
             memories: built.memoryHits.map((m) => ({
               id: m.id,
               type: m.type,
@@ -141,400 +171,320 @@ export class AgentLoopRuntime implements AgentRuntime {
             skills: allowedSkills.map((k) => ({ name: k.name, version: k.version })),
           },
         };
-      });
+      },
+    );
 
     const baseRequest = context.request;
     const applySteers = () => this.applySteers(ctx, context, baseRequest);
     await applySteers();
 
-    // 2) Plan — 재개면 마지막 checkpoint 의 계획 · 노트에서 이어 간다
-    const resumed = readResume(ctx);
-    let plan: PlanView;
-    let notes: WorkNote[];
-    if (resumed) {
-      plan = resumed.plan;
-      notes = resumed.notes;
-      if (ctx.currentPlan?.version !== ctx.resume!.checkpoint.planVersion) {
-        // checkpoint 뒤에 계획을 고치다 멈춘 경우 — checkpoint 의 계획으로 되돌린다
-        await ctx.setPlan(
-          toPlanSteps(plan, toolset, policies, skills),
-          '마지막 checkpoint 의 계획으로 재개',
-        );
-      }
+    const state = loopState(ctx);
+    if (ctx.resume) {
+      // checkpoint 뒤에 할 일 목록을 고치다 멈춘 경우 — checkpoint 의 목록으로 되돌린다
+      if (ctx.resume.checkpoint.plan.length) await ctx.updatePlan(ctx.resume.checkpoint.plan);
       await ctx.record(async (_tx, emit) => {
         await emit('task.resumed', {
           reason: ctx.resume!.reason,
           fromStepId: ctx.resume!.fromStepId,
-          fromPlanIndex: resumed.nextPlanIndex,
+          turn: state.turns,
           planVersion: ctx.currentPlan?.version ?? null,
         });
       });
-    } else {
-      plan = await ctx.step(
-        { type: 'plan', name: 'planner.create', input: { model: router.describe('planner') } },
-        async () => {
-          const result = await this.planner.plan(
-            router,
-            context,
-            promptTools,
-            promptSkills,
-            null,
-            signal,
-          );
-          await ctx.setPlan(toPlanSteps(result.plan, toolset, policies, skills));
-          return {
-            value: result.plan,
-            summary: `${result.plan.steps.length}단계 계획${result.fallback ? ' (기본 계획 사용)' : ''}`,
-            output: { goal: result.plan.goal, fallback: result.fallback },
-            usage: stepUsage(result.usage),
-          };
-        },
-      );
-      notes = [];
     }
-    ctx.workingMemory.planView = plan;
+    // 답변까지 보낸 뒤 멈췄다면 남은 일이 없다
+    const sent = ctx.workingMemory.answer as Answer | undefined;
+    if (sent) return { messageId: sent.id };
 
-    // 3) Execute(reason · tool · skill) → Evaluate → 필요하면 재계획
-    const startIndex = resumed?.nextPlanIndex ?? 1;
-    // 답변까지 보낸 뒤 멈췄다면 검증만 남았다
-    const sentAnswer = resumed?.answer ?? null;
-    for (let revision = 0; sentAnswer === null; revision++) {
-      for (const [i, step] of plan.steps.entries()) {
-        if (step.kind === 'respond') continue;
-        const planIndex = i + 1;
-        // 재개: checkpoint 까지 끝난 단계는 다시 하지 않는다 (같은 계획일 때만)
-        if (revision === 0 && planIndex < startIndex) continue;
-        // 단계 수가 답변할 몫만 남으면 남은 작업은 하지 않고 지금까지의 노트로 답한다 (실패로 끝내지 않는다)
-        if (ctx.stepsLeft <= STEPS_RESERVED_FOR_ANSWER) {
-          notes.push({
-            title: step.title,
-            content:
-              'Not done: the task reached its step limit before this step. Answer from the notes so far and tell the user which part was not done.',
-          });
-          ctx.workingMemory.notes = notes;
-          continue;
-        }
-        await applySteers();
-        notes = await this.compressNotes(ctx, router, context, notes);
-        const pinned =
-          step.kind === 'skill' ? skills.find((k) => k.name === step.skill) : undefined;
-        // 승인 대기 뒤 재개: 이 단계에서 멈췄던 대화부터 이어 간다
-        const pendingWork = ctx.workingMemory.pendingWork as PendingWork | undefined;
-        const pending =
-          revision === 0 && planIndex === startIndex && pendingWork?.planIndex === planIndex
-            ? pendingWork
-            : undefined;
-        await ctx.step(
-          {
-            type: step.kind === 'skill' ? 'skill' : 'reason',
-            name: step.kind === 'skill' ? `skill.${step.skill}` : `executor.${step.kind}`,
-            planIndex,
-            checkpointOnApproval: true,
-            input: {
-              title: step.title,
-              tool: step.tool ?? null,
-              ...(step.kind === 'skill'
-                ? { skill: step.skill, version: pinned?.version ?? null }
-                : {}),
-              model: router.describe('executor'),
-              ...(pending ? { continuedAfterApproval: true } : {}),
-            },
-          },
-          async () => {
-            const prepared =
-              step.kind === 'skill'
-                ? await this.prepareSkill(ctx, pinned, offered, toolset)
-                : // reason 단계는 Tool 없이 하는 분석이다 (계획의 약속을 실행에서 지킨다)
-                  { tools: step.kind === 'reason' ? [] : offered, skill: undefined };
-            if ('unavailable' in prepared) {
-              // Skill 을 쓸 수 없으면 그 사실을 노트로 남기고 계속 (답변에서 한계를 밝힌다)
-              const content = `Skill '${step.skill}' could not be used: ${prepared.unavailable}`;
-              notes.push({ title: step.title, content });
-              ctx.workingMemory.notes = notes;
-              return {
-                value: content,
-                summary: 'Skill 을 쓸 수 없음',
-                output: { error: prepared.unavailable },
-                status: 'failed' as const,
-                checkpoint: true,
-              };
-            }
-            const res = await this.executor.work({
-              ctx,
-              router,
-              context,
-              plan,
-              stepIndex: planIndex,
-              notes,
-              toolset,
-              tools: prepared.tools,
-              skill: prepared.skill,
-              pending,
-              requiresApproval: (tool) => policies.planningMode(tool) === 'approval',
-            });
-            if (!res.content) {
-              throw new RuntimeError('MODEL_EMPTY_RESPONSE', '모델이 빈 결과를 돌려주었습니다');
-            }
-            notes.push({ title: step.title, content: res.content });
-            ctx.workingMemory.notes = notes;
-            return {
-              value: res.content,
-              summary: firstLine(res.content),
-              output: {
-                preview: truncate(res.content, 2_000),
-                chars: res.content.length,
-                toolCalls: res.toolCalls,
-                ...(prepared.skill
-                  ? {
-                      skill: { name: prepared.skill.name, version: prepared.skill.version },
-                      tools: prepared.tools.map((t) => t.name),
-                    }
-                  : {}),
-              },
-              usage: stepUsage(res.usage),
-              checkpoint: true,
-            };
-          },
-        );
-      }
+    const system = systemPrompt(
+      context.tenantPrompt,
+      agentRole(skills.map((k) => ({ name: k.name, description: k.description }))),
+      context.memories,
+      context.conversationSummary,
+    );
+    const reader = skills.length
+      ? toolset.tools.find((t) => t.name === SKILL_READ_FILE && t.builtin)
+      : undefined;
 
-      if (!plan.steps.some((s) => s.kind !== 'respond')) break;
-      notes = await this.compressNotes(ctx, router, context, notes);
-
-      const assessment = await ctx.step(
-        {
-          type: 'evaluate',
-          name: 'evaluator.assess',
-          input: { model: router.describe('evaluator') },
-        },
-        async () => {
-          const result = await this.evaluator.assess(router, context, plan, notes, signal);
-          return {
-            value: result,
-            summary:
-              result.verdict === 'replan' ? `재계획 필요: ${result.reason}` : '답변할 준비가 됨',
-            evaluation: { verdict: result.verdict, reason: result.reason },
-            usage: stepUsage(result.usage),
-          };
-        },
-      );
-      if (
-        assessment.verdict !== 'replan' ||
-        revision >= ctx.task.executionPolicy.replanLimit ||
-        ctx.stepsLeft <= STEPS_RESERVED_FOR_ANSWER
-      )
-        break;
-
-      plan = await ctx.step(
-        { type: 'plan', name: 'planner.revise', input: { model: router.describe('planner') } },
-        async () => {
-          // Reflection — 이 작업에서 실패 · 거부된 Tool 호출을 재계획에 알려 같은 시도를 반복하지 않게 한다
-          const problems = await this.problemsSoFar(ctx);
-          const result = await this.planner.plan(
-            router,
-            context,
-            promptTools,
-            promptSkills,
-            { previous: plan, notes, feedback: assessment.reason, problems },
-            signal,
-          );
-          await ctx.setPlan(toPlanSteps(result.plan, toolset, policies, skills), assessment.reason);
-          ctx.workingMemory.planView = result.plan;
-          return {
-            value: result.plan,
-            summary: `계획 수정: ${result.plan.steps.length}단계`,
-            output: { goal: result.plan.goal, fallback: result.fallback, problems },
-            usage: stepUsage(result.usage),
-          };
-        },
-      );
-    }
-
-    // 4) Respond — 최종 답변 스트리밍
-    const respondIndex = plan.steps.findIndex((s) => s.kind === 'respond') + 1;
-    if (!sentAnswer) {
+    // 2) 모델 차례 반복 — Tool 을 부르면 실행해 결과를 붙이고, Tool 없이 답하면 그것이 최종 답변
+    for (;;) {
       await applySteers();
-      notes = await this.compressNotes(ctx, router, context, notes);
-    }
-    const answer =
-      sentAnswer ??
-      (await ctx.step(
+      // 단계 수 · 토큰 · 시간이 답변할 몫만 남으면 Tool 없이 답하게 한다 (실패로 끝내지 않는다)
+      const final = ctx.stepsLeft <= STEPS_RESERVED_FOR_ANSWER + 1 || ctx.budgetNearlySpent;
+      const continued = state.pending !== undefined;
+      const answer = await ctx.step<Answer | null>(
         {
-          type: 'respond',
-          name: 'executor.respond',
-          planIndex: respondIndex,
-          input: { model: router.describe('executor') },
+          type: 'reason',
+          name: 'agent.turn',
+          planIndex: activePlanIndex(ctx),
+          trackPlan: false,
+          checkpointOnApproval: true,
+          input: {
+            model: router.describe(),
+            turn: state.turns + 1,
+            ...(final ? { final: true } : {}),
+            ...(continued ? { continuedAfterApproval: true } : {}),
+          },
         },
         async () => {
           let usage: LlmUsage | null = null;
-          const stream = this.executor.respond(router, context, plan, notes, promptTools, signal);
-          async function* texts(): AsyncGenerator<string> {
-            let produced = false;
-            for await (const event of stream) {
-              if (event.type === 'text') {
-                produced = true;
-                yield event.text;
-              } else {
-                usage = event.response.usage;
-              }
-            }
-            if (!produced) {
+          const tools = this.scopedTools(state, offered, reader);
+          if (state.pending) {
+            // 재개: 멈췄던 호출부터 (끝난 호출은 저장된 결과를 그대로 쓴다)
+            const { calls, results } = state.pending;
+            delete state.pending;
+            await this.runCalls(ctx, toolset, skills, state, tools, calls, results, () => usage);
+          }
+          const definitions = [
+            ...toolset.definitions(tools, (tool) =>
+              policies.planningMode(tool) === 'approval'
+                ? '[Requires approval: the user (or an operator) is asked before it runs. Call it normally when the request needs it.]'
+                : null,
+            ),
+            TODO_TOOL_DEFINITION,
+            ...(skills.length ? [LOAD_SKILL_TOOL_DEFINITION] : []),
+          ];
+          // Context Compression — 오래된 Tool 결과는 앞부분만 (모델은 이미 보고 판단했다)
+          compactToolResults(state.messages);
+          const { response, message } = await this.streamTurn(ctx, router, {
+            messages: [
+              { role: 'system', content: system },
+              ...context.history,
+              { role: 'user', content: context.request, images: context.images },
+              ...state.messages,
+              ...(final ? [{ role: 'user' as const, content: BUDGET_REACHED_NOTE }] : []),
+            ],
+            // Tool 정의는 그대로 보내고(이전 tool 메시지와 짝이 맞도록) 마지막 차례에는 호출만 막는다
+            tools: definitions,
+            ...(final ? { toolChoice: 'none' as const } : {}),
+          });
+          usage = response.usage;
+
+          if (final || response.toolCalls.length === 0) {
+            if (!message) {
               throw new RuntimeError('MODEL_EMPTY_RESPONSE', '모델이 빈 답변을 돌려주었습니다');
             }
+            ctx.workingMemory.answer = message;
+            return {
+              value: message,
+              summary: '답변 작성 완료',
+              output: { messageId: message.id, chars: message.text.length },
+              usage: stepUsage(response.usage),
+              checkpoint: true,
+            };
           }
-          const message = await ctx.streamAssistantMessage(texts());
-          ctx.workingMemory.answer = { id: message.id, text: message.text };
-          return {
-            value: message,
-            summary: '답변 작성 완료',
-            output: { messageId: message.id, chars: message.text.length },
-            usage: usage ? stepUsage(usage) : undefined,
-            checkpoint: true,
-          };
-        },
-      ));
 
-    // 5) Verify — 결과 검증 (W-04)
-    const verify = (text: string, name = 'evaluator.verify') =>
-      ctx.step(
-        { type: 'evaluate', name, input: { model: router.describe('evaluator') } },
-        async () => {
-          const result = await this.evaluator.verify(router, context, notes, text, signal);
+          // Tool 호출 — 차례 · 작업 단계 수 한도를 넘는 호출은 실행하지 않고 그렇게 알린다
+          const calls = response.toolCalls;
+          state.messages.push({
+            role: 'assistant',
+            content: response.content || null,
+            toolCalls: calls,
+          });
+          state.turns++;
+          const allowed = Math.min(
+            MAX_TOOL_CALLS_PER_TURN,
+            ctx.stepsLeft - STEPS_RESERVED_FOR_ANSWER,
+          );
+          await this.runCalls(
+            ctx,
+            toolset,
+            skills,
+            state,
+            tools,
+            calls,
+            calls.map((_, i) => (i < allowed ? null : CALL_NOT_RUN)),
+            () => usage,
+          );
           return {
-            value: result,
-            summary:
-              result.summary || (result.verdict === 'pass' ? '검증 통과' : '검증 항목 확인 필요'),
-            evaluation: {
-              verdict: result.verdict,
-              checks: result.checks,
-              summary: result.summary,
-              issues: result.issues,
+            value: null,
+            summary: `Tool ${calls.length}개 호출: ${[...new Set(calls.map((c) => c.name))].join(', ')}`,
+            output: {
+              toolCalls: calls.map((c) => c.name),
+              ...(message ? { messageId: message.id, chars: message.text.length } : {}),
             },
-            usage: stepUsage(result.usage),
-          };
-        },
-      );
-    const sentCorrection =
-      (ctx.workingMemory.correction as { id: string; text: string } | undefined) ?? null;
-    let verification = sentCorrection ? null : await verify(answer.text);
-
-    // 6) Reflection — 검증에서 구체적인 오류가 나오면 한 번 바로잡는 후속 메시지를 보내고 다시 검증한다
-    let correction = sentCorrection;
-    if (
-      !correction &&
-      verification?.verdict === 'fail' &&
-      verification.issues.length > 0 &&
-      ctx.task.executionPolicy.selfCorrection
-    ) {
-      const issues = verification.issues;
-      correction = await ctx.step(
-        {
-          type: 'respond',
-          name: 'executor.correct',
-          planIndex: respondIndex,
-          trackPlan: false,
-          input: { model: router.describe('executor'), issues },
-        },
-        async () => {
-          let usage: LlmUsage | null = null;
-          const stream = this.executor.correct(router, context, notes, answer.text, issues, signal);
-          async function* texts(): AsyncGenerator<string> {
-            for await (const event of stream) {
-              if (event.type === 'text') yield event.text;
-              else usage = event.response.usage;
-            }
-          }
-          const message = await ctx.streamAssistantMessage(texts());
-          ctx.workingMemory.correction = { id: message.id, text: message.text };
-          return {
-            value: message,
-            summary: '검증에서 나온 오류를 바로잡음',
-            output: { messageId: message.id, chars: message.text.length, issues },
-            usage: usage ? stepUsage(usage) : undefined,
+            usage: stepUsage(response.usage),
             checkpoint: true,
           };
         },
       );
+      if (answer) return { messageId: answer.id };
     }
-    if (correction && (!verification || verification.verdict === 'fail')) {
-      verification = await verify(
-        `${answer.text}\n\n[Follow-up correction sent to the user]\n${correction.text}`,
-        'evaluator.verify_correction',
-      );
-    }
-
-    return {
-      messageId: answer.id,
-      verification: verification!.checks,
-      ...(correction ? { correctionMessageId: correction.id } : {}),
-    };
   }
 
-  /** Context Compression — 작업 노트가 길어지면 앞 단계 노트를 하나로 줄인다 (단계로 기록) */
-  private async compressNotes(
+  /**
+   * 모델 차례 하나를 스트리밍으로 받는다. 첫 텍스트가 나오면 그때 assistant 메시지를 열어 사용자에게 흘려보낸다
+   * (Tool 만 부르는 차례는 메시지를 만들지 않는다. Tool 호출과 함께 온 텍스트는 중간 안내 메시지로 남는다).
+   */
+  private async streamTurn(
     ctx: RunContext,
     router: ModelRouter,
-    context: AgentContext,
-    notes: WorkNote[],
-  ): Promise<WorkNote[]> {
-    const before = renderNotes(notes).length;
-    if (before <= NOTES_COMPRESS_CHARS) return notes;
-    const compressed = await ctx.step(
-      {
-        type: 'context',
-        name: 'context.compress_notes',
-        input: { model: router.describe('evaluator'), notes: notes.length, chars: before },
-      },
-      async () => {
-        const result = await this.compressor.compressNotes(
-          router,
-          context.request,
-          notes,
-          ctx.signal,
-        );
-        const next = result?.value ?? notes;
-        const after = renderNotes(next).length;
-        return {
-          value: next,
-          summary: result
-            ? `작업 노트 ${notes.length}개 → ${next.length}개 (${before}자 → ${after}자)`
-            : '줄이지 못함 — 그대로 진행',
-          output: {
-            before: { notes: notes.length, chars: before },
-            after: { notes: next.length, chars: after },
-          },
-          usage: result ? stepUsage(result.usage) : undefined,
-        };
-      },
-    );
-    ctx.workingMemory.notes = compressed;
-    return compressed;
+    call: ModelCall,
+  ): Promise<{ response: LlmResponse; message: Answer | null }> {
+    const events = router.stream(call, ctx.signal);
+    const out: { response: LlmResponse | null } = { response: null };
+    let first: string | null = null;
+    for (;;) {
+      const next = await events.next();
+      if (next.done) break;
+      if (next.value.type === 'done') out.response = next.value.response;
+      // 앞쪽 공백만 있는 조각은 버린다 (Tool 만 부르는 차례에 빈 메시지를 만들지 않도록)
+      else if (next.value.text.trim()) {
+        first = next.value.text;
+        break;
+      }
+    }
+    let message: Answer | null = null;
+    if (first !== null) {
+      const head = first;
+      message = await ctx.streamAssistantMessage(
+        (async function* () {
+          yield head;
+          for (;;) {
+            const next = await events.next();
+            if (next.done) return;
+            if (next.value.type === 'text') yield next.value.text;
+            else out.response = next.value.response;
+          }
+        })(),
+      );
+    }
+    if (!out.response) {
+      throw new RuntimeError('MODEL_EMPTY_RESPONSE', '모델이 응답을 끝내지 않았습니다');
+    }
+    return { response: out.response, message };
   }
 
-  /** Reflection — 이 작업에서 실패 · 거부 · 시간 초과된 Tool 호출 (재계획 입력) */
-  private async problemsSoFar(ctx: RunContext): Promise<string[]> {
-    const rows = await ctx.read((tx) =>
-      tx.toolExecution.findMany({
-        where: { taskId: ctx.task.id, status: { in: ['failed', 'timeout', 'denied'] } },
-        orderBy: { startedAt: 'asc' },
-        take: 20,
-        select: {
-          toolName: true,
-          status: true,
-          deniedReason: true,
-          errorCode: true,
-          errorMessage: true,
-        },
-      }),
-    );
-    return rows.map(
-      (r) =>
-        `${r.toolName}: ${r.status === 'denied' ? `refused (${r.deniedReason ?? 'denied'})` : r.status === 'timeout' ? 'timed out' : `failed (${r.errorCode ?? 'error'})`}${r.errorMessage ? ` — ${truncate(r.errorMessage, 200)}` : ''}`,
+  /** 이번 차례에 모델에게 줄 Registry Tool — Skill 을 불러왔으면 그 allowed-tools 로 좁힌다 */
+  private scopedTools(
+    state: LoopState,
+    offered: ResolvedTool[],
+    reader: ResolvedTool | undefined,
+  ): ResolvedTool[] {
+    const allowed = state.skill
+      ? offered.filter((t) =>
+          state.skill!.allowedTools.some((p) => p === '*' || matchesToolPattern(t.name, p)),
+        )
+      : offered;
+    return reader ? [...allowed, reader] : allowed;
+  }
+
+  /**
+   * 모델이 한 번에 요청한 Tool 호출을 실행하고 결과를 대화에 붙인다.
+   * todo · load_skill 은 런타임이 직접 처리하고, 나머지는 Tool Dispatcher 가 검증 · 실행한다.
+   * 승인 대기로 멈추면 끝난 호출 결과와 함께 state.pending 에 남긴다 (차례 단계가 이것으로 checkpoint 를 저장한다).
+   */
+  private async runCalls(
+    ctx: RunContext,
+    toolset: Toolset,
+    skills: SnapshotSkill[],
+    state: LoopState,
+    tools: ResolvedTool[],
+    calls: LlmToolCall[],
+    results: Array<string | null>,
+    usage: () => LlmUsage | null,
+  ): Promise<void> {
+    for (const [i, call] of calls.entries()) {
+      if (results[i] !== null) continue;
+      if (call.name === TODO_TOOL) results[i] = await this.todo(ctx, call);
+      else if (call.name === LOAD_SKILL_TOOL && skills.length)
+        results[i] = await this.loadSkill(ctx, skills, state, call);
+    }
+    const todo = calls.flatMap((call, i) => (results[i] === null ? [{ call, i }] : []));
+    try {
+      const out = await this.dispatcher.dispatchAll(
+        ctx,
+        toolset,
+        todo.map((t) => t.call),
+        activePlanIndex(ctx),
+        new Set(tools.map((t) => t.llmName)),
+      );
+      out.forEach((r, k) => (results[todo[k]!.i] = r.content));
+    } catch (err) {
+      if (err instanceof TaskWaitingApprovalError) {
+        for (const d of err.dispatched) results[todo[d.index]!.i] = d.content;
+        state.pending = { calls, results };
+        const used = usage();
+        if (used) err.usage = stepUsage(used);
+      }
+      throw err;
+    }
+    calls.forEach((call, i) => {
+      state.messages.push({ role: 'tool', toolCallId: call.id, content: results[i]! });
+    });
+  }
+
+  /** todo — 할 일 목록을 위젯 계획 카드(tasks.plan)에 반영한다 */
+  private async todo(ctx: RunContext, call: LlmToolCall): Promise<string> {
+    const parsed = parseArgs(call.arguments, todoInput);
+    if (!parsed.ok) return invalid(parsed.message);
+    const steps: PlanStep[] = parsed.value.items.map((item, i) => ({
+      index: i + 1,
+      title: truncate(item.title, 40),
+      kind: 'reason',
+      requiresApproval: false,
+      status: TODO_STATUS[item.status],
+    }));
+    await ctx.updatePlan(steps);
+    return JSON.stringify({ ok: true, items: parsed.value.items });
+  }
+
+  /**
+   * load_skill — 지금도 쓸 수 있는가(비활성화 · 허용 목록 변경 반영) 확인 후 고정된 버전을 로딩한다.
+   * 이후 차례의 Tool 은 그 Skill 의 allowed-tools 로 좁힌다 (권한 정책은 Dispatcher 가 그대로 적용).
+   */
+  private async loadSkill(
+    ctx: RunContext,
+    skills: SnapshotSkill[],
+    state: LoopState,
+    call: LlmToolCall,
+  ): Promise<string> {
+    const parsed = parseArgs(call.arguments, loadSkillInput);
+    if (!parsed.ok) return invalid(parsed.message);
+    const name = parsed.value.name;
+    return ctx.step(
+      {
+        type: 'skill',
+        name: `skill.${name}`,
+        planIndex: activePlanIndex(ctx),
+        trackPlan: false,
+        input: { skill: name },
+      },
+      async () => {
+        const pinned = skills.find((k) => k.name === name);
+        const unavailable = (reason: string) => ({
+          value: JSON.stringify({ ok: false, error: 'skill_unavailable', message: reason }),
+          summary: 'Skill 을 쓸 수 없음',
+          output: { error: reason },
+          status: 'failed' as const,
+        });
+        if (!pinned) return unavailable(`'${name}' is not one of this agent's skills`);
+        const [live] = await this.skills.available(ctx.task.tenantId, ctx.task.agentVersionId, [
+          pinned,
+        ]);
+        if (!live) return unavailable('it was disabled by the operator');
+        try {
+          const loaded = await this.skills.load(ctx.task.tenantId, pinned);
+          state.skill = { name: loaded.name, allowedTools: loaded.allowedTools };
+          return {
+            value: skillSection(loaded),
+            summary: `Skill ${loaded.name} v${loaded.version} 로딩`,
+            output: {
+              skill: { name: loaded.name, version: loaded.version },
+              allowedTools: loaded.allowedTools,
+            },
+          };
+        } catch (err) {
+          if (err instanceof SkillUnavailableError || err instanceof SkillFileIntegrityError) {
+            return unavailable(err.message);
+          }
+          throw err;
+        }
+      },
     );
   }
 
   /**
-   * 실행 중 추가 지시(steer) 반영 — 아직 반영하지 않은 지시를 요청 뒤에 붙여 다음 단계부터 쓴다.
+   * 실행 중 추가 지시(steer) 반영 — 아직 반영하지 않은 지시를 요청 뒤에 붙여 다음 차례부터 쓴다.
    * 반영 위치(cursor)는 checkpoint 에 남아 재개 후에도 중복되지 않는다.
    */
   private async applySteers(
@@ -555,85 +505,48 @@ export class AgentLoopRuntime implements AgentRuntime {
       await emit('task.steer_applied', { messageIds: fresh.map((m) => m.id) });
     });
   }
-
-  /**
-   * Skill 단계 준비 — 지금도 쓸 수 있는가(비활성화 · 허용 목록 변경 반영) 확인 후 고정된 버전을 로딩하고,
-   * 모델에게 줄 Tool 을 allowed-tools 로 좁힌다 (권한 정책은 Dispatcher 가 그대로 적용).
-   */
-  private async prepareSkill(
-    ctx: RunContext,
-    pinned: SnapshotSkill | undefined,
-    offered: ResolvedTool[],
-    toolset: Toolset,
-  ): Promise<{ tools: ResolvedTool[]; skill: LoadedSkill } | { unavailable: string }> {
-    if (!pinned) return { unavailable: "it is not one of this agent's skills" };
-    const [live] = await this.skills.available(ctx.task.tenantId, ctx.task.agentVersionId, [
-      pinned,
-    ]);
-    if (!live) return { unavailable: 'it was disabled by the operator' };
-    let loaded: LoadedSkill;
-    try {
-      loaded = await this.skills.load(ctx.task.tenantId, pinned);
-    } catch (err) {
-      if (err instanceof SkillUnavailableError || err instanceof SkillFileIntegrityError) {
-        return { unavailable: err.message };
-      }
-      throw err;
-    }
-    const allowed = offered.filter((t) =>
-      loaded.allowedTools.some((p) => p === '*' || matchesToolPattern(t.name, p)),
-    );
-    const reader = toolset.tools.find((t) => t.name === SKILL_READ_FILE && t.builtin);
-    return { tools: reader ? [...allowed, reader] : allowed, skill: loaded };
-  }
 }
 
-/** 재개 상태 — checkpoint 의 workingMemory 에서 계획 · 노트 · 다음 단계 · 보낸 답변 */
-function readResume(ctx: RunContext): {
-  plan: PlanView;
-  notes: WorkNote[];
-  nextPlanIndex: number;
-  answer: { id: string; text: string } | null;
-} | null {
-  if (!ctx.resume) return null;
-  const memory = ctx.workingMemory;
-  const plan = memory.planView as PlanView | undefined;
-  if (!plan || !Array.isArray(plan.steps) || !plan.steps.length) return null;
-  const answer = memory.answer as { id: string; text: string } | undefined;
+/** checkpoint 의 대화 (재개) 또는 새 대화 — workingMemory 에 두어 checkpoint 와 함께 저장된다 */
+function loopState(ctx: RunContext): LoopState {
+  const saved = ctx.workingMemory.loop as LoopState | undefined;
+  const state: LoopState =
+    saved && Array.isArray(saved.messages) ? saved : { messages: [], turns: 0 };
+  ctx.workingMemory.loop = state;
+  return state;
+}
+
+/** 할 일 목록에서 진행 중인 항목 — 차례 · Tool 단계를 그 항목에 묶어 기록한다 */
+function activePlanIndex(ctx: RunContext): number | undefined {
+  return ctx.currentPlan?.steps.find((s) => s.status === 'running')?.index;
+}
+
+function parseArgs<T>(
+  raw: string,
+  schema: z.ZodType<T>,
+): { ok: true; value: T } | { ok: false; message: string } {
+  let value: unknown;
+  try {
+    value = raw.trim() ? JSON.parse(raw) : {};
+  } catch {
+    return { ok: false, message: 'Arguments are not valid JSON.' };
+  }
+  const parsed = schema.safeParse(value);
+  if (parsed.success) return { ok: true, value: parsed.data };
   return {
-    plan,
-    notes: Array.isArray(memory.notes) ? (memory.notes as WorkNote[]) : [],
-    nextPlanIndex: ctx.resume.checkpoint.nextPlanIndex,
-    answer: answer && typeof answer.id === 'string' ? answer : null,
+    ok: false,
+    message: parsed.error.issues
+      .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
+      .join('; '),
   };
 }
 
-function toPlanSteps(
-  plan: PlanView,
-  toolset: Toolset,
-  policies: PolicySet,
-  skills: SnapshotSkill[],
-): Array<Omit<PlanStep, 'status'>> {
-  return plan.steps.map((step, i) => {
-    const tool: ResolvedTool | undefined = step.tool ? toolset.byLlmName(step.tool) : undefined;
-    const skill = step.skill ? skills.find((k) => k.name === step.skill) : undefined;
-    return {
-      index: i + 1,
-      title: step.title,
-      kind: step.kind,
-      ...(tool ? { toolName: tool.name } : {}),
-      ...(skill ? { skill: { name: skill.name, version: skill.version } } : {}),
-      requiresApproval: tool ? policies.planningMode(tool) === 'approval' : false,
-    };
-  });
+function invalid(message: string): string {
+  return JSON.stringify({ ok: false, error: 'INVALID_ARGUMENTS', message });
 }
 
 function stepUsage(usage: LlmUsage): { inputTokens: number; outputTokens: number } {
   return { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens };
-}
-
-function firstLine(text: string): string {
-  return truncate(text.split('\n').find((line) => line.trim()) ?? '', 120);
 }
 
 function truncate(text: string, max: number): string {

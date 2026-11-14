@@ -78,8 +78,7 @@ const toolEvents = (events: SseEvent[], type: string) =>
 const requestsFor = (tag: string): RecordedRequest[] =>
   ctx.llm.requests.filter((r) => r.body.messages.some((m) => (m.content ?? '').includes(tag)));
 
-const workRequests = (tag: string) =>
-  requestsFor(tag).filter((r) => r.role.startsWith('Executor (work'));
+const agentRequests = (tag: string) => requestsFor(tag).filter((r) => r.role === 'Agent');
 
 const offeredTools = (r: RecordedRequest) => (r.body.tools ?? []).map((t) => t.function.name);
 
@@ -90,30 +89,49 @@ async function tenantRows<T>(fn: (tx: TestContext['owner']) => Promise<T>) {
   });
 }
 
+/** 테넌트 A 의 배포 Agent 실행 정책을 잠시 바꿔 fn 을 돌린다 */
+async function withMaxSteps<T>(maxSteps: number, fn: () => Promise<T>) {
+  const versionId = (
+    await tenantRows((tx) => tx.agent.findUniqueOrThrow({ where: { id: ctx.tenantA.agentId } }))
+  ).publishedVersionId!;
+  const original = await tenantRows((tx) =>
+    tx.agentVersion.findUniqueOrThrow({ where: { id: versionId } }),
+  );
+  await tenantRows((tx) =>
+    tx.agentVersion.update({
+      where: { id: versionId },
+      data: {
+        executionPolicy: {
+          ...(original.executionPolicy as Record<string, unknown> | null),
+          maxSteps,
+        },
+      },
+    }),
+  );
+  try {
+    return await fn();
+  } finally {
+    await tenantRows((tx) =>
+      tx.agentVersion.update({
+        where: { id: versionId },
+        data: { executionPolicy: original.executionPolicy ?? {} },
+      }),
+    );
+  }
+}
+
 describe('내장 Tool', () => {
-  it('[도구] 계획의 tool 단계 → 모델이 Tool 호출 → 서버 실행 → 결과로 답변', async () => {
+  it('[도구] 모델이 Tool 호출 → 서버 실행 → 결과를 다음 차례에 받아 답변', async () => {
     const { events, detail, task, steps, executions } = await run('[도구] 1234 곱하기 5678 #calc');
     builtinOnlyVersion = task.registryVersionId;
 
     expect(started(events)).toEqual([
       'context.build',
-      'planner.create',
-      'executor.tool',
+      'agent.turn',
       'builtin.calculate',
-      'evaluator.assess',
-      'executor.respond',
-      'evaluator.verify',
+      'agent.turn',
     ]);
-    const plan = events.find((e) => e.event === 'plan.created')!.data as {
-      steps: Array<Record<string, unknown>>;
-    };
-    expect(plan.steps[0]).toMatchObject({
-      kind: 'tool',
-      toolName: 'builtin.calculate',
-      requiresApproval: false,
-    });
-    // Tool 호출 단계는 계획 진행률에 들어가지 않는다
-    expect(detail).toMatchObject({ status: 'completed', progress: { completed: 2, total: 2 } });
+    expect(detail.status).toBe('completed');
 
     const [called] = toolEvents(events, 'tool.called');
     const [result] = toolEvents(events, 'tool.result');
@@ -127,10 +145,9 @@ describe('내장 Tool', () => {
     expect(result!.resultPreview).toContain('7006652');
 
     const toolStep = steps.find((s) => s.type === 'tool')!;
-    expect(toolStep).toMatchObject({
-      name: 'builtin.calculate',
-      planIndex: 1,
-      status: 'succeeded',
+    expect(toolStep).toMatchObject({ name: 'builtin.calculate', status: 'succeeded' });
+    expect(steps.find((s) => s.name === 'agent.turn')!.output).toMatchObject({
+      toolCalls: ['builtin__calculate'],
     });
     expect(executions).toHaveLength(1);
     expect(executions[0]).toMatchObject({
@@ -142,21 +159,21 @@ describe('내장 Tool', () => {
       output: { expression: '1234*5678', result: 7006652 },
     });
 
-    // 모델에게 준 Tool 정의 · tool 메시지 · 다음 단계로 넘어간 결과
-    const [first, second] = workRequests('#calc');
+    // 모델에게 준 Tool 정의(+ 런타임의 todo) · 다음 차례에 이어진 tool 메시지 · 결과로 쓴 답변
+    const [first, second] = agentRequests('#calc');
     expect(offeredTools(first!)).toEqual([
       'builtin__calculate',
       'builtin__create_file',
       'builtin__current_time',
       'builtin__query_table',
+      'todo',
     ]);
     expect(second!.body.messages.at(-1)).toMatchObject({ role: 'tool', tool_call_id: 'call_0_0' });
     expect(second!.body.messages.at(-1)!.content).toContain('7006652');
-    const planner = requestsFor('#calc').find((r) => r.role === 'Planner')!;
-    expect(planner.body.messages[0]!.content).toContain('builtin__calculate');
-    const respond = requestsFor('#calc').find((r) => r.role.startsWith('Executor (respond'))!;
-    expect(respond.body.messages[0]!.content).toContain('7006652');
-    expect(respond.body).not.toHaveProperty('tools');
+    const answer = events.find((e) => e.event === 'message.completed')!.data as {
+      message: { content: Array<{ text: string }> };
+    };
+    expect(answer.message.content[0]!.text).toContain('7006652');
   });
 
   it('[병렬] 읽기 Tool 여러 개는 같은 parallelGroup 으로 동시에 실행하고 결과는 호출 순서대로 돌려준다', async () => {
@@ -170,7 +187,7 @@ describe('내장 Tool', () => {
     expect(toolSteps[1]!.parallelGroup).toBe(toolSteps[0]!.parallelGroup);
     expect(executions.every((e) => e.status === 'succeeded')).toBe(true);
 
-    const toolMessages = workRequests('#parallel')[1]!.body.messages.filter(
+    const toolMessages = agentRequests('#parallel')[1]!.body.messages.filter(
       (m) => m.role === 'tool',
     );
     expect(toolMessages.map((m) => m.tool_call_id)).toEqual(['call_0_0', 'call_0_1']);
@@ -192,75 +209,44 @@ describe('내장 Tool', () => {
     ]);
     expect(executions[0]!.errorMessage).toContain('not valid JSON');
     expect(executions[1]!.errorMessage).toContain('expression');
-    const second = workRequests('#badargs')[1]!;
+    const second = agentRequests('#badargs')[1]!;
     expect(second.body.messages.at(-1)!.content).toContain('INVALID_ARGUMENTS');
     expect(detail.status).toBe('completed');
   });
 
-  it('[도구한도] Tool 왕복 한도에 닿으면 tool_choice=none 으로 정리시키고 다음 단계로 간다', async () => {
+  it('[도구한도] Tool 을 끝없이 부르면 단계 상한 끝에서 tool_choice=none 으로 답하게 한다', async () => {
     const { steps, detail } = await run('[도구한도] 끝없이 #loop');
-    expect(steps.filter((s) => s.type === 'tool')).toHaveLength(6);
-    const work = workRequests('#loop');
-    expect(work).toHaveLength(7);
-    expect(work.at(-1)!.body).toMatchObject({ tool_choice: 'none' });
-    expect(offeredTools(work.at(-1)!)).toContain('builtin__calculate');
-    expect(steps.find((s) => s.name === 'executor.tool')!.output).toMatchObject({ toolCalls: 6 });
+    // maxSteps 40: context 1 + (차례 · Tool) 19쌍 + 마지막 답변 차례 1
+    expect(steps).toHaveLength(40);
+    expect(steps.filter((s) => s.type === 'tool')).toHaveLength(19);
+    const agent = agentRequests('#loop');
+    expect(agent).toHaveLength(20);
+    expect(agent.at(-1)!.body).toMatchObject({ tool_choice: 'none' });
+    expect(offeredTools(agent.at(-1)!)).toContain('builtin__calculate');
     expect(detail.status).toBe('completed');
   });
 
-  it('[대량계산] 한 응답에 여러 호출을 몰아도 단계당 12번까지만 실행하고, 넘친 호출은 not_run 으로 알려 정리한다', async () => {
+  it('[대량계산] 한 차례에 여러 호출을 몰아도 12번까지만 실행하고, 넘친 호출은 not_run 으로 알린다', async () => {
     const { steps, detail } = await run('[대량계산] 열마다 합계 #bulk');
     expect(steps.filter((s) => s.type === 'tool')).toHaveLength(12);
-    const wrapUp = workRequests('#bulk').at(-1)!;
-    expect(wrapUp.body).toMatchObject({ tool_choice: 'none' });
-    const notRun = wrapUp.body.messages.filter(
+    const next = agentRequests('#bulk').at(-1)!;
+    const notRun = next.body.messages.filter(
       (m) => m.role === 'tool' && m.content?.includes('"not_run"'),
     );
-    expect(notRun).toHaveLength(4);
+    expect(notRun).toHaveLength(2);
     expect(detail.status).toBe('completed');
   });
 
-  it('작업 단계 상한이 가까우면 실패하지 않고 남은 몫(답변 · 검증)을 남긴 채 Tool 을 멈춘다', async () => {
-    const versionId = (
-      await tenantRows((tx) => tx.agent.findUniqueOrThrow({ where: { id: ctx.tenantA.agentId } }))
-    ).publishedVersionId!;
-    const original = await tenantRows((tx) =>
-      tx.agentVersion.findUniqueOrThrow({ where: { id: versionId } }),
-    );
-    await tenantRows((tx) =>
-      tx.agentVersion.update({
-        where: { id: versionId },
-        data: {
-          executionPolicy: {
-            ...(original.executionPolicy as Record<string, unknown> | null),
-            maxSteps: 12,
-          },
-        },
-      }),
-    );
-    try {
-      const { steps, detail } = await run('[대량계산] 상한 가까이 #budget');
-      // context · plan · 작업 단계 뒤 남은 9 단계 중 답변 몫 5 를 남기고 4 번만 실행
-      expect(steps.filter((s) => s.type === 'tool')).toHaveLength(4);
-      expect(steps.map((s) => s.name)).toEqual(
-        expect.arrayContaining(['evaluator.assess', 'executor.respond', 'evaluator.verify']),
-      );
-      expect(detail.status).toBe('completed');
-    } finally {
-      await tenantRows((tx) =>
-        tx.agentVersion.update({
-          where: { id: versionId },
-          data: { executionPolicy: original.executionPolicy ?? {} },
-        }),
-      );
-    }
-  });
-
-  it('reason 단계에는 Tool 을 주지 않는다 (계획에서 Tool 없는 분석으로 정한 단계)', async () => {
-    const { detail } = await run('[분석] 첨부 내용 요약 #reason');
-    const work = workRequests('#reason');
-    expect(work).toHaveLength(1);
-    expect(offeredTools(work[0]!)).toEqual([]);
+  it('작업 단계 상한이 가까우면 실패하지 않고 답변 차례를 남긴 채 Tool 을 멈춘다', async () => {
+    const { steps, detail } = await withMaxSteps(10, () => run('[대량계산] 상한 가까이 #budget'));
+    // context · 첫 차례 뒤 남은 8 단계 중 답변 차례 1 을 남기고 7 번만 실행
+    expect(steps.filter((s) => s.type === 'tool')).toHaveLength(7);
+    expect(steps.filter((s) => s.name === 'agent.turn')).toHaveLength(2);
+    const last = agentRequests('#budget').at(-1)!;
+    expect(last.body).toMatchObject({ tool_choice: 'none' });
+    expect(
+      last.body.messages.filter((m) => m.role === 'tool' && m.content?.includes('"not_run"')),
+    ).toHaveLength(7);
     expect(detail.status).toBe('completed');
   });
 });
@@ -283,7 +269,7 @@ describe('Tool 호출 거부', () => {
         deniedReason: 'unknown_tool',
       }),
     ]);
-    expect(workRequests('#unknown')[1]!.body.messages.at(-1)!.content).toContain('UNKNOWN_TOOL');
+    expect(agentRequests('#unknown')[1]!.body.messages.at(-1)!.content).toContain('UNKNOWN_TOOL');
     expect(detail.status).toBe('completed');
   });
 
@@ -384,11 +370,8 @@ describe('Registry 버전 · 승인 · 재시도 · 시간 제한', () => {
     ]);
     expect(after.tools.map((t) => t.name)).toContain('test.send_note');
 
-    // 승인 필요 Tool 은 계획 · 작업 단계에 “승인 필요” 표시와 함께 보인다 (승인 흐름은 approvals.e2e-spec.ts)
-    expect(
-      requestsFor('#registry').find((r) => r.role === 'Planner')!.body.messages[0]!.content,
-    ).toContain('test__send_note (write, requires approval)');
-    const offered = workRequests('#registry')[0]!.body.tools!.find(
+    // 승인 필요 Tool 은 “승인 필요” 표시와 함께 보인다 (승인 흐름은 approvals.e2e-spec.ts)
+    const offered = agentRequests('#registry')[0]!.body.tools!.find(
       (t) => t.function.name === 'test__send_note',
     )!;
     expect(offered.function.description).toContain('Requires approval');
@@ -403,6 +386,11 @@ describe('Registry 버전 · 승인 · 재시도 · 시간 제한', () => {
       expect.objectContaining({ toolName: 'test.flaky', status: 'succeeded', attempt: 2 }),
     ]);
     expect(executions[0]).toMatchObject({ status: 'succeeded', attempt: 2, output: { value: 42 } });
+    // 완료 요약의 재시도 수 = 첫 시도 뒤에 다시 실행한 횟수
+    expect(events.at(-1)).toMatchObject({
+      event: 'task.completed',
+      data: { result: { summary: { retries: 1 } } },
+    });
   });
 
   it('[시간초과] 시간 제한을 넘기면 timeout 으로 기록하고 모델에게 알린다', async () => {
@@ -411,7 +399,7 @@ describe('Registry 버전 · 승인 · 재시도 · 시간 제한', () => {
       expect.objectContaining({ toolName: 'test.slow', status: 'timeout', attempt: 1 }),
     ]);
     expect(executions[0]).toMatchObject({ status: 'timeout', errorCode: 'TOOL_TIMEOUT' });
-    expect(workRequests('#slow')[1]!.body.messages.at(-1)!.content).toContain('TOOL_TIMEOUT');
+    expect(agentRequests('#slow')[1]!.body.messages.at(-1)!.content).toContain('TOOL_TIMEOUT');
     expect(detail.status).toBe('completed');
   });
 
@@ -423,7 +411,7 @@ describe('Registry 버전 · 승인 · 재시도 · 시간 제한', () => {
       }),
     );
     const { events, steps, executions } = await run('[승인필요] 막힌 메모 #blocked');
-    expect(offeredTools(workRequests('#blocked')[0]!)).not.toContain('test__send_note');
+    expect(offeredTools(agentRequests('#blocked')[0]!)).not.toContain('test__send_note');
     expect(steps.find((s) => s.name === 'context.build')!.output).toMatchObject({
       tools: expect.not.arrayContaining([expect.objectContaining({ name: 'test__send_note' })]),
     });

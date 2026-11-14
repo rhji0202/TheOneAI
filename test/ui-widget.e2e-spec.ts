@@ -65,7 +65,7 @@ describe('위젯 (W-01 ~ W-05)', () => {
     await panel().waitFor();
     await panel().getByText('무엇을 도와드릴까요?').first().waitFor();
     expect(
-      await panel().getByText('AI 응답은 부정확할 수 있어요 · Powered by TheOneAI').count(),
+      await panel().getByText('AI 응답은 부정확할 수 있어요 · Powered by TheOneWidget').count(),
     ).toBe(1);
     await snap(page, 'w01-home');
   });

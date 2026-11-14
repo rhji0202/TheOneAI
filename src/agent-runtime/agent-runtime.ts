@@ -2,7 +2,7 @@ import type { RunContext } from './run-context.js';
 
 /**
  * Agent Runtime 계약. Worker 는 작업마다 run() 을 한 번 호출한다.
- * AgentLoopRuntime(Context → Plan → Execute → Evaluate → Respond → Verify) 과
+ * AgentLoopRuntime(Context → 모델이 Tool 을 부르며 이어 가다 답변) 과
  * 파이프라인 확인용 PlaceholderAgentRuntime 이 있다. 재개면 ctx.resume 에 checkpoint 가 있다.
  */
 export interface AgentRuntime {
@@ -10,10 +10,8 @@ export interface AgentRuntime {
 }
 
 export interface RunResult {
+  /** 최종 답변 메시지 */
   messageId: string | null;
-  verification: Array<{ label: string; passed: boolean }>;
-  /** Reflection — 검증에서 나온 오류를 바로잡은 후속 메시지 */
-  correctionMessageId?: string;
 }
 
 export const AGENT_RUNTIME = Symbol('AGENT_RUNTIME');

@@ -1,3 +1,6 @@
+'use client';
+
+import { ArrowDownIcon } from 'lucide-react';
 import * as React from 'react';
 import {
   MessageScroller as MessageScrollerPrimitive,
@@ -8,7 +11,6 @@ import {
 import { cn } from '@/lib/utils';
 
 import { Button } from '@/components/ui/button';
-import { ArrowDownIcon } from 'lucide-react';
 
 function MessageScrollerProvider(
   props: React.ComponentProps<typeof MessageScrollerPrimitive.Provider>,
@@ -55,7 +57,7 @@ function MessageScrollerContent({
   return (
     <MessageScrollerPrimitive.Content
       data-slot="message-scroller-content"
-      className={cn('flex h-max min-h-full flex-col gap-8', className)}
+      className={cn('flex h-max min-h-full flex-col gap-6', className)}
       {...props}
     />
   );

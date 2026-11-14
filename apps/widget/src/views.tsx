@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   ArrowDownIcon,
   CircleDotIcon,
@@ -6,6 +6,7 @@ import {
   CirclePauseIcon,
   ListTodoIcon,
   type LucideIcon,
+  MessageSquareTextIcon,
   RotateCwIcon,
   ShieldAlertIcon,
   WifiOffIcon,
@@ -31,6 +32,7 @@ import {
   MessageScrollerViewport,
 } from '@/components/ui/message-scroller';
 import { Spinner } from '@/components/ui/spinner';
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   Trace,
@@ -58,16 +60,30 @@ import {
   ChatMessage,
   Composer,
   FailureCard,
-  isSimplePlan,
   PausedCard,
   PlanCard,
   StatusBadge,
   StreamingMessage,
 } from './components';
-import { useTaskRun } from './run';
+import { canRerun, useTaskRun } from './run';
 
 const BODY = 'flex min-h-0 flex-1 flex-col overflow-y-auto';
-const FOOTER = 'flex flex-none flex-col gap-2 border-t px-3 pt-3 pb-2';
+const FOOTER =
+  'flex h-full min-h-0 flex-col gap-2 overflow-y-auto px-3 pt-3 pb-2 [&>form]:min-h-0 [&>form]:flex-1';
+
+function PromptLayout({ content, children }: { content: ReactNode; children: ReactNode }) {
+  return (
+    <ResizablePanelGroup orientation="vertical" className="min-h-0 flex-1">
+      <ResizablePanel minSize="30%" className="flex min-h-0 flex-col">
+        {content}
+      </ResizablePanel>
+      <ResizableHandle withHandle aria-label="프롬프트 입력창 높이 조절" />
+      <ResizablePanel defaultSize="160px" minSize="140px" maxSize="60%">
+        {children}
+      </ResizablePanel>
+    </ResizablePanelGroup>
+  );
+}
 
 export function HomeView({
   api,
@@ -83,6 +99,19 @@ export function HomeView({
   const [text, setText] = useState('');
   const [active, setActive] = useState<TaskSummary[]>(boot.activeTasks);
   const [error, setError] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
+  /** 제시어를 누르면 입력창을 거치지 않고 바로 보낸다 */
+  const sendPrompt = async (prompt: string) => {
+    setError(null);
+    setSending(true);
+    try {
+      await onStart(prompt, []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '보내지 못했어요');
+    } finally {
+      setSending(false);
+    }
+  };
   useEffect(() => {
     api
       .tasks('active')
@@ -91,24 +120,43 @@ export function HomeView({
   }, [api]);
   const welcome = boot.agent.welcomeMessage.trim() || '안녕하세요,\n무엇을 도와드릴까요?';
   return (
-    <>
-      <div className={`${BODY} gap-5 p-5`}>
-        <div>
-          <h2 className="text-xl leading-snug font-bold">
-            {welcome.split('\n').map((line, i) => (
-              <span key={i}>
-                {i > 0 && <br />}
-                {line}
-              </span>
-            ))}
-          </h2>
-          <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
-            요청을 남기면 필요한 단계를 스스로 계획하고 연결된 도구로 실행해요. 중요한 작업은 실행
-            전에 꼭 확인을 받아요.
-          </p>
+    <PromptLayout
+      content={
+        <div className={`${BODY} gap-5 p-5`}>
+          <div>
+            <h2 className="text-xl leading-snug font-bold">
+              {welcome.split('\n').map((line, i) => (
+                <span key={i}>
+                  {i > 0 && <br />}
+                  {line}
+                </span>
+              ))}
+            </h2>
+            <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
+              요청을 남기면 필요한 단계를 스스로 계획하고 연결된 도구로 실행해요. 중요한 작업은 실행
+              전에 꼭 확인을 받아요.
+            </p>
+          </div>
+          {boot.behavior.starterPrompts.length > 0 && (
+            <section aria-label="제시어" className="flex flex-col gap-2">
+              {boot.behavior.starterPrompts.map((prompt) => (
+                <Button
+                  key={prompt}
+                  variant="outline"
+                  className="h-auto justify-start gap-2 rounded-xl px-3 py-2.5 text-left font-normal whitespace-normal"
+                  disabled={sending}
+                  onClick={() => void sendPrompt(prompt)}
+                >
+                  <MessageSquareTextIcon aria-hidden="true" className="text-muted-foreground" />
+                  {prompt}
+                </Button>
+              ))}
+            </section>
+          )}
+          {active.length > 0 && <TaskQueue tasks={active} onOpen={onOpenTask} />}
         </div>
-        {active.length > 0 && <TaskQueue tasks={active} onOpen={onOpenTask} />}
-      </div>
+      }
+    >
       <footer className={FOOTER}>
         {boot.suggestions.length > 0 && (
           <div
@@ -151,7 +199,7 @@ export function HomeView({
         />
         <Notice boot={boot} />
       </footer>
-    </>
+    </PromptLayout>
   );
 }
 
@@ -218,7 +266,7 @@ export function Notice({ boot }: { boot: Bootstrap }) {
   return (
     <p className="text-center text-[11px] text-muted-foreground">
       {boot.behavior.noticeText}
-      {boot.behavior.showPoweredBy && ' · Powered by TheOneAI'}
+      {boot.behavior.showPoweredBy && ' · Powered by TheOneWidget'}
     </p>
   );
 }
@@ -289,7 +337,7 @@ export function ChatView({
   );
 
   const active = ACTIVE_STATUSES.includes(run.status as never) && run.loaded;
-  const total = isSimplePlan(run.plan) ? 0 : (run.plan?.steps.length ?? 0);
+  const total = run.plan?.steps.length ?? 0;
   const done = run.plan?.steps.filter((s) => s.status === 'succeeded').length ?? 0;
   useEffect(() => {
     onHeader({
@@ -355,17 +403,16 @@ export function ChatView({
     }
   };
 
-  // 답변을 보낸 뒤에도 서버가 검증하는 동안은 running 이다 — 그때 대기 문구를 다시 띄우지 않는다
+  // 답변을 보낸 뒤 작업이 끝나기 전까지도 running 이다 — 그때 대기 문구를 다시 띄우지 않는다
   const answered = after.some((m) => m.role === 'assistant');
+  // 할 일 목록은 여러 단계가 필요할 때만 생긴다 — 없으면 대기 문구로 진행 중임을 알린다
   const waiting = !taskId
     ? null
     : run.status === 'queued' && !run.plan
       ? '요청을 받았어요. 곧 시작해요…'
-      : run.status === 'running' && !run.plan
-        ? '어떻게 진행할지 계획하고 있어요…'
-        : run.status === 'running' && isSimplePlan(run.plan) && !run.stream && !answered
-          ? '답변을 준비하고 있어요…'
-          : null;
+      : run.status === 'running' && !run.plan && !run.stream && !answered
+        ? '답변을 준비하고 있어요…'
+        : null;
 
   const message = (m: MessageView) => (
     <MessageScrollerItem key={m.id} messageId={m.id} scrollAnchor={m.role === 'user'}>
@@ -383,103 +430,108 @@ export function ChatView({
           </AlertTitle>
         </Alert>
       )}
-      <MessageScrollerProvider autoScroll>
-        <MessageScroller className="flex-1">
-          <MessageScrollerViewport aria-label="대화 내용">
-            <MessageScrollerContent aria-busy={Boolean(run.stream)} className="gap-5 px-4 py-5">
-              {before.map(message)}
-              {taskId && run.loaded && run.plan && !isSimplePlan(run.plan) && (
-                <MessageScrollerItem>
-                  <PlanCard plan={run.plan} revisions={run.revisions} tools={run.tools} />
-                </MessageScrollerItem>
-              )}
-              {after.map(message)}
-              {run.stream && (
-                <MessageScrollerItem messageId={run.stream.messageId}>
-                  <StreamingMessage text={run.stream.text} />
-                </MessageScrollerItem>
-              )}
-              {waiting && (
-                <MessageScrollerItem>
-                  <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Spinner aria-hidden="true" />
-                    <span className="shimmer">{waiting}</span>
-                  </p>
-                </MessageScrollerItem>
-              )}
-              {run.status === 'recovering' && (
-                <MessageScrollerItem>
-                  <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <RotateCwIcon className="size-4" aria-hidden="true" />
-                    실행 서버가 바뀌어 마지막 체크포인트부터 자동으로 이어서 진행해요.
-                  </p>
-                </MessageScrollerItem>
-              )}
-              {run.approval && taskId && (
-                <MessageScrollerItem>
-                  <ApprovalCard
-                    approval={run.approval}
-                    api={api}
-                    onDecided={(a) => setApproval(a)}
-                  />
-                </MessageScrollerItem>
-              )}
-              {run.status === 'completed' && taskId && run.result?.artifacts.length ? (
-                <MessageScrollerItem>
-                  <Artifacts artifacts={run.result.artifacts} api={api} />
-                </MessageScrollerItem>
-              ) : null}
-              {run.status === 'paused' && (
-                <MessageScrollerItem>
-                  <PausedCard
-                    reason={run.statusReason}
-                    onResume={() => void resume('checkpoint')}
-                  />
-                </MessageScrollerItem>
-              )}
-              {run.status === 'failed' && run.failure && (
-                <MessageScrollerItem>
-                  <FailureCard failure={run.failure} onResume={(mode) => void resume(mode)} />
-                </MessageScrollerItem>
-              )}
-              {run.status === 'cancelled' && (
-                <MessageScrollerItem>
-                  <p className="text-sm text-muted-foreground">작업을 중지했어요.</p>
-                </MessageScrollerItem>
-              )}
-            </MessageScrollerContent>
-          </MessageScrollerViewport>
-          <MessageScrollerButton>
-            <ArrowDownIcon />
-            <span className="sr-only">최신 메시지로 이동</span>
-          </MessageScrollerButton>
-        </MessageScroller>
-      </MessageScrollerProvider>
-      <footer className={FOOTER}>
-        <ErrorLine error={error} />
-        <Composer
-          api={api}
-          value={text}
-          onChange={setText}
-          placeholder={active ? '실행 중에도 추가로 지시할 수 있어요' : '이어서 요청하세요…'}
-          allowAttachments={boot.behavior.attachments.types.length > 0}
-          accept={boot.behavior.attachments.types}
-          maxMb={boot.behavior.attachments.maxMb}
-          onSubmit={send}
-          stopButton={
-            active && taskId
-              ? {
-                  busy: stopping,
-                  onStop: () => {
-                    setStopping(true);
-                    void api.cancel(taskId).finally(() => setStopping(false));
-                  },
-                }
-              : undefined
-          }
-        />
-        <Notice boot={boot} />
-      </footer>
+      <PromptLayout
+        content={
+          <MessageScrollerProvider autoScroll>
+            <MessageScroller className="flex-1">
+              <MessageScrollerViewport aria-label="대화 내용">
+                <MessageScrollerContent aria-busy={Boolean(run.stream)} className="gap-5 px-4 py-5">
+                  {before.map(message)}
+                  {taskId && run.loaded && run.plan && (
+                    <MessageScrollerItem>
+                      <PlanCard plan={run.plan} revisions={run.revisions} tools={run.tools} />
+                    </MessageScrollerItem>
+                  )}
+                  {after.map(message)}
+                  {run.stream && (
+                    <MessageScrollerItem messageId={run.stream.messageId}>
+                      <StreamingMessage text={run.stream.text} />
+                    </MessageScrollerItem>
+                  )}
+                  {waiting && (
+                    <MessageScrollerItem>
+                      <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <Spinner aria-hidden="true" />
+                        <span className="shimmer">{waiting}</span>
+                      </p>
+                    </MessageScrollerItem>
+                  )}
+                  {run.status === 'recovering' && (
+                    <MessageScrollerItem>
+                      <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <RotateCwIcon className="size-4" aria-hidden="true" />
+                        실행 서버가 바뀌어 마지막 체크포인트부터 자동으로 이어서 진행해요.
+                      </p>
+                    </MessageScrollerItem>
+                  )}
+                  {run.approval && taskId && (
+                    <MessageScrollerItem>
+                      <ApprovalCard
+                        approval={run.approval}
+                        api={api}
+                        onDecided={(a) => setApproval(a)}
+                      />
+                    </MessageScrollerItem>
+                  )}
+                  {run.status === 'completed' && taskId && run.result?.artifacts.length ? (
+                    <MessageScrollerItem>
+                      <Artifacts artifacts={run.result.artifacts} api={api} />
+                    </MessageScrollerItem>
+                  ) : null}
+                  {run.status === 'paused' && (
+                    <MessageScrollerItem>
+                      <PausedCard
+                        reason={run.statusReason}
+                        onResume={() => void resume('checkpoint')}
+                      />
+                    </MessageScrollerItem>
+                  )}
+                  {run.status === 'failed' && run.failure && (
+                    <MessageScrollerItem>
+                      <FailureCard failure={run.failure} onResume={(mode) => void resume(mode)} />
+                    </MessageScrollerItem>
+                  )}
+                  {run.status === 'cancelled' && (
+                    <MessageScrollerItem>
+                      <p className="text-sm text-muted-foreground">작업을 중지했어요.</p>
+                    </MessageScrollerItem>
+                  )}
+                </MessageScrollerContent>
+              </MessageScrollerViewport>
+              <MessageScrollerButton>
+                <ArrowDownIcon />
+                <span className="sr-only">최신 메시지로 이동</span>
+              </MessageScrollerButton>
+            </MessageScroller>
+          </MessageScrollerProvider>
+        }
+      >
+        <footer className={FOOTER}>
+          <ErrorLine error={error} />
+          <Composer
+            api={api}
+            value={text}
+            onChange={setText}
+            placeholder={active ? '실행 중에도 추가로 지시할 수 있어요' : '이어서 요청하세요…'}
+            allowAttachments={boot.behavior.attachments.types.length > 0}
+            accept={boot.behavior.attachments.types}
+            maxMb={boot.behavior.attachments.maxMb}
+            onSubmit={send}
+            stopButton={
+              active && taskId
+                ? {
+                    busy: stopping,
+                    onStop: () => {
+                      setStopping(true);
+                      void api.cancel(taskId).finally(() => setStopping(false));
+                    },
+                  }
+                : undefined
+            }
+          />
+          <Notice boot={boot} />
+        </footer>
+      </PromptLayout>
     </>
   );
 }
@@ -662,7 +714,7 @@ function TaskActions({
         </Button>
       </ItemFooter>
     );
-  if (t.status === 'failed' && t.failure)
+  if (t.status === 'failed' && t.failure && canRerun(t.failure))
     return (
       <ItemFooter className="relative z-10 justify-start">
         {t.failure.resumable && (

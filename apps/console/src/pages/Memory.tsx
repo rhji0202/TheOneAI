@@ -194,7 +194,7 @@ export function MemoryPage() {
       <Card>
         <form className="mb-2.5 flex flex-wrap gap-2" onSubmit={submit} role="search">
           <NativeSelect
-            containerClassName="w-auto max-w-[220px]"
+            className="w-auto max-w-[220px]"
             aria-label="Agent"
             value={agentId}
             onChange={(e) => setAgentId(e.target.value)}
@@ -242,7 +242,7 @@ export function MemoryPage() {
         </form>
         <div className="flex flex-wrap items-center gap-2">
           <NativeSelect
-            containerClassName="w-auto"
+            className="w-auto"
             aria-label="종류"
             value={type}
             onChange={(e) => setType(e.target.value as MemoryType | '')}
@@ -255,7 +255,7 @@ export function MemoryPage() {
             ))}
           </NativeSelect>
           <NativeSelect
-            containerClassName="w-auto"
+            className="w-auto"
             aria-label="범위"
             value={scope}
             onChange={(e) => setScope(e.target.value as MemoryScope | '')}

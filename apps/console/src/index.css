@@ -1,5 +1,6 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
 
 @custom-variant dark (@media (prefers-color-scheme: dark));
 
@@ -109,5 +110,7 @@
   }
   body {
     @apply bg-background font-sans text-foreground antialiased;
+    font-size: 0.875rem;
+    line-height: 1.5;
   }
 }

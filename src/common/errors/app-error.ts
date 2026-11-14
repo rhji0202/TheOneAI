@@ -15,6 +15,7 @@ export type ErrorCode =
   | 'TASK_NOT_ACTIVE'
   | 'TASK_NOT_RESUMABLE'
   | 'CHECKPOINT_NOT_FOUND'
+  | 'TASK_BUDGET_EXHAUSTED'
   | 'BUDGET_EXCEEDED'
   | 'APPROVAL_EXPIRED'
   | 'APPROVAL_ALREADY_RESOLVED'
@@ -25,6 +26,7 @@ export type ErrorCode =
   | 'AGENT_NOT_PUBLISHED'
   | 'AGENT_DRAFT_INVALID'
   | 'NAME_TAKEN'
+  | 'AGENT_IN_USE'
   | 'REGISTRY_CHANGED'
   | 'MCP_SSRF_BLOCKED'
   | 'MCP_HANDSHAKE_FAILED'
@@ -36,6 +38,9 @@ export type ErrorCode =
   | 'SKILL_VERIFICATION_FAILED'
   | 'SKILL_VERSION_EXISTS'
   | 'MARKETPLACE_SIGNATURE_INVALID'
+  | 'WORKSPACE_SLUG_TAKEN'
+  | 'DEFAULT_WORKSPACE_PROTECTED'
+  | 'WORKSPACE_PASSWORD_REQUIRED'
   | 'PAYLOAD_TOO_LARGE'
   | 'RATE_LIMITED'
   | 'SERVICE_UNAVAILABLE'
@@ -61,6 +66,7 @@ const TITLES: Record<ErrorCode, string> = {
   TASK_NOT_ACTIVE: '진행 중인 작업이 아닙니다',
   TASK_NOT_RESUMABLE: '실패했거나 일시정지된 작업만 재개할 수 있습니다',
   CHECKPOINT_NOT_FOUND: '재개할 checkpoint 가 없습니다',
+  TASK_BUDGET_EXHAUSTED: '작업 예산(단계 수 · 토큰)을 다 써 다시 실행할 수 없습니다',
   BUDGET_EXCEEDED: '이번 달 사용 한도에 도달했습니다',
   APPROVAL_EXPIRED: '승인 요청이 만료되었습니다',
   APPROVAL_ALREADY_RESOLVED: '이미 처리된 승인 요청입니다',
@@ -71,6 +77,7 @@ const TITLES: Record<ErrorCode, string> = {
   AGENT_NOT_PUBLISHED: '배포된 Agent 가 없습니다',
   AGENT_DRAFT_INVALID: 'Agent 초안을 배포할 수 없습니다',
   NAME_TAKEN: '이미 사용 중인 이름입니다',
+  AGENT_IN_USE: '위젯이 사용 중인 Agent 입니다',
   REGISTRY_CHANGED: '검토하는 동안 Tool 구성이 바뀌었습니다',
   MCP_SSRF_BLOCKED: '허용되지 않은 네트워크 대상입니다',
   MCP_HANDSHAKE_FAILED: 'MCP 서버와 연결하지 못했습니다',
@@ -82,6 +89,9 @@ const TITLES: Record<ErrorCode, string> = {
   SKILL_VERIFICATION_FAILED: '신뢰 검증을 통과하지 못한 Skill 버전입니다',
   SKILL_VERSION_EXISTS: '같은 버전이 이미 다른 내용으로 등록되어 있습니다',
   MARKETPLACE_SIGNATURE_INVALID: '마켓플레이스 서명 · 파일 해시를 확인하지 못했습니다',
+  WORKSPACE_SLUG_TAKEN: '이미 사용 중인 워크스페이스 주소입니다',
+  DEFAULT_WORKSPACE_PROTECTED: '기본 워크스페이스는 삭제할 수 없습니다',
+  WORKSPACE_PASSWORD_REQUIRED: '이 워크스페이스의 비밀번호를 입력해 주세요',
   PAYLOAD_TOO_LARGE: '요청이 너무 큽니다',
   RATE_LIMITED: '요청이 너무 많습니다',
   SERVICE_UNAVAILABLE: '일시적으로 처리할 수 없습니다',

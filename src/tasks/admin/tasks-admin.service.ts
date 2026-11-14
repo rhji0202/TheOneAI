@@ -65,17 +65,6 @@ const rowSelect = {
 
 type Row = Prisma.TaskGetPayload<{ select: typeof rowSelect }>;
 
-/** 단계 종류 → 모델 역할 (토큰 사용량 분해) */
-const ROLE_OF_STEP: Record<string, 'planner' | 'executor' | 'evaluator' | null> = {
-  context: null,
-  plan: 'planner',
-  reason: 'executor',
-  tool: null,
-  skill: 'executor',
-  respond: 'executor',
-  evaluate: 'evaluator',
-};
-
 /** 콘솔 작업 조회 (C-02) — 목록 · 실행 트레이스 · 단계 상세 */
 @Injectable()
 export class TasksAdminService {
@@ -122,6 +111,7 @@ export class TasksAdminService {
       if (!task) throw AppError.notFound();
       // 한 트랜잭션(연결 하나)이므로 차례로 읽는다
       const steps = await tx.taskStep.findMany({ where: { taskId }, orderBy: { seq: 'asc' } });
+      // 할 일 목록 버전 (상태만 바뀐 plan.updated 는 버전이 아니다)
       const planEvents = await tx.taskEvent.findMany({
         where: { taskId, type: { in: ['plan.created', 'plan.revised'] } },
         orderBy: { id: 'asc' },
@@ -138,13 +128,6 @@ export class TasksAdminService {
       const policies = await tx.toolPolicy.findMany({
         select: { level: true, allowTaskScope: true, mode: true },
       });
-      const byRole = { planner: zero(), executor: zero(), evaluator: zero() };
-      for (const step of steps) {
-        const role = ROLE_OF_STEP[step.type];
-        if (!role) continue;
-        byRole[role].inputTokens += step.inputTokens;
-        byRole[role].outputTokens += step.outputTokens;
-      }
       const toolCalls = toolStats._count._all;
       return {
         task: {
@@ -152,7 +135,7 @@ export class TasksAdminService {
           agentVersion: task.agentVersion.version,
           registryVersion: task.registryVersion.version,
           traceId: task.traceId,
-          usage: { inputTokens: task.inputTokens, outputTokens: task.outputTokens, byRole },
+          usage: { inputTokens: task.inputTokens, outputTokens: task.outputTokens },
           cost: { amount: task.costAmount.toString(), currency: task.costCurrency },
         },
         stats: {
@@ -326,8 +309,4 @@ function toRow(task: Row): AdminTaskRow {
     costAmount: Number(task.costAmount),
     costCurrency: task.costCurrency,
   };
-}
-
-function zero() {
-  return { inputTokens: 0, outputTokens: 0 };
 }

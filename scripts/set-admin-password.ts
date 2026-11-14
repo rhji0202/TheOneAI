@@ -1,6 +1,6 @@
 /**
  * 개발용: 콘솔 멤버 비밀번호를 바꾼다 (시드가 만든 Owner 비밀번호를 잊었을 때).
- *   npm run dev:admin-password -- [--email owner@demo.local] [--workspace demo] [--password <새 비밀번호>]
+ *   npm run dev:admin-password -- [--email owner@demo.local] [--workspace default] [--password <새 비밀번호>]
  * 비밀번호를 주지 않으면 생성해 출력한다. DATABASE_MIGRATION_URL(소유자 계정)로 접속한다.
  */
 import 'dotenv/config';
@@ -12,7 +12,7 @@ import { hashPassword } from '../src/admin/auth/password.js';
 const { values } = parseArgs({
   options: {
     email: { type: 'string', default: 'owner@demo.local' },
-    workspace: { type: 'string', default: 'demo' },
+    workspace: { type: 'string', default: 'default' },
     password: { type: 'string' },
   },
 });

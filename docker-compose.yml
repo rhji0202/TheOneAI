@@ -3,15 +3,15 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_USER: theoneai_owner
-      POSTGRES_PASSWORD: theoneai_owner
-      POSTGRES_DB: theoneai
+      POSTGRES_USER: theonewidget_owner
+      POSTGRES_PASSWORD: theonewidget_owner
+      POSTGRES_DB: theonewidget
     ports:
       - '5432:5432'
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U theoneai_owner -d theoneai']
+      test: ['CMD-SHELL', 'pg_isready -U theonewidget_owner -d theonewidget']
       interval: 5s
       retries: 10
 

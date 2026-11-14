@@ -3,11 +3,15 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import { SerializedPrismaPg } from '../src/infrastructure/database/serialized-pg-adapter.js';
 import { SignJWT } from 'jose';
-import { type SeededTenant, type SeedLlmInput, seedTenant } from '../prisma/seed.js';
+import { seedTenant } from '../prisma/seed.js';
 import { AppModule } from '../src/app.module.js';
 import { configureApp } from '../src/bootstrap/configure-app.js';
 import { PrismaClient } from '../src/generated/prisma/client.js';
 import { WorkerModule } from '../src/worker.module.js';
+import type {
+  ProvisionedWorkspace,
+  WorkspaceLlmInput,
+} from '../src/workspaces/workspace-provisioning.js';
 import { type FakeLlm, startFakeLlm } from './fake-llm-server.js';
 import { FAKE_LLM_KEY, TEST_OWNER_URL, WIDGET_A, WIDGET_B, WIDGET_C } from './test-env.js';
 
@@ -16,10 +20,10 @@ export interface TestContext {
   baseUrl: string;
   owner: PrismaClient;
   llm: FakeLlm;
-  tenantA: SeededTenant;
-  tenantB: SeededTenant;
+  tenantA: ProvisionedWorkspace;
+  tenantB: ProvisionedWorkspace;
   /** 모델 API Key 가 없는 테넌트 */
-  tenantC: SeededTenant;
+  tenantC: ProvisionedWorkspace;
   /** 이번 실행에서 쓰는 위젯 (공개 키에 실행별 접미사가 붙는다) */
   widgets: { A: TestWidget; B: TestWidget; C: TestWidget };
   /** 테넌트 slug (콘솔 로그인용) */
@@ -29,19 +33,17 @@ export interface TestContext {
 
 export type TestWidget = typeof WIDGET_A;
 
-/** 역할별 모델을 가짜 LLM 서버로 연결 (provider 종류는 deepseek — 요청 파라미터 매핑까지 확인) */
-function fakeLlmConfig(baseUrl: string, secretRef = FAKE_LLM_KEY.ref): SeedLlmInput {
+/** 모델을 가짜 LLM 서버로 연결 (provider 종류는 deepseek — 요청 파라미터 매핑까지 확인) */
+function fakeLlmConfig(baseUrl: string, secretRef = FAKE_LLM_KEY.ref): WorkspaceLlmInput {
   return {
     provider: { name: 'fake-deepseek', kind: 'deepseek', baseUrl, secretRef },
     models: {
-      planner: { model: 'fake-planner', maxOutputTokens: 1_000, reasoningEffort: 'low' },
       executor: {
         model: 'fake-executor',
         maxOutputTokens: 1_000,
         temperature: 0.3,
         reasoningEffort: 'off',
       },
-      evaluator: { model: 'fake-evaluator', maxOutputTokens: 500 },
     },
   };
 }

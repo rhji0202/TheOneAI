@@ -10,6 +10,7 @@ export interface Locator {
   press(key: string): Promise<void>;
   textContent(): Promise<string | null>;
   innerText(): Promise<string>;
+  inputValue(): Promise<string>;
   count(): Promise<number>;
   first(): Locator;
   last(): Locator;

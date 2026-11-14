@@ -16,7 +16,7 @@ export default defineConfig({
     sourcemap: true,
     lib: {
       entry: 'src/loader.tsx',
-      name: 'TheOneAIWidget',
+      name: 'TheOneWidgetLoader',
       formats: ['iife'],
       fileName: () => 'loader.js',
     },

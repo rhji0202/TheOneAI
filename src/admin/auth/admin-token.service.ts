@@ -10,16 +10,23 @@ import { z } from 'zod';
 import { AppError } from '../../common/errors/app-error.js';
 import { APP_CONFIG, type AppConfig } from '../../config/app-config.js';
 
-const ISSUER = 'theoneai';
+const ISSUER = 'theonewidget';
 const AUDIENCE = 'admin';
+
+const verifiedSchema = z.object({ tid: z.string(), sub: z.string() });
 
 const claimsSchema = z.object({
   sub: z.string(),
   tid: z.string(),
   role: z.enum(['owner', 'admin', 'operator', 'viewer']),
+  /** 이 로그인에서 비밀번호를 확인한 워크스페이스 멤버십 — 이 안에서는 비밀번호 없이 전환한다 */
+  ws: z.array(verifiedSchema).default([]),
+  exp: z.number(),
 });
 
+export type VerifiedMembership = z.infer<typeof verifiedSchema>;
 export type AdminTokenClaims = z.infer<typeof claimsSchema>;
+export type AdminTokenInput = Omit<AdminTokenClaims, 'exp'>;
 
 /**
  * 콘솔 access token (ES256 JWT, aud=admin). 위젯 세션 토큰과 다른 키 · audience 를 쓴다.
@@ -47,17 +54,18 @@ export class AdminTokenService {
     this.publicKey = createPublicKey(this.privateKey);
   }
 
-  async issue(claims: AdminTokenClaims): Promise<{ token: string; expiresAt: Date }> {
-    const expiresAt = new Date(Date.now() + this.ttlSec * 1_000);
-    const token = await new SignJWT({ tid: claims.tid, role: claims.role })
+  /** expiresAt 을 주면 그 시각에 끝난다 — 워크스페이스 전환이 로그인 시간을 늘리지 않게 */
+  async issue(claims: AdminTokenInput, until?: Date): Promise<{ token: string; expiresAt: Date }> {
+    const expSec = Math.floor((until?.getTime() ?? Date.now() + this.ttlSec * 1_000) / 1_000);
+    const token = await new SignJWT({ tid: claims.tid, role: claims.role, ws: claims.ws })
       .setProtectedHeader({ alg: 'ES256', typ: 'JWT' })
       .setIssuer(ISSUER)
       .setAudience(AUDIENCE)
       .setSubject(claims.sub)
       .setIssuedAt()
-      .setExpirationTime(Math.floor(expiresAt.getTime() / 1_000))
+      .setExpirationTime(expSec)
       .sign(this.privateKey);
-    return { token, expiresAt };
+    return { token, expiresAt: new Date(expSec * 1_000) };
   }
 
   async verify(token: string): Promise<AdminTokenClaims> {

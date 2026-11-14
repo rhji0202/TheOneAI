@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>TheOneAI 위젯 데모</title>
+<title>TheOneWidget 위젯 데모</title>
 <style>
   body { margin: 0; font-family: system-ui, -apple-system, 'Apple SD Gothic Neo', sans-serif; background: #f4f5f7; color: #16181d; }
   main { max-width: 720px; margin: 0 auto; padding: 48px 24px; }
@@ -26,13 +26,13 @@
 <script>
   // URL 의 ?key=&token= 으로도 받는다 (개발 편의)
   const params = new URLSearchParams(location.search);
-  window.TheOneAISettings = {
+  window.TheOneWidgetSettings = {
     widgetKey: params.get('key') || 'wk_pub_demo',
     identityToken: params.get('token') || undefined,
   };
   document.getElementById('identify').addEventListener('click', () => {
     const token = document.getElementById('token').value.trim();
-    if (token) window.TheOneAI.identify({ token });
+    if (token) window.TheOneWidget.identify({ token });
   });
 </script>
 <script src="./loader.js" async></script>

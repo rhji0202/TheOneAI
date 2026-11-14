@@ -173,7 +173,7 @@ export function AgentSelect({
   return (
     <NativeSelect
       size="sm"
-      containerClassName="w-44"
+      className="w-44"
       aria-label="Agent"
       value={value}
       onChange={(e) => onChange(e.target.value)}

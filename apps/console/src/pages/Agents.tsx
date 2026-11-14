@@ -1,10 +1,18 @@
 /**
  * C-03 Agent 설정 — 지침 · 역할별 모델 · 허용 목록(MCP · Skill) · 실행 정책 · Memory 정책.
  * 배포된 버전은 바뀌지 않는다: 초안(배포 버전 복사본)을 고쳐 저장하고, 배포하면 새 작업부터 그 버전을 쓴다.
- * API: GET/PATCH/DELETE /v1/admin/agents/:id(/draft) · POST publish · versions · restore · GET /v1/admin/providers
+ * API: GET/POST /v1/admin/agents · GET/PATCH/DELETE /v1/admin/agents/:id(/draft) · POST publish · versions · restore · GET /v1/admin/providers
  */
-import { CircleAlertIcon, HistoryIcon, RocketIcon, RotateCcwIcon, Trash2Icon } from 'lucide-react';
-import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import {
+  CircleAlertIcon,
+  HistoryIcon,
+  PencilIcon,
+  PlusIcon,
+  RocketIcon,
+  RotateCcwIcon,
+  Trash2Icon,
+} from 'lucide-react';
+import { type ReactNode, useEffect, useId, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { formatDuration, formatNumber } from '../../../shared/format';
 import { ApiError } from '../api';
@@ -42,8 +50,9 @@ const LINK = 'text-primary underline-offset-4 hover:underline';
 
 /* ───────────── API 타입 (src/agents/admin/agents-admin.service.ts) ───────────── */
 
-type Role = 'planner' | 'executor' | 'evaluator';
-const ROLES: Role[] = ['planner', 'executor', 'evaluator'];
+/** Agent Loop 는 모델 하나(executor)로 계획 · 실행 · 답변을 모두 한다 */
+type Role = 'executor';
+const ROLES: Role[] = ['executor'];
 
 interface AgentListItem {
   id: string;
@@ -135,6 +144,8 @@ interface SkillItem {
 export function AgentsPage() {
   const api = useApi();
   const navigate = useNavigate();
+  const { can } = useAuth();
+  const [creating, setCreating] = useState(false);
   const agents = useQuery(async () => {
     const list = await api.get<AgentListItem[]>('/v1/admin/agents');
     // 목록 API 에는 초안 상태가 없어 상세를 함께 읽는다 (Agent 는 보통 몇 개뿐)
@@ -204,6 +215,14 @@ export function AgentsPage() {
       <PageHeader
         title="Agent 설정"
         description="지침 · 모델 · 허용 Tool · 실행 정책을 초안에서 고친 뒤 배포합니다. 배포된 버전은 바뀌지 않고, 실행 중인 작업은 시작할 때의 버전을 그대로 씁니다."
+        actions={
+          can('admin') && (
+            <Button onClick={() => setCreating(true)}>
+              <PlusIcon aria-hidden="true" />
+              Agent 추가
+            </Button>
+          )
+        }
       />
       <ErrorNotice error={agents.error} onRetry={agents.reload} />
       <Card flush>
@@ -217,14 +236,73 @@ export function AgentsPage() {
           empty="Agent 가 없어요."
         />
       </Card>
+      {creating && <CreateAgentModal onClose={() => setCreating(false)} />}
     </>
+  );
+}
+
+function CreateAgentModal({ onClose }: { onClose: () => void }) {
+  const api = useApi();
+  const navigate = useNavigate();
+  const formId = useId();
+  const [name, setName] = useState('');
+  const create = useAction((body: { name: string }) =>
+    api.post<AgentDetail>('/v1/admin/agents', body),
+  );
+  const nameTaken =
+    create.error instanceof ApiError && create.error.code === 'NAME_TAKEN'
+      ? create.error.message
+      : undefined;
+
+  const submit = async () => {
+    const created = await create.run({ name: name.trim() });
+    if (created) navigate(`/agents/${created.id}`);
+  };
+
+  return (
+    <Modal
+      open
+      title="Agent 추가"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>
+            취소
+          </Button>
+          <Button type="submit" form={formId} loading={create.pending} disabled={!name.trim()}>
+            추가
+          </Button>
+        </>
+      }
+    >
+      <form
+        id={formId}
+        onSubmit={(e) => {
+          e.preventDefault();
+          void submit();
+        }}
+      >
+        <p className="mb-4 text-sm text-muted-foreground">
+          초안 v1 로 만들어요. 실행(executor) 모델을 정하고 배포하면 위젯에 연결해 쓸 수 있어요.
+        </p>
+        <Field label="이름" required error={nameTaken}>
+          <Input
+            value={name}
+            maxLength={100}
+            placeholder="예: 환불 도우미"
+            autoFocus
+            onChange={(e) => setName(e.target.value)}
+          />
+        </Field>
+        {!nameTaken && <ErrorNotice error={create.error} />}
+      </form>
+    </Modal>
   );
 }
 
 /* ───────────── 편집 폼 상태 ───────────── */
 
 interface ModelForm {
-  /** planner · evaluator 는 끄면 executor 설정을 쓴다 */
   enabled: boolean;
   providerId: string;
   model: string;
@@ -403,27 +481,6 @@ const EXECUTION_GROUPS: FieldGroup[] = [
     ],
   },
   {
-    title: '계획 · 검증',
-    fields: [
-      {
-        kind: 'number',
-        path: 'replanLimit',
-        label: '재계획 한도',
-        min: 0,
-        max: 10,
-        int: true,
-        unit: '회',
-        hint: () => '중간 평가에서 계획을 바꿀 수 있는 횟수',
-      },
-      {
-        kind: 'bool',
-        path: 'selfCorrection',
-        label: '답변 자가 정정',
-        hint: '최종 검증에서 구체적인 오류가 나오면 한 번 바로잡는 후속 메시지를 보냅니다',
-      },
-    ],
-  },
-  {
     title: 'Tool 실행',
     fields: [
       {
@@ -581,17 +638,10 @@ const REASONING: [string, string][] = [
 ];
 
 const ROLE_META: Record<Role, { title: string; description: string }> = {
-  planner: {
-    title: '계획 (planner)',
-    description: '요청을 단계로 나누고 중간 평가 뒤 다시 계획합니다.',
-  },
   executor: {
-    title: '실행 · 답변 (executor)',
-    description: 'reason · tool 단계를 실행하고 최종 답변을 스트리밍합니다. 필수입니다.',
-  },
-  evaluator: {
-    title: '평가 · 검증 (evaluator)',
-    description: '단계 결과를 평가하고 최종 답변을 검증합니다.',
+    title: 'Agent 모델',
+    description:
+      '할 일 목록 작성 · Tool 호출 · 최종 답변 스트리밍을 한 대화에서 모두 합니다. 대화 요약 · 기억 추출에도 씁니다.',
   },
 };
 
@@ -693,6 +743,7 @@ function mapServerIssues(
 export function AgentDetailPage() {
   const { id = '' } = useParams();
   const api = useApi();
+  const navigate = useNavigate();
   const { can } = useAuth();
   const toast = useToast();
   const canEdit = can('admin');
@@ -710,6 +761,8 @@ export function AgentDetailPage() {
   const [issues, setIssues] = useState<Issues>({});
   const [publishOpen, setPublishOpen] = useState(false);
   const [discardOpen, setDiscardOpen] = useState(false);
+  const [removeOpen, setRemoveOpen] = useState(false);
+  const [renameOpen, setRenameOpen] = useState(false);
   const [versionsOpen, setVersionsOpen] = useState(false);
 
   useEffect(() => {
@@ -743,7 +796,12 @@ export function AgentDetailPage() {
 
   const save = useAction(async () => {
     if (!form || !baseForm) return;
-    const local = validate(form);
+    // 모델을 안 바꾸면 보내지 않으니 검사하지 않는다 (새 Agent 는 모델 없이도 지침부터 저장할 수 있게)
+    const local = Object.fromEntries(
+      Object.entries(validate(form)).filter(
+        ([k]) => !k.startsWith('models') || sectionChanged('models', form, baseForm),
+      ),
+    );
     if (Object.keys(local).length) {
       setIssues(local);
       const first = sectionOf(Object.keys(local)[0]!);
@@ -814,6 +872,12 @@ export function AgentDetailPage() {
     toast('초안을 버렸어요');
   });
 
+  const remove = useAction(async () => {
+    await api.delete(`/v1/admin/agents/${id}`);
+    toast('Agent 를 삭제했어요');
+    navigate('/agents');
+  });
+
   if (detail.error && !agent) {
     return (
       <>
@@ -872,14 +936,33 @@ export function AgentDetailPage() {
         }
         actions={
           <>
+            {canEdit && (
+              <Button variant="outline" onClick={() => setRenameOpen(true)}>
+                <PencilIcon aria-hidden="true" />
+                이름 변경
+              </Button>
+            )}
             <Button variant="outline" onClick={() => setVersionsOpen(true)}>
               <HistoryIcon aria-hidden="true" />
               버전 기록
             </Button>
-            {canEdit && agent.draft && (
+            {canEdit && agent.draft && agent.published && (
               <Button variant="ghost" onClick={() => setDiscardOpen(true)}>
                 <Trash2Icon aria-hidden="true" />
                 초안 버리기
+              </Button>
+            )}
+            {canEdit && (
+              <Button
+                variant="ghost"
+                className="text-destructive hover:text-destructive"
+                onClick={() => {
+                  remove.reset();
+                  setRemoveOpen(true);
+                }}
+              >
+                <Trash2Icon aria-hidden="true" />
+                Agent 삭제
               </Button>
             )}
             {canEdit && (
@@ -1075,6 +1158,23 @@ export function AgentDetailPage() {
         onConfirm={() => void discard.run()}
         onClose={() => setDiscardOpen(false)}
       />
+      <ConfirmModal
+        open={removeOpen}
+        title={`${agent.name} 삭제`}
+        body={
+          <p className="mb-3 text-sm leading-relaxed">
+            목록에서 사라지고 새 작업을 받지 않아요. 실행 중인 작업은 시작할 때의 버전으로 끝까지
+            실행돼요. 위젯이 이 Agent 를 쓰고 있으면 삭제할 수 없으니, 먼저 위젯 설정에서 다른 Agent
+            로 바꿔 주세요.
+          </p>
+        }
+        confirmLabel="Agent 삭제"
+        danger
+        pending={remove.pending}
+        error={remove.error}
+        onConfirm={() => void remove.run()}
+        onClose={() => setRemoveOpen(false)}
+      />
       <VersionsModal
         open={versionsOpen}
         agentId={id}
@@ -1087,7 +1187,89 @@ export function AgentDetailPage() {
           toast(`v${version} 내용으로 초안을 만들었어요 — 확인 후 배포하세요`);
         }}
       />
+      {renameOpen && (
+        <RenameAgentModal
+          agentId={id}
+          current={agent.name}
+          onClose={() => setRenameOpen(false)}
+          onRenamed={(name) => {
+            // 이름만 바꾼다 — 버전 데이터를 갈아 끼우면 편집 중인 폼이 초기화된다
+            detail.setData({ ...agent, name });
+            setRenameOpen(false);
+            toast('이름을 바꿨어요 — 위젯에는 새로 열 때 바로 반영돼요');
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/** 이름 바꾸기 — Agent 에 하나라(버전 없음) 배포 없이 바로 반영된다 */
+function RenameAgentModal({
+  agentId,
+  current,
+  onClose,
+  onRenamed,
+}: {
+  agentId: string;
+  current: string;
+  onClose: () => void;
+  onRenamed: (name: string) => void;
+}) {
+  const api = useApi();
+  const formId = useId();
+  const [name, setName] = useState(current);
+  const rename = useAction((body: { name: string }) =>
+    api.patch<AgentDetail>(`/v1/admin/agents/${agentId}`, body),
+  );
+  const nameTaken =
+    rename.error instanceof ApiError && rename.error.code === 'NAME_TAKEN'
+      ? rename.error.message
+      : undefined;
+  const trimmed = name.trim();
+
+  const submit = async () => {
+    const updated = await rename.run({ name: trimmed });
+    if (updated) onRenamed(updated.name);
+  };
+
+  return (
+    <Modal
+      open
+      title="이름 변경"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>
+            취소
+          </Button>
+          <Button
+            type="submit"
+            form={formId}
+            loading={rename.pending}
+            disabled={!trimmed || trimmed === current}
+          >
+            저장
+          </Button>
+        </>
+      }
+    >
+      <form
+        id={formId}
+        onSubmit={(e) => {
+          e.preventDefault();
+          void submit();
+        }}
+      >
+        <p className="mb-4 text-sm text-muted-foreground">
+          배포 없이 바로 바뀌어요. 위젯 헤더 · 작업 목록 · 콘솔에 새 이름이 보여요.
+        </p>
+        <Field label="이름" required error={nameTaken}>
+          <Input value={name} maxLength={100} autoFocus onChange={(e) => setName(e.target.value)} />
+        </Field>
+        {!nameTaken && <ErrorNotice error={rename.error} />}
+      </form>
+    </Modal>
   );
 }
 
@@ -1180,133 +1362,106 @@ function ModelsSection({
             key={role}
             title={meta.title}
             description={meta.description}
-            actions={
-              role === 'executor' ? (
-                <Badge tone="info">필수</Badge>
-              ) : (
-                <Toggle
-                  checked={m.enabled}
-                  onChange={(on) =>
-                    setModel(
-                      role,
-                      on && !m.providerId
-                        ? { ...copyFrom(form.models.executor), enabled: true }
-                        : { enabled: on },
-                    )
-                  }
-                  label="별도 모델"
-                />
-              )
-            }
+            actions={<Badge tone="info">필수</Badge>}
           >
-            {!m.enabled ? (
-              <p className="text-sm text-muted-foreground">
-                실행(executor) 모델 설정을 그대로 씁니다.
-              </p>
-            ) : (
-              <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-x-4 gap-y-0">
-                <Field label="Provider" required error={issues[`${k}.providerId`]}>
-                  <NativeSelect
-                    value={m.providerId}
-                    onChange={(e) => setModel(role, { providerId: e.target.value })}
-                  >
-                    <NativeSelectOption value="">선택하세요</NativeSelectOption>
-                    {providers.map((p) => (
-                      <NativeSelectOption key={p.id} value={p.id}>
-                        {p.name} ({p.kind})
-                      </NativeSelectOption>
-                    ))}
-                  </NativeSelect>
-                </Field>
-                <Field label="모델" required error={issues[`${k}.model`]}>
-                  <Input
-                    className="font-mono"
-                    list="agent-known-models"
-                    value={m.model}
-                    onChange={(e) => setModel(role, { model: e.target.value })}
-                    placeholder="예: deepseek-chat"
-                  />
-                </Field>
-                <Field
-                  label="최대 출력 토큰"
-                  required
-                  hint="64 ~ 64,000"
-                  error={issues[`${k}.maxOutputTokens`]}
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-x-4 gap-y-0">
+              <Field label="Provider" required error={issues[`${k}.providerId`]}>
+                <NativeSelect
+                  value={m.providerId}
+                  onChange={(e) => setModel(role, { providerId: e.target.value })}
                 >
-                  <NumberInput
-                    value={m.maxOutputTokens}
-                    min={64}
-                    max={64_000}
-                    step={1}
-                    onChange={(v) => setModel(role, { maxOutputTokens: v })}
-                  />
-                </Field>
-                <Field
-                  label="Temperature"
-                  hint="0 ~ 2 · 낮을수록 일관됨"
-                  error={issues[`${k}.temperature`]}
+                  <NativeSelectOption value="">선택하세요</NativeSelectOption>
+                  {providers.map((p) => (
+                    <NativeSelectOption key={p.id} value={p.id}>
+                      {p.name} ({p.kind})
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+              </Field>
+              <Field label="모델" required error={issues[`${k}.model`]}>
+                <Input
+                  className="font-mono"
+                  list="agent-known-models"
+                  value={m.model}
+                  onChange={(e) => setModel(role, { model: e.target.value })}
+                  placeholder="예: deepseek-chat"
+                />
+              </Field>
+              <Field
+                label="최대 출력 토큰"
+                required
+                hint="64 ~ 64,000"
+                error={issues[`${k}.maxOutputTokens`]}
+              >
+                <NumberInput
+                  value={m.maxOutputTokens}
+                  min={64}
+                  max={64_000}
+                  step={1}
+                  onChange={(v) => setModel(role, { maxOutputTokens: v })}
+                />
+              </Field>
+              <Field
+                label="Temperature"
+                hint="0 ~ 2 · 낮을수록 일관됨"
+                error={issues[`${k}.temperature`]}
+              >
+                <NumberInput
+                  value={m.temperature}
+                  min={0}
+                  max={2}
+                  step={0.1}
+                  onChange={(v) => setModel(role, { temperature: v })}
+                />
+              </Field>
+              <Field label="추론 강도" hint="추론을 지원하는 모델에만 적용">
+                <NativeSelect
+                  value={m.reasoningEffort}
+                  onChange={(e) => setModel(role, { reasoningEffort: e.target.value })}
                 >
-                  <NumberInput
-                    value={m.temperature}
-                    min={0}
-                    max={2}
-                    step={0.1}
-                    onChange={(v) => setModel(role, { temperature: v })}
-                  />
-                </Field>
-                <Field label="추론 강도" hint="추론을 지원하는 모델에만 적용">
-                  <NativeSelect
-                    value={m.reasoningEffort}
-                    onChange={(e) => setModel(role, { reasoningEffort: e.target.value })}
-                  >
-                    {REASONING.map(([v, label]) => (
-                      <NativeSelectOption key={v} value={v}>
-                        {label}
-                      </NativeSelectOption>
-                    ))}
-                  </NativeSelect>
-                </Field>
-                <div className="col-span-full border-t border-dashed pt-3">
-                  <p className="text-sm font-semibold">대체 모델</p>
-                  <p className="mt-0.5 mb-2.5 text-xs text-muted-foreground">
-                    기본 모델이 오류 · 과부하로 응답하지 못하면 이 모델로 다시 시도합니다.
-                  </p>
-                  <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-x-4 gap-y-0">
-                    <Field label="대체 Provider" error={issues[`${k}.fallbackProviderId`]}>
-                      <NativeSelect
-                        value={m.fallbackProviderId}
-                        onChange={(e) => setModel(role, { fallbackProviderId: e.target.value })}
-                      >
-                        <NativeSelectOption value="">사용 안 함</NativeSelectOption>
-                        {providers.map((p) => (
-                          <NativeSelectOption key={p.id} value={p.id}>
-                            {p.name} ({p.kind})
-                          </NativeSelectOption>
-                        ))}
-                      </NativeSelect>
-                    </Field>
-                    <Field label="대체 모델" error={issues[`${k}.fallbackModel`]}>
-                      <Input
-                        className="font-mono"
-                        list="agent-known-models"
-                        value={m.fallbackModel}
-                        disabled={!m.fallbackProviderId && !m.fallbackModel}
-                        onChange={(e) => setModel(role, { fallbackModel: e.target.value })}
-                      />
-                    </Field>
-                  </div>
+                  {REASONING.map(([v, label]) => (
+                    <NativeSelectOption key={v} value={v}>
+                      {label}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+              </Field>
+              <div className="col-span-full border-t border-dashed pt-3">
+                <p className="text-sm font-semibold">대체 모델</p>
+                <p className="mt-0.5 mb-2.5 text-xs text-muted-foreground">
+                  기본 모델이 오류 · 과부하로 응답하지 못하면 이 모델로 다시 시도합니다.
+                </p>
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-x-4 gap-y-0">
+                  <Field label="대체 Provider" error={issues[`${k}.fallbackProviderId`]}>
+                    <NativeSelect
+                      value={m.fallbackProviderId}
+                      onChange={(e) => setModel(role, { fallbackProviderId: e.target.value })}
+                    >
+                      <NativeSelectOption value="">사용 안 함</NativeSelectOption>
+                      {providers.map((p) => (
+                        <NativeSelectOption key={p.id} value={p.id}>
+                          {p.name} ({p.kind})
+                        </NativeSelectOption>
+                      ))}
+                    </NativeSelect>
+                  </Field>
+                  <Field label="대체 모델" error={issues[`${k}.fallbackModel`]}>
+                    <Input
+                      className="font-mono"
+                      list="agent-known-models"
+                      value={m.fallbackModel}
+                      disabled={!m.fallbackProviderId && !m.fallbackModel}
+                      onChange={(e) => setModel(role, { fallbackModel: e.target.value })}
+                    />
+                  </Field>
                 </div>
               </div>
-            )}
+            </div>
           </Card>
         );
       })}
     </>
   );
-}
-
-function copyFrom(m: ModelForm): ModelForm {
-  return { ...m };
 }
 
 function NumberInput({
@@ -1739,8 +1894,9 @@ function PublishModal({
       }
     >
       <p className="mb-3 text-sm leading-relaxed">
-        배포하면 <b>새로 시작하는 작업</b>부터 v{agent.draft?.version} 을 씁니다. 실행 중인 작업은
-        시작할 때의 버전(v{agent.published?.version ?? '—'})을 그대로 유지해요.
+        배포하면 <b>새로 시작하는 작업</b>부터 v{agent.draft?.version} 을 씁니다.
+        {agent.published &&
+          ` 실행 중인 작업은 시작할 때의 버전(v${agent.published.version})을 그대로 유지해요.`}
       </p>
       {pendingSections.length > 0 && (
         <p className="mb-3 text-sm leading-relaxed text-muted-foreground">

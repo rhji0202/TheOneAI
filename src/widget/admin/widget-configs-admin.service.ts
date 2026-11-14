@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import { z } from 'zod';
 import { AuditService } from '../../admin/audit/audit.service.js';
@@ -6,9 +5,16 @@ import type { AdminRequest, AdminSession } from '../../admin/auth/admin-session.
 import { AppError, type FieldIssue } from '../../common/errors/app-error.js';
 import type { Prisma, WidgetConfig } from '../../generated/prisma/client.js';
 import { PrismaService, type TenantTx } from '../../infrastructure/database/prisma.service.js';
-import { SecretStore } from '../../infrastructure/secrets/secret-store.js';
 import { normalizeOrigin } from '../origin.js';
-import { behaviorSchema, themeSchema } from '../widget-bootstrap.service.js';
+import { contentKey, ObjectStorage } from '../../infrastructure/storage/object-storage.js';
+import {
+  behaviorSchema,
+  MAX_STARTER_PROMPTS,
+  type PublicTheme,
+  publicTheme,
+  themeSchema,
+  widgetIconKey,
+} from '../widget-bootstrap.service.js';
 
 /** 허용 도메인 — 정확한 출처(https://shop.example.com) 또는 서브도메인 한 단계 와일드카드(https://*.example.com) */
 const originSchema = z
@@ -48,6 +54,10 @@ export const widgetConfigPatchSchema = z
         }),
         noticeText: z.string().trim().max(200),
         showPoweredBy: z.boolean(),
+        /** 새 대화 화면에 보여 줄 제시어 — 누르면 그대로 보낸다 */
+        starterPrompts: z
+          .array(z.string().trim().min(1, '빈 제시어는 넣을 수 없습니다').max(100))
+          .max(MAX_STARTER_PROMPTS),
       })
       .partial(),
   })
@@ -64,25 +74,18 @@ export interface WidgetConfigView {
   allowedOrigins: string[];
   identityMode: WidgetConfig['identityMode'];
   enabled: boolean;
-  theme: z.infer<typeof themeSchema>;
+  theme: PublicTheme;
   behavior: z.infer<typeof behaviorSchema>;
-  /** 재발급 뒤 이전 Secret 을 함께 받는 기한 */
-  previousSecretExpiresAt: string | null;
   updatedAt: string;
 }
 
-const SECRET_GRACE_MS = 24 * 3_600_000;
-
-/**
- * 위젯 설치 · 테마 (C-09). 설정은 bootstrap 이 매번 읽으므로 저장 즉시 위젯에 반영된다.
- * 서명 Secret 은 Secret 저장소에만 두고 재발급 응답에서 한 번만 보여 준다 (이전 Secret 은 24시간 함께 허용).
- */
+/** 위젯 설치 · 테마 (C-09). 설정은 bootstrap 이 매번 읽으므로 저장 즉시 위젯에 반영된다. */
 @Injectable()
 export class WidgetConfigsAdminService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly secrets: SecretStore,
     private readonly audit: AuditService,
+    private readonly storage: ObjectStorage,
   ) {}
 
   async list(admin: AdminSession): Promise<WidgetConfigView[]> {
@@ -141,31 +144,56 @@ export class WidgetConfigsAdminService {
     });
   }
 
-  /** 서명 Secret 재발급 — 새 값은 이 응답에서만 보인다. 이전 값은 24시간 동안 함께 허용 (Owner) */
-  async rotateSecret(admin: AdminSession, id: string, req?: AdminRequest) {
-    const current = await this.prisma.withTenant(admin.tenantId, (tx) => this.find(tx, id));
-    const secret = `ws_${randomBytes(32).toString('base64url')}`;
-    const ref = `vault://widgets/${id}/${Date.now()}`;
-    await this.secrets.put(ref, secret);
-    const expiresAt = new Date(Date.now() + SECRET_GRACE_MS);
-    const view = await this.prisma.withTenant(admin.tenantId, async (tx) => {
+  /** 위젯 아이콘 올리기 — PNG · JPEG · WebP (내용으로 판별, SVG 는 받지 않는다), 256KB 이하 */
+  async setIcon(
+    admin: AdminSession,
+    id: string,
+    data: Buffer,
+    req?: AdminRequest,
+  ): Promise<WidgetConfigView> {
+    const mimeType = iconMimeType(data);
+    if (!mimeType) {
+      throw new AppError(422, 'VALIDATION_FAILED', 'PNG · JPEG · WebP 이미지만 올릴 수 있어요', [
+        { path: 'file', message: 'PNG · JPEG · WebP 이미지가 아닙니다' },
+      ]);
+    }
+    const { sha256 } = contentKey('widget-icons', data);
+    await this.storage.put(widgetIconKey(admin.tenantId, sha256), data);
+    return this.replaceIcon(admin, id, { sha256, mimeType }, req);
+  }
+
+  /** 위젯 아이콘 지우기 — 기본 아이콘으로 돌아간다 (파일은 내용 주소라 그대로 둔다) */
+  removeIcon(admin: AdminSession, id: string, req?: AdminRequest): Promise<WidgetConfigView> {
+    return this.replaceIcon(admin, id, null, req);
+  }
+
+  private replaceIcon(
+    admin: AdminSession,
+    id: string,
+    icon: { sha256: string; mimeType: string } | null,
+    req?: AdminRequest,
+  ): Promise<WidgetConfigView> {
+    return this.prisma.withTenant(admin.tenantId, async (tx) => {
+      const current = await this.find(tx, id);
       const updated = await tx.widgetConfig.update({
         where: { id },
         data: {
-          secretRef: ref,
-          previousSecretRef: current.secretRef,
-          previousSecretExpiresAt: expiresAt,
+          theme: { ...themeSchema.parse(current.theme), icon } as Prisma.InputJsonValue,
         },
       });
       await this.audit.record(
         tx,
         admin,
-        { action: 'widget_config.rotate_secret', targetType: 'widget_config', targetId: id },
+        {
+          action: 'widget_config.update',
+          targetType: 'widget_config',
+          targetId: id,
+          metadata: { fields: ['theme.icon'], icon: icon?.sha256 ?? null },
+        },
         req,
       );
       return this.toView(tx, updated);
     });
-    return { widget: view, secret, previousSecretExpiresAt: expiresAt.toISOString() };
   }
 
   private async find(tx: TenantTx, id: string): Promise<WidgetConfig> {
@@ -185,13 +213,30 @@ export class WidgetConfigsAdminService {
       allowedOrigins: w.allowedOrigins,
       identityMode: w.identityMode,
       enabled: w.enabled,
-      theme: themeSchema.parse(w.theme),
+      theme: publicTheme(themeSchema.parse(w.theme), w.publicKey),
       behavior: behaviorSchema.parse(w.behavior),
-      previousSecretExpiresAt:
-        w.previousSecretExpiresAt && w.previousSecretExpiresAt > new Date()
-          ? w.previousSecretExpiresAt.toISOString()
-          : null,
       updatedAt: w.updatedAt.toISOString(),
     };
   }
+}
+
+/** 위젯 아이콘 최대 크기 */
+export const MAX_ICON_BYTES = 256 * 1024;
+
+/** 파일 앞부분(매직 바이트)으로 형식을 정한다 — 올린 사람이 붙인 형식은 믿지 않는다 */
+function iconMimeType(data: Buffer): string | null {
+  if (
+    data.length >= 8 &&
+    data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+  )
+    return 'image/png';
+  if (data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff)
+    return 'image/jpeg';
+  if (
+    data.length >= 12 &&
+    data.subarray(0, 4).toString('latin1') === 'RIFF' &&
+    data.subarray(8, 12).toString('latin1') === 'WEBP'
+  )
+    return 'image/webp';
+  return null;
 }

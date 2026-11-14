@@ -260,13 +260,17 @@ export function PageHeader({
             {back.label}
           </Link>
         )}
-        <h1 className="text-2xl font-semibold tracking-tight break-words">{title}</h1>
+        <h1 className="text-xl font-bold tracking-[-0.02em] break-words md:text-[22px]">{title}</h1>
         {meta && (
           <div className="mt-1.5 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
             {meta}
           </div>
         )}
-        {description && <p className="mt-1 text-muted-foreground">{description}</p>}
+        {description && (
+          <p className="mt-2.5 max-w-[74ch] text-sm text-muted-foreground md:text-[15px] [&_b]:font-semibold [&_b]:text-foreground">
+            {description}
+          </p>
+        )}
       </div>
       {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </header>
@@ -303,6 +307,35 @@ export function Card({
   );
 }
 
+/** 패널 위에 붙는 섹션 이름 — 개수 · 오른쪽 동작은 선택 */
+export function SectionLabel({
+  title,
+  count,
+  actions,
+}: {
+  title: ReactNode;
+  count?: ReactNode;
+  actions?: ReactNode;
+}) {
+  return (
+    <div className="mt-6 mb-2 flex min-h-8 flex-wrap items-center gap-x-2 gap-y-1.5">
+      <h2 className="text-[13px] font-semibold text-muted-foreground">{title}</h2>
+      {count !== undefined && (
+        <span className="font-mono text-xs text-muted-foreground/80">{count}</span>
+      )}
+      {actions && <div className="ml-auto flex flex-wrap items-center gap-2">{actions}</div>}
+    </div>
+  );
+}
+
+export function Panel({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <div className={cn('min-w-0 rounded-[14px] border bg-card text-card-foreground', className)}>
+      {children}
+    </div>
+  );
+}
+
 export function Badge({ tone = 'neutral', children }: { tone?: Tone; children: ReactNode }) {
   return <UiBadge className={TONE_CLASS[tone]}>{children}</UiBadge>;
 }
@@ -328,14 +361,20 @@ export function Tabs<T extends string>({
   label?: string;
 }) {
   return (
-    <UiTabs value={value} onValueChange={(v) => onChange(v as T)} className="mb-4">
+    <UiTabs
+      value={value}
+      onValueChange={(id) => {
+        const tab = tabs.find((tab) => tab.id === id);
+        if (tab) onChange(tab.id);
+      }}
+      className="mb-4 min-w-0"
+    >
       <TabsList
-        variant="line"
         aria-label={label}
-        className="w-full justify-start overflow-x-auto border-b"
+        className="max-w-full justify-start overflow-x-auto overflow-y-hidden"
       >
         {tabs.map((t) => (
-          <TabsTrigger key={t.id} value={t.id} className="flex-none px-3">
+          <TabsTrigger key={t.id} value={t.id} className="shrink-0 px-3">
             {t.label}
             {t.count !== undefined && (
               <span className="rounded-full bg-muted px-1.5 text-xs text-muted-foreground tabular-nums">

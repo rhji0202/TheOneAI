@@ -1184,7 +1184,7 @@ function DiffTab({
               <NativeSelect
                 id="skill-diff-against"
                 size="sm"
-                containerClassName="w-auto"
+                className="w-auto"
                 value={against}
                 onChange={(e) => setAgainst(e.target.value)}
               >

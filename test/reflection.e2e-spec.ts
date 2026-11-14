@@ -96,9 +96,11 @@ describe('Context Compression — 대화 요약', () => {
     );
     expect(conversation.summary).toContain('이전 대화 메시지 8개 요약');
     expect(conversation.summaryThroughId).not.toBeNull();
-    // 요약은 계획 · 작업 · 답변 프롬프트에 데이터로 들어간다
-    for (const role of ['Planner', 'Executor (work step)', 'Executor (respond step)']) {
-      const system = requests('#conv-1', role)[0]!.body.messages[0]!.content!;
+    // 요약은 Agent 의 모든 차례 지침에 데이터로 들어간다
+    const turns = requests('#conv-1', 'Agent');
+    expect(turns).toHaveLength(3);
+    for (const turn of turns) {
+      const system = turn.body.messages[0]!.content!;
       expect(system).toContain('## Earlier in this conversation');
       expect(system).toContain('이전 대화 메시지 8개 요약');
     }
@@ -130,124 +132,28 @@ describe('Context Compression — 대화 요약', () => {
   });
 });
 
-describe('Context Compression — 작업 노트', () => {
-  it('노트가 길어지면 앞 단계 노트를 하나로 줄이고(단계 기록), 이후 단계 · 답변은 줄인 노트를 쓴다', async () => {
-    const { events, steps } = await send(await newConversation(), '[긴메모] 길게 분석해 줘 #notes');
+describe('Reflection — 기억 추출의 근거', () => {
+  it('거부된 Tool 호출과 이 작업에서 부른 Tool 이 처리 요령 기억의 근거로 간다', async () => {
+    const { events } = await send(await newConversation(), '[무단] 파일 내용 보여줘 #reflect');
     expect(last(events).event).toBe('task.completed');
-    const compress = steps.filter((s) => s.name === 'context.compress_notes');
-    expect(compress.length).toBeGreaterThanOrEqual(1);
-    expect(compress[0]).toMatchObject({ status: 'succeeded', type: 'context' });
-    expect(compress[0]!.output).toMatchObject({ before: { notes: 3 }, after: { notes: 3 } });
-    expect(compress[0]!.inputTokens).toBeGreaterThan(0);
+    // 거부 결과는 다음 차례 대화에 그대로 이어진다 (모델이 같은 호출을 되풀이하지 않도록)
+    const turns = requests('#reflect', 'Agent');
+    expect(turns.at(-1)!.body.messages.at(-1)!.content).toContain('UNKNOWN_TOOL');
 
-    const respond = requests('#notes', 'Executor (respond step)')[0]!.body.messages[0]!.content!;
-    expect(respond).toContain('Earlier steps (');
-    expect(respond).toContain('앞 단계 요약: 자료 정리 · 비교 분석 · 위험 검토 완료, 핵심 수치 42');
-    // 4단계 메모가 모두 원문이었다면 2만 자가 넘는다
-    expect(respond.length).toBeLessThan(16_000);
-  });
-});
-
-describe('Reflection', () => {
-  it('재계획할 때 이 작업에서 실패 · 거부된 Tool 호출을 알려 같은 시도를 반복하지 않게 한다', async () => {
-    const { events, steps } = await send(
-      await newConversation(),
-      '[반성] 파일 내용 보여줘 #reflect',
-    );
-    expect(last(events).event).toBe('task.completed');
-    const revise = requests('#reflect', 'Planner').find((r) =>
-      (r.body.messages.at(-1)!.content ?? '').includes('Evaluator feedback'),
-    )!;
-    const content = revise.body.messages.at(-1)!.content!;
-    expect(content).toContain('Problems so far');
-    expect(content).toContain('shell__exec: refused (unknown_tool)');
-    expect(steps.find((s) => s.name === 'planner.revise')!.output).toMatchObject({
-      problems: [expect.stringContaining('shell__exec: refused (unknown_tool)')],
-    });
-
-    // 작업이 끝나면 잘못된 것들이 기억 추출(처리 요령)의 근거로 간다
     const extract = await waitFor(async () => requests('#reflect', 'Memory:extract')[0]);
     const input = extract.body.messages[1]!.content!;
+    expect(input).toContain('Tools the agent used:');
+    expect(input).toContain('- Called shell__exec');
     expect(input).toContain('What went wrong or was corrected during the task');
     expect(input).toContain('Tool shell__exec was refused (unknown_tool)');
-    expect(input).toContain('The plan was revised: 근거가 부족합니다');
   });
 
-  it('답변 검증에서 구체적인 오류가 나오면 정정 메시지를 한 번 보내고 다시 검증한다', async () => {
-    const conversationId = await newConversation();
-    const { taskId, events, steps } = await send(
-      conversationId,
-      '[검증실패] 환불 기한 알려줘 #correct',
+  it('할 일 목록을 고친 작업은 그 사실을 근거로 남긴다', async () => {
+    const { events } = await send(await newConversation(), '[재계획] 근거 보강 #reflect-plan');
+    expect(last(events).event).toBe('task.completed');
+    const extract = await waitFor(async () => requests('#reflect-plan', 'Memory:extract')[0]);
+    expect(extract.body.messages[1]!.content).toContain(
+      'The plan was revised: 할 일 목록을 고쳤어요',
     );
-    const done = last(events);
-    expect(done.event).toBe('task.completed');
-    const result = (
-      done.data as {
-        result: { messageId: string; correctionMessageId: string; verification: unknown[] };
-      }
-    ).result;
-    expect(result.correctionMessageId).toBeTruthy();
-    expect(result.verification).toEqual([
-      { label: '요청에 답함', passed: true },
-      { label: '사용자 언어로 작성', passed: true },
-    ]);
-    expect(steps.map((s) => s.name).slice(-3)).toEqual([
-      'evaluator.verify',
-      'executor.correct',
-      'evaluator.verify_correction',
-    ]);
-    expect(steps.find((s) => s.name === 'evaluator.verify')!.evaluation).toMatchObject({
-      verdict: 'fail',
-      issues: ['환불 기한을 14일이라고 했지만 노트에는 7일이다'],
-    });
-
-    const messages = await tenantRows((tx) =>
-      tx.message.findMany({ where: { taskId, role: 'assistant' }, orderBy: { id: 'asc' } }),
-    );
-    expect(messages).toHaveLength(2);
-    expect(messages[1]!.id).toBe(result.correctionMessageId);
-    expect(JSON.stringify(messages[1]!.content)).toContain(
-      '정정합니다: 환불 기한은 14일이 아니라 7일입니다.',
-    );
-    const correction = requests('#correct', 'Executor (correction)')[0]!.body.messages[1]!.content!;
-    expect(correction).toContain('환불 기한을 14일이라고 했지만 노트에는 7일이다');
-    expect(correction).toContain('Your previous answer:');
-  });
-
-  it('실행 정책 selfCorrection 이 꺼져 있으면 정정하지 않는다', async () => {
-    const versionId = (
-      await tenantRows((tx) => tx.agent.findUniqueOrThrow({ where: { id: ctx.tenantA.agentId } }))
-    ).publishedVersionId!;
-    const original = await tenantRows((tx) =>
-      tx.agentVersion.findUniqueOrThrow({ where: { id: versionId } }),
-    );
-    await tenantRows((tx) =>
-      tx.agentVersion.update({
-        where: { id: versionId },
-        data: {
-          executionPolicy: {
-            ...(original.executionPolicy as Record<string, unknown> | null),
-            selfCorrection: false,
-          },
-        },
-      }),
-    );
-    try {
-      const { steps, events } = await send(
-        await newConversation(),
-        '[검증실패] 환불 기한 #no-correct',
-      );
-      expect(steps.map((s) => s.name)).not.toContain('executor.correct');
-      expect((last(events).data as { result: Record<string, unknown> }).result).not.toHaveProperty(
-        'correctionMessageId',
-      );
-    } finally {
-      await tenantRows((tx) =>
-        tx.agentVersion.update({
-          where: { id: versionId },
-          data: { executionPolicy: original.executionPolicy ?? {} },
-        }),
-      );
-    }
   });
 });

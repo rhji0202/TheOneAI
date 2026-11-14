@@ -31,7 +31,7 @@ erDiagram
   tenants ||--o{ agents : owns
   agents ||--o{ agent_versions : "versions"
   agents |o--o| agent_versions : "published"
-  agent_versions ||--o{ model_configs : "planner/executor/evaluator"
+  agent_versions ||--o{ model_configs : "executor"
   agent_versions ||--o{ agent_version_mcp_servers : allowlist
   agent_versions ||--o{ agent_version_skills : allowlist
   end_users ||--o{ conversations : has
@@ -120,8 +120,6 @@ interface ExecutionPolicy {
   maxDurationSec: number; // 기본 1800. 승인 대기 시간 제외
   tokenBudget: number; // 작업당 입력+출력 토큰 상한
   toolRetry: { maxAttempts: number; backoff: 'exponential'; baseMs: number }; // 멱등 Tool 만 자동 재시도
-  replanLimit: number; // 기본 3
-  selfCorrection: boolean; // 기본 true — 답변 검증에서 구체적인 오류(issues)가 나오면 정정 메시지 한 번 (Reflection)
   parallelTools: { enabled: boolean; max: number }; // 읽기 등급 Tool 만 병렬
   approvalTtlSec?: number; // 없으면 tool_policies.ttl_seconds
   sandbox: { cpu: number; memoryMb: number; timeoutSec: number; network: 'none' | 'allowlist' };
@@ -158,7 +156,7 @@ interface Checkpoint {
 
 재개 규칙: `tasks.last_checkpoint_step_id` 의 checkpoint 를 읽고, 같은 `agent_version_id` · `registry_version_id` 로 다음 계획 단계부터 실행한다. 이미 성공한 비멱등 Tool 은 다시 호출하지 않는다.
 
-`workingMemory` 에 Agent Loop 가 남기는 값: `planView`(목표 · 단계 · 지시 — 재개 시 계획), `notes`(작업 노트), `answer`(보낸 답변 `{id, text}` — 있으면 검증만), `steerCursor`(마지막으로 반영한 추가 지시 메시지), `correction`(보낸 정정 메시지 `{id, text}` — 있으면 정정 후 검증만), `policySnapshot`(작업이 처음 읽은 권한 정책 — 이후 판단은 이것과 지금 정책 중 엄격한 쪽), `pendingWork`(승인 대기로 멈춘 작업 단계의 대화 `{planIndex, messages, calls, results, round, toolCalls}` — 재개하면 모델을 다시 부르지 않고 결과가 없는 Tool 호출부터 이어 간다). 승인 대기로 멈춘 작업 단계는 `waiting_approval` 로 끝나며 `nextPlanIndex` 가 그 단계 자신인 checkpoint 를 남긴다. checkpoint 는 작업 단계(reason · tool · skill)와 답변 단계가 끝날 때 저장한다. `tasks.recovery_count` 는 Worker 유실 · 종료로 다시 넣은 횟수다.
+`workingMemory` 에 Agent Loop 가 남기는 값: `planView`(목표 · 단계 · 지시 — 재개 시 계획), `notes`(작업 노트), `answer`(보낸 답변 `{id, text}` — 있으면 검증만), `steerCursor`(마지막으로 반영한 추가 지시 메시지), `correction`(보낸 정정 메시지 `{id, text}` — 있으면 정정 후 검증만), `policySnapshot`(작업이 처음 읽은 권한 정책 — 이후 판단은 이것과 지금 정책 중 엄격한 쪽), `pendingWork`(승인 대기로 멈춘 작업 단계의 대화 `{planIndex, messages, calls, results, round, toolCalls}` — `messages` 는 이 단계의 Tool 호출 · 결과만이고 시스템 지침 · 대화 기록 · 요청(첨부 이미지)은 재개할 때 다시 만든다. 재개하면 모델을 다시 부르지 않고 결과가 없는 Tool 호출부터 이어 간다). 승인 대기로 멈춘 작업 단계는 `waiting_approval` 로 끝나며 `nextPlanIndex` 가 그 단계 자신인 checkpoint 를 남긴다. checkpoint 는 작업 단계(reason · tool · skill)와 답변 단계가 끝날 때 저장한다. `tasks.recovery_count` 는 Worker 유실 · 종료로 다시 넣은 횟수다.
 
 ### 4.4 `tool_policy_rules.condition`
 

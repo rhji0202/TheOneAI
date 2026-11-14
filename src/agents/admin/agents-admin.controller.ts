@@ -15,15 +15,19 @@ import { AdminAuthGuard, CurrentAdmin, Roles } from '../../admin/auth/admin-auth
 import type { AdminRequest, AdminSession } from '../../admin/auth/admin-session.js';
 import {
   AgentsAdminService,
+  type CreateInput,
+  createInputSchema,
   type DraftInput,
   draftInputSchema,
   type PublishInput,
   publishInputSchema,
+  type RenameInput,
+  renameInputSchema,
 } from './agents-admin.service.js';
 
 const uuid = { schema: z.uuid() };
 
-/** docs/api-spec.md §4.4 — Agent 조회 · 초안 편집 · 배포 · 버전 기록 · 되돌리기 (C-03) */
+/** docs/api-spec.md §4.4 — Agent 추가 · 삭제 · 조회 · 초안 편집 · 배포 · 버전 기록 · 되돌리기 (C-03) */
 @Controller({ path: 'admin/agents', version: '1' })
 @UseGuards(AdminAuthGuard)
 export class AgentsAdminController {
@@ -34,9 +38,42 @@ export class AgentsAdminController {
     return this.agents.list(admin);
   }
 
+  @Post()
+  @Roles('admin')
+  create(
+    @CurrentAdmin() admin: AdminSession,
+    @Body({ schema: createInputSchema }) body: CreateInput,
+    @Req() req: AdminRequest,
+  ) {
+    return this.agents.create(admin, body, req);
+  }
+
   @Get(':id')
   get(@CurrentAdmin() admin: AdminSession, @Param('id', uuid) id: string) {
     return this.agents.get(admin, id);
+  }
+
+  /** 이름 바꾸기 — 배포 없이 바로 반영 */
+  @Patch(':id')
+  @Roles('admin')
+  rename(
+    @CurrentAdmin() admin: AdminSession,
+    @Param('id', uuid) id: string,
+    @Body({ schema: renameInputSchema }) body: RenameInput,
+    @Req() req: AdminRequest,
+  ) {
+    return this.agents.rename(admin, id, body, req);
+  }
+
+  @Delete(':id')
+  @HttpCode(204)
+  @Roles('admin')
+  archive(
+    @CurrentAdmin() admin: AdminSession,
+    @Param('id', uuid) id: string,
+    @Req() req: AdminRequest,
+  ) {
+    return this.agents.archive(admin, id, req);
   }
 
   @Patch(':id/draft')

@@ -72,7 +72,7 @@ import type {
   PlanStep,
   WidgetApi,
 } from './api';
-import type { RunState, ToolChip } from './run';
+import { canRerun, type RunState, type ToolChip } from './run';
 
 type TraceStatus = 'running' | 'error' | 'pending';
 
@@ -261,12 +261,7 @@ function stepDetail(step: PlanStep, tools: ToolChip[]): string | null {
   return `${step.toolName}${retry}`;
 }
 
-/** 답변 단계만 있는 계획(인사 · 간단한 질문) — 실행 계획을 보여 주지 않는다 */
-export function isSimplePlan(plan: RunState['plan']): boolean {
-  return Boolean(plan?.steps.every((s) => s.kind === 'respond'));
-}
-
-/** Plan — 단계는 처음부터 다 알려져 있다 (plan.created / plan.revised) */
+/** Plan — Agent 의 할 일 목록 (plan.created / plan.revised, 상태는 plan.updated) */
 export function PlanCard({
   plan,
   revisions,
@@ -587,21 +582,23 @@ export function FailureCard({
       <CircleAlertIcon />
       <AlertTitle>작업을 끝내지 못했어요</AlertTitle>
       <AlertDescription>{failure.message}</AlertDescription>
-      <div className="col-start-2 mt-2.5 flex flex-wrap gap-2">
-        {failure.resumable && (
-          <Button size="sm" onClick={() => onResume('checkpoint')}>
-            멈춘 단계부터 재개
+      {canRerun(failure) && (
+        <div className="col-start-2 mt-2.5 flex flex-wrap gap-2">
+          {failure.resumable && (
+            <Button size="sm" onClick={() => onResume('checkpoint')}>
+              멈춘 단계부터 재개
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="outline"
+            className="text-foreground"
+            onClick={() => onResume('restart')}
+          >
+            처음부터
           </Button>
-        )}
-        <Button
-          size="sm"
-          variant="outline"
-          className="text-foreground"
-          onClick={() => onResume('restart')}
-        >
-          처음부터
-        </Button>
-      </div>
+        </div>
+      )}
     </Alert>
   );
 }
@@ -718,14 +715,15 @@ export function Composer({
 
   return (
     <form
+      className="flex min-h-0 flex-col"
       onSubmit={(e) => {
         e.preventDefault();
         void submit();
       }}
     >
-      <InputGroup className="min-w-0 rounded-xl bg-background">
+      <InputGroup className="min-h-0 min-w-0 flex-1 rounded-xl bg-background">
         {files.length > 0 && (
-          <InputGroupAddon align="block-start">
+          <InputGroupAddon align="block-start" className="max-h-24 shrink-0 overflow-y-auto">
             <AttachmentGroup className="w-full">
               {files.map((f) => {
                 const Icon = fileIcon(f.mimeType, f.name);
@@ -769,14 +767,14 @@ export function Composer({
         )}
         <InputGroupTextarea
           aria-label={stopButton ? '추가 지시 입력' : '메시지 입력'}
-          className="max-h-36 min-h-12 px-3 pt-3"
+          className="field-sizing-fixed min-h-0 flex-1 overflow-y-auto px-3 pt-3"
           rows={1}
           placeholder={placeholder}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={onKey}
         />
-        <InputGroupAddon align="block-end">
+        <InputGroupAddon align="block-end" className="shrink-0">
           {allowAttachments && !stopButton && (
             <InputGroupButton
               size="icon-sm"

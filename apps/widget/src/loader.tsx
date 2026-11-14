@@ -14,7 +14,7 @@ const shadowCss = css
  * 위젯 로더 — 고객사 페이지에 한 줄로 넣는다.
  *   <script src="https://<API>/widget/v1/loader.js" data-widget-key="wk_pub_..." async></script>
  * 로그인 사용자 연동: 고객사 서버가 Widget Secret 으로 서명한 identity token 을 넘긴다.
- *   window.TheOneAI.identify({ token })   또는   window.TheOneAISettings = { identityToken } (로더보다 먼저)
+ *   window.TheOneWidget.identify({ token })   또는   window.TheOneWidgetSettings = { identityToken } (로더보다 먼저)
  * 위젯은 Shadow DOM 안에 그려 호스트 페이지 CSS 와 섞이지 않는다.
  */
 interface PublicApi {
@@ -25,8 +25,8 @@ interface PublicApi {
 
 declare global {
   interface Window {
-    TheOneAI?: PublicApi;
-    TheOneAISettings?: Partial<WidgetOptions>;
+    TheOneWidget?: PublicApi;
+    TheOneWidgetSettings?: Partial<WidgetOptions>;
   }
 }
 
@@ -41,7 +41,7 @@ function render() {
   if (!options) return;
   if (!host) {
     host = document.createElement('div');
-    host.id = 'theoneai-widget';
+    host.id = 'theonewidget';
     host.style.all = 'initial';
     const shadow = host.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
@@ -51,7 +51,7 @@ function render() {
     document.body.appendChild(host);
     if (propertyCss && !properties) {
       properties = document.createElement('style');
-      properties.dataset.theoneai = 'properties';
+      properties.dataset.theonewidget = 'properties';
       properties.textContent = propertyCss;
       document.head.appendChild(properties);
     }
@@ -102,7 +102,7 @@ function defaultBase(): string {
   return window.location.origin;
 }
 
-window.TheOneAI = api;
-const preset = window.TheOneAISettings ?? {};
+window.TheOneWidget = api;
+const preset = window.TheOneWidgetSettings ?? {};
 const key = preset.widgetKey ?? script?.dataset.widgetKey;
 if (key) api.init({ ...preset, widgetKey: key });

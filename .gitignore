@@ -11,3 +11,4 @@ src/generated/
 .DS_Store
 *.tsbuildinfo
 dump.rdb
+verify-out/

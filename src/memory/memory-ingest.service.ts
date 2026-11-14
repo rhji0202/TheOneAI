@@ -5,17 +5,13 @@ import type { TaskRunInfo } from '../agent-runtime/run-context.js';
 import { ModelRouterFactory } from '../agent-runtime/model-router.js';
 import { BillingService } from '../billing/billing.service.js';
 import { UsageMeter } from '../billing/usage-meter.js';
-import {
-  MEMORY_EXTRACT_ROLE,
-  renderNotes,
-  systemPrompt,
-  type WorkNote,
-} from '../agent-runtime/prompts.js';
+import { MEMORY_EXTRACT_ROLE, renderWork, systemPrompt } from '../agent-runtime/prompts.js';
 import { findInjectionRisks } from '../common/security/text-risk.js';
 import { uuidv7 } from '../common/uuid.js';
 import type { MemorySourceType } from '../generated/prisma/client.js';
 import { PrismaService, type TenantTx } from '../infrastructure/database/prisma.service.js';
 import { parseJsonOutput } from '../llm/json-output.js';
+import type { LlmMessage } from '../llm/llm.types.js';
 import { maskSensitive } from '../tools/masking.js';
 import { EmbeddingService, toVectorLiteral } from './embedding.service.js';
 import { MemoryRetriever } from './memory-retriever.service.js';
@@ -100,29 +96,25 @@ export class MemoryIngestService {
         take: 5,
         select: { payload: true },
       });
-      const checks = await tx.taskStep.findMany({
-        where: { taskId, type: 'evaluate', name: { startsWith: 'evaluator.verify' } },
-        orderBy: { seq: 'asc' },
-        select: { evaluation: true },
-      });
       const checkpoint = task.lastCheckpointStepId
         ? await tx.taskStep.findUnique({
             where: { id: task.lastCheckpointStepId },
             select: { checkpoint: true },
           })
         : null;
-      const memory = (checkpoint?.checkpoint as { workingMemory?: { notes?: WorkNote[] } } | null)
-        ?.workingMemory;
+      const loop = (
+        checkpoint?.checkpoint as { workingMemory?: { loop?: { messages?: LlmMessage[] } } } | null
+      )?.workingMemory?.loop;
       return {
         task,
         policy: version.memoryPolicy,
         endUser,
         request: textOf(trigger?.content),
-        // 정정 메시지가 있으면 답변 뒤에 이어 붙인다
+        // Tool 호출과 함께 보낸 중간 안내가 있으면 최종 답변 앞에 이어 붙인다
         answer: replies
           .map((r) => textOf(r.content))
           .filter(Boolean)
-          .join('\n\n[Follow-up correction]\n'),
+          .join('\n\n'),
         lessons: [
           ...failures.map(
             (f) =>
@@ -132,20 +124,12 @@ export class MemoryIngestService {
             const reason = (e.payload as { reason?: unknown } | null)?.reason;
             return typeof reason === 'string' && reason ? [`The plan was revised: ${reason}`] : [];
           }),
-          ...checks.flatMap((c) => {
-            const issues = (c.evaluation as { issues?: unknown } | null)?.issues;
-            return Array.isArray(issues)
-              ? issues
-                  .filter((i): i is string => typeof i === 'string')
-                  .map((i) => `Answer check found: ${i}`)
-              : [];
-          }),
         ],
-        notes: Array.isArray(memory?.notes) ? memory.notes : [],
+        work: Array.isArray(loop?.messages) ? loop.messages : [],
       };
     });
     if (!loaded) return { saved: 0, updated: 0, quarantined: 0, skipped: 'not_completed' };
-    const { task, notes, endUser, request, answer, lessons } = loaded;
+    const { task, work, endUser, request, answer, lessons } = loaded;
     const policy = memoryPolicySchema.parse(loaded.policy ?? {});
     if (!policy.enabled) return { saved: 0, updated: 0, quarantined: 0, skipped: 'disabled' };
 
@@ -158,7 +142,6 @@ export class MemoryIngestService {
     );
     const res = await router
       .complete(
-        'evaluator',
         {
           json: true,
           maxOutputTokens: 800,
@@ -168,7 +151,7 @@ export class MemoryIngestService {
               role: 'user',
               content: [
                 `User request:\n${request}`,
-                `Working notes:\n${truncate(renderNotes(notes), 4_000)}`,
+                `Tools the agent used:\n${truncate(renderWork(work), 4_000)}`,
                 `Final answer sent to the user:\n${truncate(answer, 3_000)}`,
                 ...(lessons.length
                   ? [

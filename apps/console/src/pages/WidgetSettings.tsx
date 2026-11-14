@@ -1,7 +1,7 @@
 /**
- * C-09 위젯 설치 · 테마 — 설치 코드, 사용자 연동(서명 토큰), 허용 도메인, 테마 · 동작, 미리보기, Secret 재발급.
+ * C-09 위젯 설치 · 테마 — 설치 코드, 사용자 연동(서명 토큰), 허용 도메인, 테마 · 동작, 미리보기.
  * 설정은 bootstrap 이 매번 읽으므로 저장하면 바로 고객사 페이지의 위젯에 반영된다.
- * API: GET /v1/admin/widget-configs · PATCH /:id (Admin) · POST /:id/rotate-secret (Owner)
+ * API: GET /v1/admin/widget-configs · PATCH /:id (Admin)
  */
 import {
   ArrowUpIcon,
@@ -11,7 +11,6 @@ import {
   MoonIcon,
   PaperclipIcon,
   PlusIcon,
-  RefreshCwIcon,
   SparklesIcon,
   SunIcon,
   Trash2Icon,
@@ -25,13 +24,11 @@ import {
   Badge,
   Card,
   CodeBlock,
-  ConfirmModal,
   CopyButton,
   Empty,
   ErrorNotice,
   Field,
   Loading,
-  Modal,
   Mono,
   Notice,
   PageHeader,
@@ -42,7 +39,6 @@ import {
   useToast,
 } from '../ui';
 import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
@@ -62,7 +58,13 @@ interface Theme {
   brandColor: string;
   position: Position;
   darkMode: DarkMode;
+  /** 올린 위젯 아이콘 (읽기 전용 — 아이콘 카드에서 바로 올리고 지운다) */
+  iconUrl: string | null;
 }
+
+/** 위젯 아이콘 — 서버 widget-configs-admin.service.ts 와 같다 */
+const ICON_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
+const MAX_ICON_KB = 256;
 
 interface Behavior {
   autoOpen: boolean;
@@ -70,7 +72,13 @@ interface Behavior {
   attachments: { types: string[]; maxMb: number };
   noticeText: string;
   showPoweredBy: boolean;
+  /** 새 대화 화면의 제시어 — 위젯에서 누르면 그대로 보낸다 */
+  starterPrompts: string[];
 }
+
+/** 제시어 수 · 길이 (서버 widget-configs-admin.service.ts 와 같다) */
+const MAX_STARTER_PROMPTS = 6;
+const MAX_STARTER_PROMPT_CHARS = 100;
 
 interface WidgetConfig {
   id: string;
@@ -83,14 +91,7 @@ interface WidgetConfig {
   enabled: boolean;
   theme: Theme;
   behavior: Behavior;
-  previousSecretExpiresAt: string | null;
   updatedAt: string;
-}
-
-interface RotateResult {
-  widget: WidgetConfig;
-  secret: string;
-  previousSecretExpiresAt: string;
 }
 
 interface AgentListItem {
@@ -121,6 +122,7 @@ const toForm = (w: WidgetConfig): Form => ({
   behavior: {
     ...w.behavior,
     attachments: { ...w.behavior.attachments, types: [...w.behavior.attachments.types] },
+    starterPrompts: [...w.behavior.starterPrompts],
   },
 });
 
@@ -239,7 +241,6 @@ export function WidgetSettingsPage() {
   const { can } = useAuth();
   const toast = useToast();
   const canEdit = can('admin');
-  const canRotate = can('owner');
 
   const configs = useQuery(() => api.get<WidgetConfig[]>('/v1/admin/widget-configs'), []);
   const agents = useQuery(() => api.get<AgentListItem[]>('/v1/admin/agents'), []);
@@ -248,8 +249,6 @@ export function WidgetSettingsPage() {
   const baseForm = useMemo(() => (widget ? toForm(widget) : null), [widget]);
   const [form, setForm] = useState<Form | null>(null);
   const [issues, setIssues] = useState<Record<string, string>>({});
-  const [rotateOpen, setRotateOpen] = useState(false);
-  const [newSecret, setNewSecret] = useState<RotateResult | null>(null);
 
   useEffect(() => {
     setForm(baseForm);
@@ -290,6 +289,10 @@ export function WidgetSettingsPage() {
       local['behavior.attachments'] = '최대 크기는 1 ~ 50MB';
     if (form.behavior.noticeText.trim().length > 200)
       local['behavior.noticeText'] = '200자 이하로 입력하세요';
+    // 빈 제시어는 저장하지 않는다
+    const starterPrompts = form.behavior.starterPrompts.map((p) => p.trim()).filter(Boolean);
+    if (starterPrompts.some((p) => p.length > MAX_STARTER_PROMPT_CHARS))
+      local['behavior.starterPrompts'] = `제시어는 ${MAX_STARTER_PROMPT_CHARS}자 이하로 입력하세요`;
     if (Object.keys(local).length) {
       setIssues(local);
       throw new Error('입력값을 확인해 주세요');
@@ -310,6 +313,7 @@ export function WidgetSettingsPage() {
         ...(behavior.noticeText !== undefined
           ? { noticeText: form.behavior.noticeText.trim() }
           : {}),
+        ...(behavior.starterPrompts !== undefined ? { starterPrompts } : {}),
       };
     try {
       const updated = await api.patch<WidgetConfig>(`/v1/admin/widget-configs/${widget.id}`, patch);
@@ -320,23 +324,17 @@ export function WidgetSettingsPage() {
         const mapped: Record<string, string> = {};
         for (const e of err.body.errors as Array<{ path?: string; message?: string }>) {
           const path = e.path ?? 'general';
-          const key = path.startsWith('allowedOrigins') ? 'allowedOrigins' : path;
+          const key = path.startsWith('allowedOrigins')
+            ? 'allowedOrigins'
+            : path.startsWith('behavior.starterPrompts')
+              ? 'behavior.starterPrompts'
+              : path;
           mapped[key] = mapped[key] ?? e.message ?? '값이 올바르지 않습니다';
         }
         setIssues(mapped);
       }
       throw err;
     }
-  });
-
-  const rotate = useAction(async () => {
-    if (!widget) return;
-    const result = await api.post<RotateResult>(
-      `/v1/admin/widget-configs/${widget.id}/rotate-secret`,
-    );
-    replace(result.widget);
-    setRotateOpen(false);
-    setNewSecret(result);
   });
 
   if (configs.error && !configs.data) {
@@ -388,7 +386,7 @@ export function WidgetSettingsPage() {
         actions={
           configs.data.length > 1 ? (
             <NativeSelect
-              containerClassName="w-auto min-w-[200px]"
+              className="w-auto min-w-[200px]"
               aria-label="위젯 선택"
               value={widget.id}
               onChange={(e) => {
@@ -472,18 +470,28 @@ export function WidgetSettingsPage() {
             />
           </Card>
 
-          <InstallCard widget={widget} identityMode={form.identityMode} />
+          <ThemeCard theme={form.theme} onChange={setTheme} error={issues['theme.brandColor']} />
 
-          <IdentityCard
-            widget={widget}
-            mode={form.identityMode}
-            baseMode={baseForm.identityMode}
-            onChange={(identityMode) => update({ identityMode })}
-            canRotate={canRotate}
-            onRotate={() => {
-              rotate.reset();
-              setRotateOpen(true);
+          <IconCard
+            widgetId={widget.id}
+            iconUrl={widget.theme.iconUrl}
+            dirty={dirty}
+            onUpdated={(updated) => {
+              replace(updated);
+              toast(
+                updated.theme.iconUrl
+                  ? '아이콘을 바꿨어요 — 위젯을 새로 열면 바로 적용돼요'
+                  : '기본 아이콘으로 되돌렸어요',
+              );
             }}
+          />
+
+          <BehaviorCard behavior={form.behavior} onChange={setBehavior} issues={issues} />
+
+          <StarterPromptsCard
+            prompts={form.behavior.starterPrompts}
+            onChange={(starterPrompts) => setBehavior({ starterPrompts })}
+            error={issues['behavior.starterPrompts']}
           />
 
           <OriginsCard
@@ -492,9 +500,13 @@ export function WidgetSettingsPage() {
             serverError={issues.allowedOrigins}
           />
 
-          <ThemeCard theme={form.theme} onChange={setTheme} error={issues['theme.brandColor']} />
+          <InstallCard widget={widget} identityMode={form.identityMode} />
 
-          <BehaviorCard behavior={form.behavior} onChange={setBehavior} issues={issues} />
+          <IdentityCard
+            mode={form.identityMode}
+            baseMode={baseForm.identityMode}
+            onChange={(identityMode) => update({ identityMode })}
+          />
         </fieldset>
 
         <aside
@@ -536,29 +548,6 @@ export function WidgetSettingsPage() {
           </Button>
         </div>
       )}
-
-      <ConfirmModal
-        open={rotateOpen}
-        title="Widget Secret 을 재발급할까요?"
-        body={
-          <div className="mb-3 space-y-1.5 text-sm leading-relaxed">
-            <p>
-              새 Secret 을 만들면 지금 Secret 은 <b>24시간 동안만</b> 함께 허용돼요.
-            </p>
-            <p>그 안에 고객사 서버의 환경 변수(예: THEONEAI_WIDGET_SECRET)를 새 값으로 바꾸세요.</p>
-            <p className="text-muted-foreground">
-              새 값은 재발급 직후 한 번만 보여 드려요. Secret 이 노출됐다면 바로 재발급하세요.
-            </p>
-          </div>
-        }
-        confirmLabel="재발급"
-        danger
-        pending={rotate.pending}
-        error={rotate.error}
-        onConfirm={() => void rotate.run()}
-        onClose={() => setRotateOpen(false)}
-      />
-      <SecretModal result={newSecret} onClose={() => setNewSecret(null)} />
     </>
   );
 }
@@ -582,14 +571,6 @@ function InstallCard({
 }) {
   const loader = `${window.location.origin}/widget/v1/loader.js`;
   const tag = `<script src="${loader}" data-widget-key="${widget.publicKey}" async></script>`;
-  const signed = `<script>
-  // 로그인한 사용자의 identity token 을 고객사 서버에서 받아 온다 (로더보다 먼저)
-  window.TheOneAISettings = {
-    getIdentityToken: () =>
-      fetch('/api/theoneai-token', { credentials: 'include' }).then((r) => (r.ok ? r.text() : null)),
-  };
-</script>
-${tag}`;
   return (
     <Card
       title="설치 코드"
@@ -600,14 +581,8 @@ ${tag}`;
           <b className="text-foreground">허용 도메인</b>에 위젯을 넣을 사이트 주소를 등록합니다.
         </li>
         <li>아래 코드를 페이지에 붙여 넣습니다.</li>
-        {identityMode === 'signed_token' && (
-          <li>
-            고객사 서버에 <b className="text-foreground">identity token 발급 API</b>를 만듭니다
-            (아래 사용자 연동).
-          </li>
-        )}
       </ol>
-      <CodeBlock code={identityMode === 'signed_token' ? signed : tag} label="HTML" />
+      <CodeBlock code={tag} label="HTML" />
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <span className="text-sm text-muted-foreground">공개 키</span>
         <Mono>{widget.publicKey}</Mono>
@@ -619,8 +594,8 @@ ${tag}`;
       </div>
       {identityMode === 'signed_token' && (
         <p className="mt-2.5 text-xs text-muted-foreground">
-          로그인 · 로그아웃 뒤에는 <Mono>{'window.TheOneAI.identify({ token })'}</Mono> 또는{' '}
-          <Mono>window.TheOneAI.destroy()</Mono> 를 부르세요.
+          로그인 · 로그아웃 뒤에는 <Mono>{'window.TheOneWidget.identify({ token })'}</Mono> 또는{' '}
+          <Mono>window.TheOneWidget.destroy()</Mono> 를 부르세요.
         </p>
       )}
     </Card>
@@ -643,36 +618,14 @@ const IDENTITY_MODES: [IdentityMode, string, string][] = [
 ];
 
 function IdentityCard({
-  widget,
   mode,
   baseMode,
   onChange,
-  canRotate,
-  onRotate,
 }: {
-  widget: WidgetConfig;
   mode: IdentityMode;
   baseMode: IdentityMode;
   onChange: (mode: IdentityMode) => void;
-  canRotate: boolean;
-  onRotate: () => void;
 }) {
-  const server = `// 고객사 서버 (Node.js · Express) — npm install jose
-import { SignJWT } from 'jose';
-
-// 콘솔에서 발급한 Widget Secret — 서버 환경 변수에만 두고 브라우저로 보내지 않는다
-const widgetSecret = new TextEncoder().encode(process.env.THEONEAI_WIDGET_SECRET);
-
-app.get('/api/theoneai-token', requireLogin, async (req, res) => {
-  const token = await new SignJWT({ name: req.user.displayName }) // 선택: 표시 이름
-    .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
-    .setSubject(String(req.user.id)) // 고객사 사용자 ID — 대화 · 기억이 이 값으로 묶여요
-    .setAudience('${widget.publicKey}') // 이 위젯의 공개 키
-    .setIssuedAt()
-    .setExpirationTime('5m') // 수명은 최대 10분
-    .sign(widgetSecret);
-  res.set('Cache-Control', 'no-store').type('text/plain').send(token);
-});`;
   const id = useId();
   return (
     <Card title="사용자 연동" description="위젯 사용자를 어떻게 구분할지 정합니다.">
@@ -703,83 +656,7 @@ app.get('/api/theoneai-token', requireLogin, async (req, res) => {
             : '저장하는 순간부터 identity token 이 없는 방문자에게는 위젯이 보이지 않아요. 고객사 서버의 토큰 발급 API 를 먼저 준비하세요.'}
         </Notice>
       )}
-      {mode === 'signed_token' && (
-        <>
-          <ul className="mt-1 mb-3 list-disc space-y-0.5 pl-5 text-sm leading-relaxed text-muted-foreground">
-            <li>
-              HS256 으로 서명하고 <Mono>aud</Mono> = 공개 키, <Mono>sub</Mono> · <Mono>iat</Mono> ·{' '}
-              <Mono>exp</Mono> 를 넣어요. 수명은 10분 이하.
-            </li>
-            <li>
-              <Mono>sub</Mono> 는 바뀌지 않는 고객사 사용자 ID 를 쓰세요. 콘솔에는
-              가명(user_xxxx)으로만 보여요.
-            </li>
-            <li>
-              Widget Secret 은 고객사 서버에만 두세요. 브라우저 코드 · 저장소에 넣으면 누구나 다른
-              사용자로 위장할 수 있어요.
-            </li>
-          </ul>
-          <CodeBlock code={server} label="고객사 서버 예시 — identity token 발급" />
-        </>
-      )}
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-4 border-t pt-3.5">
-        <div className="min-w-60 flex-1">
-          <p className="font-semibold">Widget Secret</p>
-          <p className="text-xs text-muted-foreground">
-            Secret 저장소에만 보관돼 콘솔에서도 다시 볼 수 없어요. 잃어버렸거나 노출됐다면
-            재발급하세요.
-          </p>
-          {widget.previousSecretExpiresAt && (
-            <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
-              이전 Secret 도 <Time iso={widget.previousSecretExpiresAt} absolute /> 까지 함께
-              허용돼요.
-            </p>
-          )}
-        </div>
-        {canRotate ? (
-          <Button variant="destructive" onClick={onRotate}>
-            <RefreshCwIcon aria-hidden="true" />
-            Secret 재발급
-          </Button>
-        ) : (
-          <span className="text-xs text-muted-foreground">재발급은 Owner 만 할 수 있어요</span>
-        )}
-      </div>
     </Card>
-  );
-}
-
-function SecretModal({ result, onClose }: { result: RotateResult | null; onClose: () => void }) {
-  const [saved, setSaved] = useState(false);
-  useEffect(() => setSaved(false), [result]);
-  const savedId = useId();
-  return (
-    <Modal
-      open={!!result}
-      title="새 Widget Secret"
-      onClose={() => saved && onClose()}
-      footer={
-        <Button disabled={!saved} onClick={onClose}>
-          닫기
-        </Button>
-      }
-    >
-      <Notice tone="warn">
-        이 창을 닫으면 다시 볼 수 없어요. 지금 복사해 고객사 서버의 환경 변수에 저장하세요.
-      </Notice>
-      {result && <CodeBlock code={result.secret} label="THEONEAI_WIDGET_SECRET" />}
-      {result && (
-        <p className="mt-2.5 text-xs text-muted-foreground">
-          이전 Secret 은 <Time iso={result.previousSecretExpiresAt} absolute /> 까지 함께 허용돼요.
-        </p>
-      )}
-      <div className="mt-2.5 flex items-center gap-2">
-        <Checkbox id={savedId} checked={saved} onCheckedChange={(v) => setSaved(v === true)} />
-        <Label htmlFor={savedId} className="font-normal">
-          안전한 곳에 저장했어요
-        </Label>
-      </div>
-    </Modal>
   );
 }
 
@@ -1093,7 +970,7 @@ function BehaviorCard({
         <Toggle
           checked={behavior.showPoweredBy}
           onChange={(showPoweredBy) => onChange({ showPoweredBy })}
-          label="하단에 ‘Powered by TheOneAI’ 표시"
+          label="하단에 ‘Powered by TheOneWidget’ 표시"
         />
       </div>
       <Field
@@ -1113,7 +990,7 @@ function BehaviorCard({
         error={issues['behavior.language']}
       >
         <NativeSelect
-          containerClassName="max-w-80"
+          className="max-w-80"
           value={behavior.language}
           onChange={(e) => onChange({ language: e.target.value })}
         >
@@ -1253,6 +1130,166 @@ const WP_TOKENS = {
   },
 };
 
+/**
+ * 위젯 아이콘 — 위젯 헤더에 쓰인다 (런처 버튼은 기본 아이콘 그대로). 고르면 바로 올려 저장한다
+ * (저장 안 한 변경이 있으면 막는다 — 올린 뒤 설정을 다시 읽으면 그 변경이 사라지므로).
+ */
+function IconCard({
+  widgetId,
+  iconUrl,
+  dirty,
+  onUpdated,
+}: {
+  widgetId: string;
+  iconUrl: string | null;
+  dirty: boolean;
+  onUpdated: (updated: WidgetConfig) => void;
+}) {
+  const api = useApi();
+  const inputId = useId();
+  const upload = useAction(async (file: File) => {
+    if (!ICON_TYPES.includes(file.type))
+      throw new Error('PNG · JPEG · WebP 이미지만 올릴 수 있어요');
+    if (file.size > MAX_ICON_KB * 1024)
+      throw new Error(`${MAX_ICON_KB}KB 이하 이미지만 올릴 수 있어요`);
+    const form = new FormData();
+    form.append('file', file);
+    onUpdated(await api.upload<WidgetConfig>(`/v1/admin/widget-configs/${widgetId}/icon`, form));
+  });
+  const remove = useAction(async () =>
+    onUpdated(await api.delete<WidgetConfig>(`/v1/admin/widget-configs/${widgetId}/icon`)),
+  );
+  const busy = upload.pending || remove.pending;
+  const error = upload.error ?? remove.error;
+  return (
+    <Card
+      title="아이콘"
+      description="위젯 헤더에 보여요 (런처 버튼은 기본 아이콘 그대로). 정사각형 PNG · JPEG · WebP, 256KB 이하를 권장해요."
+    >
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="grid size-14 flex-none place-items-center overflow-hidden rounded-full border bg-muted text-muted-foreground">
+          {iconUrl ? (
+            <img src={iconUrl} alt="현재 위젯 아이콘" className="size-full object-cover" />
+          ) : (
+            <MessageCircleIcon aria-hidden="true" className="size-6" />
+          )}
+        </span>
+        <input
+          id={inputId}
+          type="file"
+          accept={ICON_TYPES.join(',')}
+          className="sr-only"
+          disabled={dirty || busy}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = '';
+            if (file) void upload.run(file);
+          }}
+        />
+        <Button variant="outline" size="sm" asChild disabled={dirty || busy}>
+          <label
+            htmlFor={inputId}
+            aria-disabled={dirty || busy}
+            className={cn((dirty || busy) && 'pointer-events-none opacity-50')}
+          >
+            <PaperclipIcon aria-hidden="true" />
+            {upload.pending ? '올리는 중…' : iconUrl ? '아이콘 바꾸기' : '아이콘 올리기'}
+          </label>
+        </Button>
+        {iconUrl && (
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={dirty || busy}
+            onClick={() => void remove.run()}
+          >
+            <Trash2Icon aria-hidden="true" />
+            기본 아이콘으로
+          </Button>
+        )}
+      </div>
+      {dirty && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          저장하지 않은 변경이 있어요. 먼저 저장한 뒤 아이콘을 바꿀 수 있어요.
+        </p>
+      )}
+      {error && (
+        <p className="mt-2 text-sm text-destructive" role="alert">
+          {error.message}
+        </p>
+      )}
+    </Card>
+  );
+}
+
+/** 제시어 — 위젯 새 대화 화면에 버튼으로 보이고, 누르면 그 문장을 바로 보낸다 */
+function StarterPromptsCard({
+  prompts,
+  onChange,
+  error,
+}: {
+  prompts: string[];
+  onChange: (next: string[]) => void;
+  error?: string;
+}) {
+  const full = prompts.length >= MAX_STARTER_PROMPTS;
+  return (
+    <Card
+      title="제시어"
+      description="새 대화를 시작할 때 환영 문구 아래에 보여요. 방문자가 누르면 그 문장을 바로 보내요."
+      actions={
+        <Badge tone={prompts.length ? 'info' : undefined}>
+          {prompts.length}/{MAX_STARTER_PROMPTS}
+        </Badge>
+      }
+    >
+      {error && (
+        <p className="mb-2 text-sm text-destructive" role="alert">
+          {error}
+        </p>
+      )}
+      {prompts.length === 0 ? (
+        <p className="mb-3 text-sm text-muted-foreground">
+          제시어가 없어요. 자주 받는 요청을 넣어 두면 방문자가 바로 시작할 수 있어요.
+        </p>
+      ) : (
+        <ol className="mb-3 flex flex-col gap-2">
+          {prompts.map((prompt, i) => (
+            <li key={i} className="flex items-center gap-2">
+              <Input
+                aria-label={`제시어 ${i + 1}`}
+                maxLength={MAX_STARTER_PROMPT_CHARS}
+                placeholder="예: 배송 조회하는 방법 알려줘"
+                value={prompt}
+                onChange={(e) => onChange(prompts.map((p, k) => (k === i ? e.target.value : p)))}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label={`제시어 ${i + 1} 삭제`}
+                onClick={() => onChange(prompts.filter((_, k) => k !== i))}
+              >
+                <Trash2Icon aria-hidden="true" />
+              </Button>
+            </li>
+          ))}
+        </ol>
+      )}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={full}
+        onClick={() => onChange([...prompts, ''])}
+      >
+        <PlusIcon aria-hidden="true" />
+        {full ? `${MAX_STARTER_PROMPTS}개까지 넣을 수 있어요` : '제시어 추가'}
+      </Button>
+    </Card>
+  );
+}
+
 function WidgetPreview({
   theme,
   behavior,
@@ -1326,8 +1363,12 @@ function WidgetPreview({
           )}
         >
           <div className="flex items-center gap-1.5 border-b border-(--wp-line-soft) py-[9px] pr-2 pl-2.5">
-            <span className="grid size-[30px] flex-none place-items-center rounded-full bg-(--wp-brand) text-(--wp-on-brand)">
-              <SparklesIcon className="size-4" />
+            <span className="grid size-[30px] flex-none place-items-center overflow-hidden rounded-full bg-(--wp-brand) text-(--wp-on-brand)">
+              {theme.iconUrl ? (
+                <img src={theme.iconUrl} alt="" className="size-full object-cover" />
+              ) : (
+                <SparklesIcon className="size-4" />
+              )}
             </span>
             <div className="min-w-0 flex-1">
               <p className="truncate text-[13.5px] font-bold">{agentName || 'Agent'}</p>
@@ -1348,6 +1389,20 @@ function WidgetPreview({
                 </span>
               ))}
             </h3>
+            {behavior.starterPrompts.some((p) => p.trim()) && (
+              <div className="flex flex-col gap-1.5">
+                {behavior.starterPrompts
+                  .filter((p) => p.trim())
+                  .map((p, i) => (
+                    <span
+                      key={i}
+                      className="truncate rounded-[10px] border border-(--wp-line) bg-(--wp-bg) px-2.5 py-1.5"
+                    >
+                      {p.trim()}
+                    </span>
+                  ))}
+              </div>
+            )}
             <div className="max-w-[82%] self-end rounded-[14px_14px_4px_14px] bg-(--wp-brand) px-3 py-2 text-(--wp-on-brand)">
               3월 매출 리포트 만들어줘
             </div>
@@ -1373,7 +1428,7 @@ function WidgetPreview({
             <p className="mt-[5px] min-h-[15px] text-center text-[10.5px] text-(--wp-text-3)">
               {behavior.noticeText.trim()}
               {behavior.noticeText.trim() && behavior.showPoweredBy && ' · '}
-              {behavior.showPoweredBy && 'Powered by TheOneAI'}
+              {behavior.showPoweredBy && 'Powered by TheOneWidget'}
             </p>
           </div>
         </div>

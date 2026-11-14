@@ -916,7 +916,7 @@ function RegistryVersionDetailView({
             <NativeSelect
               id="registry-diff-from"
               size="sm"
-              containerClassName="w-auto"
+              className="w-auto"
               value={from}
               onChange={(e) => setFrom(e.target.value === '' ? '' : Number(e.target.value))}
             >

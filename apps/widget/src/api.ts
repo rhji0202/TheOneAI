@@ -10,6 +10,8 @@ export interface Theme {
   brandColor: string;
   position: 'bottom-right' | 'bottom-left';
   darkMode: 'system' | 'light' | 'dark';
+  /** 콘솔에서 올린 위젯 아이콘 (API 기준 경로) — 없으면 기본 아이콘 */
+  iconUrl: string | null;
 }
 
 export interface Behavior {
@@ -18,6 +20,8 @@ export interface Behavior {
   attachments: { types: string[]; maxMb: number };
   noticeText: string;
   showPoweredBy: boolean;
+  /** 새 대화 화면의 제시어 — 누르면 그대로 보낸다 (콘솔 위젯 설정) */
+  starterPrompts: string[];
 }
 
 export interface TaskSummary {
@@ -101,8 +105,6 @@ export interface ArtifactView {
 
 export interface TaskResult {
   messageId: string | null;
-  correctionMessageId?: string;
-  verification: Array<{ label: string; passed: boolean }>;
   summary: {
     steps: number;
     toolCalls: number;

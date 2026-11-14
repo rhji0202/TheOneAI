@@ -35,6 +35,8 @@
     "build:console": "vite build --config apps/console/vite.config.ts",
     "build:ui": "npm run build:widget && npm run build:console",
     "typecheck:ui": "tsc --noEmit -p apps/widget/tsconfig.json && tsc --noEmit -p apps/console/tsconfig.json",
+    "ui:check": "node scripts/sync-shadcn-nova.mjs --check",
+    "ui:sync": "node scripts/sync-shadcn-nova.mjs --refresh --write",
     "dev:widget": "vite build --watch --config apps/widget/vite.config.ts",
     "dev:console": "vite --config apps/console/vite.config.ts"
   },
@@ -52,6 +54,7 @@
     "ioredis": "6.0.0",
     "jose": "6.2.13",
     "pg": "8.23.1",
+    "react-resizable-panels": "4.22.0",
     "reflect-metadata": "0.2.2",
     "rxjs": "7.8.2",
     "undici": "7.30.1",

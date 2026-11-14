@@ -86,16 +86,13 @@ describe('사용량 · 비용', () => {
     expect(listed.body).toHaveLength(2);
   });
 
-  it('작업이 끝나면 역할 · 모델별 사용량을 기록하고 단가로 계산한 비용을 작업에 더한다', async () => {
+  it('작업이 끝나면 모델별 사용량을 기록하고 단가로 계산한 비용을 작업에 더한다', async () => {
     const run = await send('[분석] 요금 비교 #bill');
     expect(run.events!.at(-1)!.event).toBe('task.completed');
     billedTaskId = run.taskId!;
-    // 가짜 LLM 은 호출마다 입력 100 · 출력 20 토큰
+    // 가짜 LLM 은 호출마다 입력 100 · 출력 20 토큰 — Agent 차례 3번 (호출당 0.00028 USD)
     const records = await tenantRows((tx) =>
-      tx.usageRecord.findMany({
-        where: { taskId: billedTaskId, purpose: 'task' },
-        orderBy: { role: 'asc' },
-      }),
+      tx.usageRecord.findMany({ where: { taskId: billedTaskId, purpose: 'task' } }),
     );
     expect(
       records.map((r) => ({
@@ -109,46 +106,33 @@ describe('사용량 · 비용', () => {
       })),
     ).toEqual([
       {
-        role: 'planner',
-        model: 'fake-planner',
-        calls: 1,
-        inputTokens: 100,
-        outputTokens: 20,
-        cost: 0.00014,
-        priced: true,
-      },
-      {
         role: 'executor',
         model: 'fake-executor',
-        calls: 2,
-        inputTokens: 200,
-        outputTokens: 40,
-        cost: 0.00056,
+        calls: 3,
+        inputTokens: 300,
+        outputTokens: 60,
+        cost: 0.00084,
         priced: true,
       },
-      {
-        role: 'evaluator',
-        model: 'fake-evaluator',
-        calls: 2,
-        inputTokens: 200,
-        outputTokens: 40,
-        cost: 0,
-        priced: false,
-      },
     ]);
-    const task = await tenantRows((tx) =>
-      tx.task.findUniqueOrThrow({ where: { id: billedTaskId } }),
-    );
-    expect(Number(task.costAmount)).toBeCloseTo(0.0007, 8);
-    expect(task.costCurrency).toBe('USD');
 
-    // 작업 뒤 기억 추출도 그 작업의 사용량으로 (단가 없는 evaluator 모델)
+    // 작업 뒤 기억 추출도 같은 모델로, 그 작업의 사용량 · 비용으로
     const memory = await waitFor(() =>
       tenantRows((tx) =>
         tx.usageRecord.findFirst({ where: { taskId: billedTaskId, purpose: 'memory' } }),
       ),
     );
-    expect(memory).toMatchObject({ role: 'evaluator', calls: 1, priced: false });
+    expect(memory).toMatchObject({
+      role: 'executor',
+      model: 'fake-executor',
+      calls: 1,
+      priced: true,
+    });
+    const task = await tenantRows((tx) =>
+      tx.task.findUniqueOrThrow({ where: { id: billedTaskId } }),
+    );
+    expect(Number(task.costAmount)).toBeCloseTo(0.00112, 8);
+    expect(task.costCurrency).toBe('USD');
   });
 
   it('사용량 보고 — 합계 · 일별 · 모델별 · 용도별, 단가 없는 호출 수', async () => {
@@ -161,21 +145,18 @@ describe('사용량 · 비용', () => {
       budget: { monthlyBudget: number | null; monthToDate: number };
     }>('GET', '/billing/usage?range=7d', undefined, viewerToken);
     expect(res.status).toBe(200);
-    expect(res.body.totals).toMatchObject({ calls: 6, inputTokens: 600, unpricedCalls: 3 });
-    expect(res.body.totals.cost).toBeCloseTo(0.0007, 8);
+    expect(res.body.totals).toMatchObject({ calls: 4, inputTokens: 400, unpricedCalls: 0 });
+    expect(res.body.totals.cost).toBeCloseTo(0.00112, 8);
     expect(res.body.byDay).toHaveLength(1);
-    expect(res.body.byModel[0]).toMatchObject({ model: 'fake-executor', priced: true, calls: 2 });
-    expect(res.body.byModel.find((m) => m.model === 'fake-evaluator')).toMatchObject({
-      priced: false,
-      cost: 0,
-      calls: 3,
-    });
+    expect(res.body.byModel).toEqual([
+      expect.objectContaining({ model: 'fake-executor', priced: true, calls: 4 }),
+    ]);
     expect(res.body.byPurpose).toEqual([
       expect.objectContaining({ purpose: 'memory', calls: 1 }),
-      expect.objectContaining({ purpose: 'task', calls: 5 }),
+      expect.objectContaining({ purpose: 'task', calls: 3 }),
     ]);
     expect(res.body.budget).toMatchObject({ monthlyBudget: null });
-    expect(res.body.budget.monthToDate).toBeCloseTo(0.0007, 8);
+    expect(res.body.budget.monthToDate).toBeCloseTo(0.00112, 8);
   });
 
   it('월 한도 — Owner 만 설정, 넘으면 새 작업을 받지 않고(402), 풀면 다시 받는다 · 감사 로그', async () => {
@@ -291,7 +272,7 @@ describe('대시보드 지표 (C-01 · metrics-rollup)', () => {
     expect(res.body.recentFailures).toEqual([
       expect.objectContaining({
         taskId: failedTaskId,
-        failedStep: 'executor.respond',
+        failedStep: 'agent.turn',
         cause: 'model_error',
         code: 'MODEL_ERROR',
       }),

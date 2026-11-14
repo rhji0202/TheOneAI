@@ -154,9 +154,7 @@ class Run {
 
 const workRequests = (tag: string): RecordedRequest[] =>
   ctx.llm.requests.filter(
-    (r) =>
-      r.role.startsWith('Executor (work') &&
-      r.body.messages.some((m) => (m.content ?? '').includes(tag)),
+    (r) => r.role === 'Agent' && r.body.messages.some((m) => (m.content ?? '').includes(tag)),
   );
 
 describe('승인 흐름 (W-03)', () => {
@@ -178,21 +176,17 @@ describe('승인 흐름 (W-03)', () => {
     });
     expect(sentNotes.filter((n) => n.text === '안녕하세요')).toHaveLength(0);
 
-    // 작업 · 계획 카드 · 단계 상태
-    const detail = await api<{
-      status: string;
-      pendingApproval: ApprovalBody;
-      plan: { steps: Array<{ kind: string; status: string; requiresApproval: boolean }> };
-    }>(ctx.baseUrl, 'GET', `/v1/tasks/${run.taskId}`, { token });
+    // 작업 · 단계 상태
+    const detail = await api<{ status: string; pendingApproval: ApprovalBody }>(
+      ctx.baseUrl,
+      'GET',
+      `/v1/tasks/${run.taskId}`,
+      { token },
+    );
     expect(detail.body.status).toBe('waiting_approval');
     expect(detail.body.pendingApproval).toMatchObject({ id: approval.id, status: 'pending' });
-    expect(detail.body.plan.steps[0]).toMatchObject({
-      kind: 'tool',
-      status: 'waiting_approval',
-      requiresApproval: true,
-    });
     const [task, steps] = await run.rows();
-    const work = steps.find((s) => s.name === 'executor.tool')!;
+    const work = steps.find((s) => s.name === 'agent.turn')!;
     expect(work).toMatchObject({ status: 'waiting_approval' });
     expect(task.lastCheckpointStepId).toBe(work.id);
     expect(task.workerId).toBeNull();
@@ -220,16 +214,11 @@ describe('승인 흐름 (W-03)', () => {
       { to: 'ops@example.com', text: '안녕하세요' },
     ]);
 
-    // 모델을 다시 부르지 않고 멈췄던 호출부터: 작업 단계 요청은 호출 1번 + 결과 뒤 메모 1번
+    // 모델을 다시 부르지 않고 멈췄던 호출부터: Agent 요청은 호출 1번 + 결과 뒤 답변 1번
     const requests = workRequests('#ap-once');
     expect(requests).toHaveLength(2);
     expect(requests[1]!.body.messages.at(-1)).toMatchObject({ role: 'tool' });
     expect(requests[1]!.body.messages.at(-1)!.content).toContain('"ok":true');
-    expect(
-      ctx.llm.requests.filter(
-        (r) => r.role === 'Planner' && JSON.stringify(r.body).includes('#ap-once'),
-      ),
-    ).toHaveLength(1);
 
     const [, after, executions, approvals] = await run.rows();
     expect(executions).toEqual([
@@ -317,6 +306,36 @@ describe('승인 흐름 (W-03)', () => {
     expect(tools).toHaveLength(2);
     expect(tools[0]!.content).toContain('"result":5');
     expect(tools[1]!.content).toContain('"sent":true');
+  });
+
+  it('승인 대기 checkpoint 에는 이어진 대화(Tool 호출 · 결과)만 남고, 재개할 때 지침 · 요청을 다시 만든다', async () => {
+    const run = await Run.start('[승인혼합] 합계를 메모로 #ap-checkpoint');
+    const approval = await run.waiting();
+    const [task, steps] = await run.rows();
+    const checkpoint = steps.find((s) => s.id === task.lastCheckpointStepId)!.checkpoint as {
+      workingMemory: {
+        loop: {
+          messages: Array<{ role: string }>;
+          pending: { results: Array<string | null> };
+        };
+      };
+    };
+    const saved = JSON.stringify(checkpoint);
+    expect(saved).not.toContain('## Platform rules');
+    expect(saved).not.toContain('테넌트 A의 고객지원 에이전트');
+    expect(saved).not.toContain('합계를 메모로');
+    expect(checkpoint.workingMemory.loop.messages.map((m) => m.role)).toEqual(['assistant']);
+    // 읽기 호출은 끝났고(결과 저장), 승인을 기다리는 쓰기 호출만 남았다
+    expect(checkpoint.workingMemory.loop.pending.results[0]).toContain('"result":5');
+    expect(checkpoint.workingMemory.loop.pending.results[1]).toBeNull();
+
+    await decide(approval.id, { decision: 'approve' });
+    await run.read();
+    expect(run.events.at(-1)!.event).toBe('task.completed');
+    const resumed = workRequests('#ap-checkpoint')[1]!.body.messages;
+    expect(resumed.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'tool', 'tool']);
+    expect(resumed[0]!.content).toContain('## Platform rules');
+    expect(resumed[1]!.content).toContain('[승인혼합] 합계를 메모로 #ap-checkpoint');
   });
 
   it('작업을 중지하면 대기 중인 승인도 취소된다', async () => {

@@ -1,22 +1,13 @@
 import type { LlmMessage } from '../llm/llm.types.js';
-import {
-  compactToolResults,
-  ContextCompressor,
-  NOTES_COMPRESS_CHARS,
-  TOOL_RESULTS_CHARS,
-} from './context-compressor.js';
+import { compactToolResults, ContextCompressor, TOOL_RESULTS_CHARS } from './context-compressor.js';
 import type { ModelRouter } from './model-router.js';
 
 const usage = { inputTokens: 10, outputTokens: 5 };
 const fakeRouter = (reply: string) => {
-  const calls: unknown[] = [];
   const router = {
-    complete: async (_role: string, req: unknown) => {
-      calls.push(req);
-      return { content: reply, toolCalls: [], usage };
-    },
+    complete: async () => ({ content: reply, toolCalls: [], usage }),
   } as unknown as ModelRouter;
-  return { router, calls };
+  return { router };
 };
 const signal = new AbortController().signal;
 
@@ -59,26 +50,6 @@ describe('compactToolResults', () => {
 
 describe('ContextCompressor', () => {
   const compressor = new ContextCompressor();
-
-  it('노트가 짧으면 모델을 부르지 않는다', async () => {
-    const { router, calls } = fakeRouter('요약');
-    const notes = [{ title: 'a', content: '짧다' }];
-    expect(await compressor.compressNotes(router, '요청', notes, signal)).toBeNull();
-    expect(calls).toHaveLength(0);
-  });
-
-  it('노트가 길면 앞 단계 노트를 하나로 줄이고 최근 노트 2개는 그대로', async () => {
-    const { router } = fakeRouter('앞 단계 요약: 핵심 수치 42');
-    const big = 'ㄱ'.repeat(Math.ceil(NOTES_COMPRESS_CHARS / 3));
-    const notes = ['1', '2', '3', '4'].map((t) => ({ title: t, content: big }));
-    const result = await compressor.compressNotes(router, '요청', notes, signal);
-    expect(result!.value).toEqual([
-      { title: 'Earlier steps (1, 2) — condensed', content: '앞 단계 요약: 핵심 수치 42' },
-      notes[2],
-      notes[3],
-    ]);
-    expect(result!.usage).toMatchObject(usage);
-  });
 
   it('대화 요약은 민감정보를 가리고, 지시문처럼 보이면 저장하지 않는다', async () => {
     const masked = await compressor.summarizeConversation(

@@ -11,7 +11,7 @@ import { AppError } from '../common/errors/app-error.js';
 import { APP_CONFIG, type AppConfig } from '../config/app-config.js';
 import type { WidgetSession } from './widget-session.js';
 
-const ISSUER = 'theoneai';
+const ISSUER = 'theonewidget';
 const AUDIENCE = 'widget';
 
 const claimsSchema = z.object({

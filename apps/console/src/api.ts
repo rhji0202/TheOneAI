@@ -15,6 +15,17 @@ export class ApiError extends Error {
   }
 }
 
+/** 처음부터 있는 워크스페이스 (src/workspaces/workspace-provisioning.ts 와 같은 값) */
+export const DEFAULT_WORKSPACE_SLUG = 'default';
+
+/** 로그인 · 전환 · 새 워크스페이스 응답 (src/admin/auth/admin-auth.service.ts LoginResponse) */
+export interface LoginResponse {
+  accessToken: string;
+  expiresAt: string;
+  user: AdminUser;
+  workspace: { slug: string; name: string };
+}
+
 export type MemberRole = 'owner' | 'admin' | 'operator' | 'viewer';
 
 export interface AdminUser {
@@ -34,7 +45,7 @@ export interface Session {
 
 type Query = Record<string, string | number | boolean | null | undefined>;
 
-const SESSION_KEY = 'theoneai:console:session';
+const SESSION_KEY = 'theonewidget:console:session';
 
 export class AdminApi {
   private session: Session | null = loadSession();
@@ -47,18 +58,30 @@ export class AdminApi {
     return this.session;
   }
 
-  async login(input: { tenantSlug: string; email: string; password: string }): Promise<Session> {
-    const res = await this.raw<Omit<Session, 'tenantSlug'>>('POST', '/v1/admin/auth/login', {
-      body: input,
-      auth: false,
-    });
-    this.session = { ...res, tenantSlug: input.tenantSlug };
+  /** 비밀번호가 맞는 워크스페이스 중 기본 워크스페이스(없으면 이름 순 첫 번째)로 들어간다 */
+  async login(input: { email: string; password: string }): Promise<Session> {
+    return this.adopt(
+      await this.raw<LoginResponse>('POST', '/v1/admin/auth/login', { body: input, auth: false }),
+    );
+  }
+
+  /** 다른 워크스페이스로. 이 로그인에서 비밀번호를 확인하지 않은 곳이면 password 가 필요하다 (403) */
+  async switchTo(slug: string, password?: string): Promise<Session> {
+    return this.adopt(
+      await this.raw<LoginResponse>('POST', '/v1/admin/auth/switch', { body: { slug, password } }),
+    );
+  }
+
+  /** 서버가 돌려준 로그인 결과로 세션을 바꾼다 (로그인 · 전환 · 새 워크스페이스 생성) */
+  adopt({ workspace, ...res }: LoginResponse): Session {
+    const session = { ...res, tenantSlug: workspace.slug };
+    this.session = session;
     try {
-      sessionStorage.setItem(SESSION_KEY, JSON.stringify(this.session));
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
     } catch {
       // 저장소를 못 쓰면 이 탭에서만 유지
     }
-    return this.session;
+    return session;
   }
 
   clear(): void {

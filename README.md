@@ -1,4 +1,4 @@
-# TheOneAI — Embedded AI Agent Widget
+# TheOneWidget — Embedded AI Agent Widget
 
 웹사이트에 임베딩되는 단일 Agent 플랫폼. 사용자의 요청을 스스로 계획하고, MCP Tool 과 SKILL.md 기반 Skill 로 실행하며, 위험 작업은 사람의 승인을 받는다.
 
@@ -40,7 +40,7 @@ npm run start:worker:dev        # Agent Worker (다른 터미널)
 
 LLM 키 없이 파이프라인만 보려면 `.env` 에 `AGENT_RUNTIME=placeholder` 를 둔다.
 
-시드는 콘솔 Owner `owner@demo.local` (워크스페이스 `demo`)를 만든다. 비밀번호는 `.env` 의 `DEV_ADMIN_PASSWORD`, 비어 있으면 생성해 한 번만 출력한다.
+시드는 콘솔 Owner `owner@demo.local` (워크스페이스 `default`)를 만든다. 비밀번호는 `.env` 의 `DEV_ADMIN_PASSWORD`, 비어 있으면 생성해 한 번만 출력한다.
 
 ### Skill 올려 보기
 
@@ -62,7 +62,7 @@ curl -s -X POST localhost:3000/v1/admin/agents/$AG/publish "${H[@]}" -d '{}'
 ```bash
 npm run dev:mcp-server                         # http://127.0.0.1:3901/mcp
 A=$(curl -s -X POST localhost:3000/v1/admin/auth/login -H 'Content-Type: application/json' \
-  -d '{"tenantSlug":"demo","email":"owner@demo.local","password":"<DEV_ADMIN_PASSWORD>"}' | jq -r .accessToken)
+  -d '{"tenantSlug":"default","email":"owner@demo.local","password":"<DEV_ADMIN_PASSWORD>"}' | jq -r .accessToken)
 H=(-H "Authorization: Bearer $A" -H 'Content-Type: application/json')
 S=$(curl -s -X POST localhost:3000/v1/admin/mcp-servers "${H[@]}" -d '{"name":"demo-shop","transport":"streamable_http",
   "endpointUrl":"http://127.0.0.1:3901/mcp","allowPrivateNetwork":true}' | jq -r .id)
@@ -88,10 +88,10 @@ open "http://localhost:3000/widget/v1/demo.html?key=wk_pub_demo&token=$ID"
 ```html
 <script>
   // 로그인 사용자 연동(signed_token) 위젯: 고객사 서버가 서명한 identity token 을 넘긴다 (로더보다 먼저)
-  window.TheOneAISettings = { getIdentityToken: () => fetch('/my/widget-token').then((r) => r.text()) };
+  window.TheOneWidgetSettings = { getIdentityToken: () => fetch('/my/widget-token').then((r) => r.text()) };
 </script>
 <script src="https://<api-host>/widget/v1/loader.js" data-widget-key="wk_pub_..." async></script>
-<!-- 로그인 · 로그아웃 뒤: window.TheOneAI.identify({ token }) / window.TheOneAI.destroy() -->
+<!-- 로그인 · 로그아웃 뒤: window.TheOneWidget.identify({ token }) / window.TheOneWidget.destroy() -->
 ```
 
 - 화면: 런처(승인 대기 배지) · 홈(인사 · 진행 중 작업 · 추천 · 첨부) · 대화(실행 계획 카드 · 재계획 표시 · Tool 진행 · 스트리밍 답변 · 산출물 다운로드) · 승인 카드(인자 · 위험도 · 원문 JSON · task 범위 · 수정 요청 · 만료 시간) · 실패 · 일시정지 카드(재개 · 처음부터) · 실행 중 추가 지시 · 중지 · 작업 목록(상태 탭).
@@ -103,7 +103,7 @@ open "http://localhost:3000/widget/v1/demo.html?key=wk_pub_demo&token=$ID"
 
 ```bash
 npm run build:ui                # apps/console → apps/console/dist (API 서버가 /console 로 제공)
-npm run start:dev               # http://localhost:3000/console — 워크스페이스 demo · owner@demo.local
+npm run start:dev               # http://localhost:3000/console — 워크스페이스 default · owner@demo.local
 npm run dev:admin-password      # 시드 Owner 비밀번호를 잊었으면 새로 만들어 출력 (개발용)
 npm run dev:console             # 화면 개발: Vite 개발 서버 http://localhost:5174/console/ (/v1 은 :3000 으로 프록시)
 ```
@@ -137,9 +137,7 @@ Agent Loop 는 역할마다 다른 모델을 쓴다 (`model_configs`, 화면 C-0
 
 | 역할 | 모델 | 추론 | 대체 모델 | 이유 |
 |---|---|---|---|---|
-| planner | `deepseek-flash` | off | `deepseek-v4-pro` | 계획 단계가 첫 토큰을 늦추므로 빠른 설정 (v4-pro · low 4.1s → flash · off 2~3s) |
-| executor | `deepseek-flash` | off | `deepseek-v4-pro` | 답변 스트리밍 |
-| evaluator | `deepseek-flash` | low | — | JSON 검증 |
+| executor | `deepseek-flash` | off | `deepseek-v4-pro` | Agent Loop(할 일 목록 · Tool 호출 · 답변 스트리밍) · 대화 요약 · 기억 추출 |
 
 OpenAI · Gemini 를 쓰려면 `providers` 에 행(`kind`, `secret_ref`)을 추가하고 `model_configs` 의 provider · model 을 바꾼 뒤, `DEV_SECRETS` 에 같은 `secret_ref` 로 키를 넣는다. 모델 설정 Admin API(C-03)는 다음 단계다.
 
@@ -168,7 +166,7 @@ npm run lint && npm run typecheck && npm run build
 
 e2e 가 확인하는 것: bootstrap(허용 도메인 · identity token 서명 · aud · 수명), 세션 Origin 고정, 메시지 → 작업 → Worker → SSE 이벤트 순서, delta 와 최종 메시지 일치, 단계 · checkpoint 저장, `Last-Event-ID` 재전송(중복 없음), 대화당 진행 작업 1개(동시 요청 포함), Idempotency-Key(동시 재시도 포함), 중지, 클라이언트 연결 종료 시 구독 정리, 테넌트 · 사용자 간 격리.
 
-Agent Loop 는 가짜 OpenAI 호환 서버([test/fake-llm-server.ts](test/fake-llm-server.ts))로 검증한다: 계획 → reason → 중간 평가 → 답변 → 검증 순서, 재계획(`plan.revised`), 계획 JSON 오류 시 기본 계획, 모델 오류 · API Key 없음 → `task.failed`, 역할별 모델 · 추론 파라미터 · 인증 헤더, 플랫폼 · 테넌트 지침, 대화 기록 포함, 토큰 사용량 기록. 실제 DeepSeek 로는 수동으로 확인했다(아래).
+Agent Loop 는 가짜 OpenAI 호환 서버([test/fake-llm-server.ts](test/fake-llm-server.ts))로 검증한다: 간단한 요청은 차례 한 번에 답변, `todo` 로 할 일 목록 생성 · 상태 변경(`plan.updated`) · 구성 변경(`plan.revised`), Tool 호출과 함께 온 중간 안내 메시지, 단계 · 토큰 · 시간 예산 끝의 Tool 없는 마지막 차례, 모델 오류 · API Key 없음 → `task.failed`, 모델 · 추론 파라미터 · 인증 헤더, 플랫폼 · 테넌트 지침, 대화 기록 포함, 토큰 사용량 기록. 실제 DeepSeek 로는 수동으로 확인했다(아래).
 
 재개 · 복구는 [test/recovery.e2e-spec.ts](test/recovery.e2e-spec.ts) 가 확인한다: 실행 중 일시정지 → 현재 단계 마치고 paused → checkpoint 재개(끝난 단계 건너뜀), 답변 실패 → 재개 시 분석 반복 없이 완료 · 실패 실행 토큰 합산, 재개 조건(완료 · checkpoint 없음 · 처음부터), 답변 중 Worker 유실 → 복구 잡이 checkpoint 부터(답변 메시지 하나만), 복구 한도 초과, 살아 있는 작업은 복구 안 함, Worker 종료 시 넘기기, 실행 중 추가 지시 반영 · 끝난 작업 거부, 콘솔 목록 · 트레이스 · 단계 상세.
 
@@ -186,7 +184,7 @@ Tool 은 [test/tools.e2e-spec.ts](test/tools.e2e-spec.ts) 가 확인한다: tool
 
 사용량 · 지표는 [test/billing.e2e-spec.ts](test/billing.e2e-spec.ts) 가 확인한다: 단가 교체(Viewer 거부 · 중복 거부), 작업 사용량을 역할 · 모델별로 기록하고 단가로 비용 계산(단가 없는 모델은 0 · priced=false), 기억 추출 사용량도 그 작업에, 사용량 보고(합계 · 일별 · 모델별 · 용도별), 월 한도(Owner 만 설정 · 넘으면 402 · 풀면 재개 · 감사 로그), 피드백(바꾸기 · 다른 사용자 거부), 일별 집계 → KPI(성공률 · 목표 · 무단 호출 · 평균 비용 · 소요 시간) · 피드백 · 최근 실패(원인 · 실패 단계) · Agent 필터.
 
-Reflection · Context Compression 은 [test/reflection.e2e-spec.ts](test/reflection.e2e-spec.ts) 가 확인한다: 긴 대화 → 창 밖 메시지 8개 요약 · 저장 · 계획 · 작업 · 답변 프롬프트에 포함, 다음 작업은 새로 밀려난 2개만 이전 요약에 합침, 짧은 대화는 요약 안 함, 작업 노트가 길면 앞 단계 노트 압축(단계 기록 · 토큰) · 답변은 줄인 노트 사용, 재계획에 거부된 Tool 호출 전달, 작업의 실패 · 재계획 사유가 기억 추출로, 검증 오류 → 정정 메시지(두 번째 assistant 메시지) → 다시 검증, `selfCorrection` 끄면 정정 안 함.
+Reflection · Context Compression 은 [test/reflection.e2e-spec.ts](test/reflection.e2e-spec.ts) 가 확인한다: 긴 대화 → 창 밖 메시지 8개 요약 · 저장 · 모든 Agent 차례 프롬프트에 포함, 다음 작업은 새로 밀려난 2개만 이전 요약에 합침, 짧은 대화는 요약 안 함, 거부된 Tool 결과가 다음 차례로 이어짐, 작업에서 부른 Tool · 거부 · 할 일 목록 수정이 기억 추출로.
 
 위젯 화면은 [test/ui-widget.e2e-spec.ts](test/ui-widget.e2e-spec.ts) 가 빌드한 `loader.js` 를 데모 페이지에 넣고 브라우저로 확인한다: 런처 → 홈(인사 · 고지 문구), 요청 → 실행 계획 · 스트리밍 답변 → 완료, 승인 카드(설명 · 인자 · 위험도) → 승인 → 같은 인자로 Tool 실행 → 완료, 실패 카드 → 멈춘 단계부터 재개 → 완료, 작업 목록 탭 → 항목을 누르면 그 대화, 모바일 폭 전체 화면 · 최소화. 콘솔용 API(초안 편집 · 버전 복원 · 위젯 설정 · Secret 교체 · 업로드 · 산출물 · 대화 보기)는 [test/console-api.e2e-spec.ts](test/console-api.e2e-spec.ts).
 
@@ -201,16 +199,16 @@ Reflection · Context Compression 은 [test/reflection.e2e-spec.ts](test/reflect
 | Widget API: `POST /v1/widget/bootstrap`, 대화 · 메시지, 작업 목록 · 상세 · 중지, SSE (`Last-Event-ID` 재전송, 응답 스트림 스냅샷) | 완료 |
 | 비동기 실행: BullMQ `agent-tasks`, Worker heartbeat, 단계 · checkpoint 저장, 최대 단계 · 시간 제한, 중지 처리 | 완료 |
 | LLM 연동: OpenAI 호환 클라이언트(OpenAI · DeepSeek · Gemini), 스트리밍 · tool call 파싱 · 재시도 · 대체 모델 · 역할별 추론 강도 | 완료 — DeepSeek 는 실제 API 로 확인, OpenAI · Gemini 는 키가 없어 단위 테스트(요청 형식)까지만 |
-| Agent Loop: Context → Plan → Execute(reason · tool · skill) → Evaluate → 재계획 → Respond(스트리밍) → Verify, 토큰 예산 | 완료 |
+| Agent Loop: 단일 Agent(Hermes 방식) — 모델 하나가 한 대화에서 Tool 을 부르며 이어 가다 Tool 없이 답하면 최종 답변(스트리밍), `todo` 할 일 목록 → 계획 카드, `load_skill`, 단계 · 토큰 · 시간 예산 | 완료 |
 | 콘솔 인증: `POST /v1/admin/auth/login`(scrypt) · `GET /v1/admin/me`, 역할 가드(Owner > Admin > Operator > Viewer, 매 요청 DB 재확인), 감사 로그 | 완료 — 콘솔은 access token 만(탭 세션), refresh 쿠키 회전은 이후 |
 | MCP (C-04 · C-05): Streamable HTTP 연결(공식 SDK v2 — 2026-07-28 우선, 2025 계열 서버 자동 호환), SSRF 방어(스킴 · 호스트 · DNS 해석 · 연결 시점 IP 검사, 메타데이터 IP 항상 차단), API Key(Secret 저장소), 연결 테스트 · Tool 탐색 · 검증(JSON Schema · 숨은 지시문 · 보이지 않는 문자 · 민감정보 · 제안 등급), 포함 Tool · 등록 → 새 Registry 버전, Tool 정책, 재탐색 변경 감지 → 운영자 승인, `mcp-sync` 주기 잡(장애 → error · 복구, 헬스 p95 · 오류율), 비활성화 · 삭제, Registry 버전 · diff API | 완료 — stdio(Docker Sandbox) 실행형 · OAuth 인증 · 이미지 서명 검증은 Sandbox 단계 |
-| Skill (C-06): zip 업로드(zip-slip · 심볼릭 링크 · 크기 · 파일 수 검사), SKILL.md 파싱(줄 번호 오류), 신뢰 검증 6항목, 버전(내용 해시 · 중복 · 충돌) · 파일 미리보기 · 비교 · 활성화 → 새 Registry 버전 · 비활성화, Agent 허용 목록, 위젯 추천 카드. 실행: 계획에는 metadata 만, `skill` 단계에서 본문 · 파일 목록 로딩, `skill.read_file`, allowed-tools 로 Tool 범위 제한(서버 강제), 저장 파일 해시 재확인 | 완료 — Git 출처 · 서명 · test-runs · 스크립트 실행(Sandbox) · MCP 서버 Skill 은 이후 |
-| Agent MCP 허용 목록: 초안(배포 버전 복사) → 배포, 실행 시 허용 목록 · 서버 상태 · Tool 사용 여부 확인(`not_allowed` · `tool_unavailable`) | 완료 — 초안에서 지침 · 환영 문구 · 역할별 모델 · 실행 · Memory 정책 · MCP · Skill 허용 목록 편집, 버전 목록 · 복원 · 초안 버리기 |
-| Tool Registry · Dispatcher: 작업별 Registry 버전 고정, 인자 검증(zod), 권한 판단(등급 정책 → Tool 재정의 → 조건 규칙), 읽기 Tool 병렬 실행, 시간 제한 · 취소 전파, 멱등 Tool 재시도, `tool_executions` 기록(거부 포함) · 민감정보 마스킹, `tool.called` · `tool.result` · `tool.denied` | 완료 — 내장 Tool 4개(`builtin.calculate`, `builtin.current_time`, `builtin.create_file`, `builtin.query_table` — 첨부 XLSX · CSV 에 읽기 전용 SQL). reason 단계에는 Tool 을 주지 않고, 작업 단계당 Tool 호출은 12번까지 · 작업 단계 상한이 가까우면 실패 대신 답변으로 마무리. 승인 필요 Tool 은 승인 흐름으로 실행 |
-| 재개 · 복구: checkpoint 재개(계획 · 노트 · 다음 단계 · 보낸 답변) · 처음부터 다시 · 일시정지 · 실행 중 추가 지시(steer) · agent-recovery(heartbeat 끊김 → 마지막 checkpoint 부터, 한도 3회) · Worker 종료 시 넘기기 · 소유권 확인 · 콘솔 작업 목록 · 트레이스 · 단계 상세 · 일시정지 · 중지 · 재개 | 완료 |
+| Skill (C-06): zip 업로드(zip-slip · 심볼릭 링크 · 크기 · 파일 수 검사), SKILL.md 파싱(줄 번호 오류), 신뢰 검증 6항목, 버전(내용 해시 · 중복 · 충돌) · 파일 미리보기 · 비교 · 활성화 → 새 Registry 버전 · 비활성화, Agent 허용 목록, 위젯 추천 카드. 실행: 시스템 프롬프트에는 metadata 만, 모델이 `load_skill` 로 본문 · 파일 목록 로딩, `skill.read_file`, 불러온 뒤 allowed-tools 로 Tool 범위 제한(서버 강제), 저장 파일 해시 재확인 | 완료 — Git 출처 · 서명 · test-runs · 스크립트 실행(Sandbox) · MCP 서버 Skill 은 이후 |
+| Agent MCP 허용 목록: 초안(배포 버전 복사) → 배포, 실행 시 허용 목록 · 서버 상태 · Tool 사용 여부 확인(`not_allowed` · `tool_unavailable`) | 완료 — 초안에서 지침 · 환영 문구 · 모델 · 실행 · Memory 정책 · MCP · Skill 허용 목록 편집, 버전 목록 · 복원 · 초안 버리기 |
+| Tool Registry · Dispatcher: 작업별 Registry 버전 고정, 인자 검증(zod), 권한 판단(등급 정책 → Tool 재정의 → 조건 규칙), 읽기 Tool 병렬 실행, 시간 제한 · 취소 전파, 멱등 Tool 재시도, `tool_executions` 기록(거부 포함) · 민감정보 마스킹, `tool.called` · `tool.result` · `tool.denied` | 완료 — 내장 Tool 4개(`builtin.calculate`, `builtin.current_time`, `builtin.create_file`, `builtin.query_table` — 첨부 XLSX · CSV 에 읽기 전용 SQL). 모델 차례당 Tool 호출은 12번까지 · 작업 단계 상한이 가까우면 실패 대신 답변으로 마무리. 승인 필요 Tool 은 승인 흐름으로 실행 |
+| 재개 · 복구: checkpoint 재개(이어진 대화 · 할 일 목록 · 보낸 답변) · 처음부터 다시 · 일시정지 · 실행 중 추가 지시(steer) · agent-recovery(heartbeat 끊김 → 마지막 checkpoint 부터, 한도 3회) · Worker 종료 시 넘기기 · 소유권 확인 · 콘솔 작업 목록 · 트레이스 · 단계 상세 · 일시정지 · 중지 · 재개 | 완료 |
 | 승인 (W-03 · C-07): 승인 필요 Tool → 승인 요청 · `waiting_approval`(Worker 해제) → 결정 후 같은 호출부터 재개(진행 중 대화 checkpoint), once · task 범위, user · operator · user_and_operator, 인자 해시 · 사용 처리, 거절 사유 → 모델, 만료(`approval-expiry`) → paused, 중지 시 취소, 위젯 결정 API · 콘솔 목록 · 이력 · 대리 결정, 등급 정책 · 조건 규칙 관리(감사 로그), 정책 강화는 즉시 · 완화는 새 작업부터 | 완료 |
-| Context Compression: 최근 대화 창 밖 메시지 → 대화별 누적 요약(증분, 시스템 프롬프트에 데이터로), 작업 노트 압축(`context.compress_notes`), 작업 단계의 오래된 Tool 결과 축약 | 완료 |
-| Reflection: 재계획에 실패 · 거부된 Tool 호출 목록, 답변 검증 오류 → 정정 메시지 한 번 · 다시 검증(`selfCorrection`), 작업의 실패 · 재계획 · 검증 오류 → 처리 요령 기억의 근거 | 완료 |
+| Context Compression: 최근 대화 창 밖 메시지 → 대화별 누적 요약(증분, 시스템 프롬프트에 데이터로), 작업 대화의 오래된 Tool 결과 축약 | 완료 |
+| Reflection: 실패 · 거부된 Tool 결과를 다음 차례로, 작업의 실패 · 할 일 목록 수정 → 처리 요령 기억의 근거 | 완료 |
 | 업로드 · 산출물 (명세 §2.6): 업로드 등록 → 내용 PUT(크기 · sha256 확인) → 메시지 첨부 → 텍스트 · CSV · JSON 첨부는 작업 Context 에 데이터로, XLSX · DOCX · PPTX · PDF 는 Python 표준 라이브러리 스크립트(`src/artifacts/extract_text.py`, PDF 는 poppler)로 뽑은 텍스트로, 이미지 · 스캔한 PDF 페이지는 모델 이미지 입력으로, `builtin.create_file` 산출물(md · txt · csv · json), 작업 산출물 목록 · 다운로드(위젯 · 콘솔) | 완료 — S3 presigned URL 은 운영 저장소 단계 |
 | Memory (C-08): 작업 완료 → `memory-ingest`(Memory 역할이 사용자 사실 · 선호 / 요약 / 처리 요령 추출, 마스킹 · 지시문 격리 · 중복 병합 · 보존 기간), 임베딩(`local` 해시 · OpenAI · Gemini), Context 구성(사용자 프로필 + pgvector 유사도, 사용자 격리), 콘솔 검색(의미 · 키워드) · 격리 해제 · 수정(재임베딩) · 고정 · 삭제 · 사용자 데이터 삭제 | 완료 — 운영 임베딩은 키가 없어 `local` 로만 확인 |
 | Billing: 모델 호출 사용량(역할 · 실제 응답 모델별, 기억 추출 포함) → `usage_records` · 작업 비용(테넌트 단가), 사용량 보고(일별 · 모델별 · 용도별 · 단가 없는 호출), 월 한도(`BUDGET_EXCEEDED`), 단가 · 한도 관리(감사 로그) | 완료 — 단가는 테넌트가 등록 (플랫폼 기본 단가 없음) |
@@ -239,8 +237,7 @@ src/
 ├── tasks/                         작업 조회 · 중지 · SSE 엔드포인트, 계획 · 뷰 타입
 ├── events/                        task_events 아웃박스 · Redis 발행 · SSE 스트림
 ├── llm/                           OpenAI 호환 클라이언트 · provider 별 파라미터 · JSON 출력 파싱 · 클라이언트 팩토리
-├── agent-runtime/                 Agent Loop · 모델 라우터(역할별 · 대체) · Context · Executor · 프롬프트 · RunContext
-├── planner/ · evaluator/          계획 생성 · 수정 / 중간 평가 · 최종 검증
+├── agent-runtime/                 Agent Loop(단일 Agent · todo · load_skill) · 모델 라우터(대체 모델) · Context · 프롬프트 · RunContext
 ├── tools/                         Tool Registry(버전 스냅샷) · 권한 정책 · 가용성 · Dispatcher · 내장 Tool · JSON Schema 검증 · 마스킹
 ├── mcp/                           MCP 연결(SDK · SSRF 가드) · 탐색 · 검사 · 변경 감지 · 재탐색(mcp-sync) · 결과 변환 · 관리 API
 ├── skills/                        Skill 번들(zip) · SKILL.md 파서 · 신뢰 검증 · 저장(내용 주소) · 실행 로딩 · skill.read_file · 관리 API

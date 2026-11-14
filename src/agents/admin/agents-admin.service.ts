@@ -3,9 +3,12 @@ import { z } from 'zod';
 import { AuditService } from '../../admin/audit/audit.service.js';
 import type { AdminRequest, AdminSession } from '../../admin/auth/admin-session.js';
 import { AppError, type FieldIssue } from '../../common/errors/app-error.js';
+import { isUniqueViolation } from '../../common/errors/prisma-errors.js';
 import type { AgentVersion, Prisma } from '../../generated/prisma/client.js';
 import { PrismaService, type TenantTx } from '../../infrastructure/database/prisma.service.js';
 import {
+  defaultExecutionPolicy,
+  defaultMemoryPolicy,
   type ExecutionPolicy,
   executionPolicySchema,
   type MemoryPolicy,
@@ -13,12 +16,13 @@ import {
 } from '../agent-policies.js';
 
 /**
- * 초안 편집 (C-03) — 지침 · 환영 메시지 · 역할별 모델 · 실행 정책 · Memory 정책 · Tool(MCP) · Skill 허용 목록.
+ * 초안 편집 (C-03) — 지침 · 환영 메시지 · 모델 · 실행 정책 · Memory 정책 · Tool(MCP) · Skill 허용 목록.
  * 정책은 바꿀 항목만 보내면 지금 값과 합쳐 검증한다. 모르는 필드는 조용히 무시하지 않고 거부한다.
  */
 const allowEntry = z.object({ id: z.uuid(), enabled: z.boolean() });
+/** Agent Loop 는 모델 하나(executor)로 계획 · 실행 · 답변을 모두 한다 */
 const modelEntry = z.object({
-  role: z.enum(['planner', 'executor', 'evaluator']),
+  role: z.literal('executor'),
   providerId: z.uuid(),
   model: z.string().trim().min(1).max(200),
   maxOutputTokens: z.number().int().min(64).max(64_000),
@@ -31,7 +35,7 @@ export const draftInputSchema = z
   .object({
     systemPrompt: z.string().max(20_000).optional(),
     welcomeMessage: z.string().trim().max(500).optional(),
-    models: z.array(modelEntry).min(1).max(3).optional(),
+    models: z.array(modelEntry).length(1).optional(),
     executionPolicy: z.record(z.string(), z.unknown()).optional(),
     memoryPolicy: z.record(z.string(), z.unknown()).optional(),
     mcpServers: z.array(allowEntry).max(100).optional(),
@@ -42,11 +46,17 @@ export const draftInputSchema = z
   .refine((v) => Object.values(v).some((x) => x !== undefined), '바꿀 값이 없습니다');
 export type DraftInput = z.infer<typeof draftInputSchema>;
 
+export const createInputSchema = z.object({ name: z.string().trim().min(1).max(100) }).strict();
+export type CreateInput = z.infer<typeof createInputSchema>;
+
+export const renameInputSchema = createInputSchema;
+export type RenameInput = z.infer<typeof renameInputSchema>;
+
 export const publishInputSchema = z.object({ changeNote: z.string().trim().max(500).optional() });
 export type PublishInput = z.infer<typeof publishInputSchema>;
 
 export interface AgentModelView {
-  role: 'planner' | 'executor' | 'evaluator';
+  role: 'executor';
   providerId: string;
   providerName: string;
   model: string;
@@ -131,6 +141,118 @@ export class AgentsAdminService {
     return this.prisma.withTenant(admin.tenantId, (tx) => this.view(tx, agentId));
   }
 
+  /** 새 Agent — 초안 v1 만 있다. executor 모델을 정해 배포해야 위젯에서 쓸 수 있다 */
+  async create(
+    admin: AdminSession,
+    input: CreateInput,
+    req?: AdminRequest,
+  ): Promise<AgentAdminView> {
+    try {
+      return await this.prisma.withTenant(admin.tenantId, async (tx) => {
+        const agent = await tx.agent.create({
+          data: { tenantId: admin.tenantId, name: input.name },
+        });
+        await tx.agentVersion.create({
+          data: {
+            tenantId: admin.tenantId,
+            agentId: agent.id,
+            version: 1,
+            status: 'draft',
+            welcomeMessage: '안녕하세요, 무엇을 도와드릴까요?',
+            systemPrompt: '',
+            executionPolicy: defaultExecutionPolicy(),
+            memoryPolicy: defaultMemoryPolicy(),
+            createdById: admin.userId,
+          },
+        });
+        await this.audit.record(
+          tx,
+          admin,
+          {
+            action: 'agent.create',
+            targetType: 'agent',
+            targetId: agent.id,
+            metadata: { name: input.name },
+          },
+          req,
+        );
+        return this.view(tx, agent.id);
+      });
+    } catch (err) {
+      if (isUniqueViolation(err, 'agents_tenant_id_name_active_key'))
+        throw new AppError(409, 'NAME_TAKEN', `'${input.name}' Agent 가 이미 있습니다`);
+      throw err;
+    }
+  }
+
+  /**
+   * 이름 바꾸기 — 이름은 Agent 에 하나라(버전 없음) 배포 없이 바로 위젯 · 콘솔에 반영된다.
+   * 보관되지 않은 Agent 끼리 이름이 겹치면 409 NAME_TAKEN.
+   */
+  async rename(
+    admin: AdminSession,
+    agentId: string,
+    input: RenameInput,
+    req?: AdminRequest,
+  ): Promise<AgentAdminView> {
+    try {
+      return await this.prisma.withTenant(admin.tenantId, async (tx) => {
+        const agent = await tx.agent.findFirst({ where: { id: agentId, archivedAt: null } });
+        if (!agent) throw AppError.notFound();
+        if (agent.name !== input.name) {
+          await tx.agent.update({ where: { id: agentId }, data: { name: input.name } });
+          await this.audit.record(
+            tx,
+            admin,
+            {
+              action: 'agent.rename',
+              targetType: 'agent',
+              targetId: agentId,
+              metadata: { from: agent.name, to: input.name },
+            },
+            req,
+          );
+        }
+        return this.view(tx, agentId);
+      });
+    } catch (err) {
+      if (isUniqueViolation(err, 'agents_tenant_id_name_active_key'))
+        throw new AppError(409, 'NAME_TAKEN', `'${input.name}' Agent 가 이미 있습니다`);
+      throw err;
+    }
+  }
+
+  /**
+   * Agent 삭제 — 보관(archivedAt)만 한다. 버전은 지난 · 실행 중인 작업이 가리키므로 남기고 초안만 지운다.
+   * 위젯은 Agent 없이 둘 수 없어 쓰는 위젯이 있으면 거부한다.
+   */
+  async archive(admin: AdminSession, agentId: string, req?: AdminRequest): Promise<void> {
+    await this.prisma.withTenant(admin.tenantId, async (tx) => {
+      const agent = await tx.agent.findFirst({ where: { id: agentId, archivedAt: null } });
+      if (!agent) throw AppError.notFound();
+      const widgets = await tx.widgetConfig.findMany({
+        where: { agentId },
+        select: { name: true },
+        orderBy: { name: 'asc' },
+      });
+      if (widgets.length) {
+        throw new AppError(
+          409,
+          'AGENT_IN_USE',
+          `${widgets.map((w) => `'${w.name}'`).join(', ')} 위젯이 이 Agent 를 쓰고 있어요. 위젯 설정에서 다른 Agent 로 바꾼 뒤 삭제하세요.`,
+        );
+      }
+      await tx.agentVersion.deleteMany({ where: { agentId, status: 'draft' } });
+      await tx.agent.update({ where: { id: agentId }, data: { archivedAt: new Date() } });
+      await this.audit.record(
+        tx,
+        admin,
+        { action: 'agent.archive', targetType: 'agent', targetId: agentId },
+        req,
+      );
+    });
+  }
+
   async updateDraft(
     admin: AdminSession,
     agentId: string,
@@ -184,7 +306,7 @@ export class AgentsAdminService {
     });
   }
 
-  /** 역할별 모델 — executor 는 필수, 역할은 한 번씩. Provider 는 이 테넌트의 것만 */
+  /** 모델(executor) — Provider 는 이 테넌트의 것만 */
   private async replaceModels(
     tx: TenantTx,
     admin: AdminSession,
@@ -192,11 +314,6 @@ export class AgentsAdminService {
     models: DraftInput['models'] & object,
   ): Promise<void> {
     const issues: FieldIssue[] = [];
-    const roles = models.map((m) => m.role);
-    if (new Set(roles).size !== roles.length)
-      issues.push({ path: 'models', message: '같은 역할이 두 번 있습니다' });
-    if (!roles.includes('executor'))
-      issues.push({ path: 'models', message: 'executor 모델이 필요합니다' });
     const providerIds = [
       ...new Set(
         models.flatMap((m) => [
@@ -325,6 +442,14 @@ export class AgentsAdminService {
   /** 초안 버리기 — 배포 버전 그대로 */
   async discardDraft(admin: AdminSession, agentId: string, req?: AdminRequest) {
     return this.prisma.withTenant(admin.tenantId, async (tx) => {
+      const agent = await tx.agent.findFirst({ where: { id: agentId, archivedAt: null } });
+      if (!agent) throw AppError.notFound();
+      if (!agent.publishedVersionId)
+        throw new AppError(
+          422,
+          'AGENT_DRAFT_INVALID',
+          '배포된 버전이 없어 초안을 버릴 수 없습니다',
+        );
       const removed = await tx.agentVersion.deleteMany({ where: { agentId, status: 'draft' } });
       if (removed.count) {
         await this.audit.record(
@@ -533,9 +658,11 @@ export class AgentsAdminService {
         createdById: admin.userId,
       },
     });
-    if (source.modelConfigs.length) {
+    // 예전 버전의 planner · evaluator 설정은 쓰지 않으므로 옮기지 않는다
+    const models = source.modelConfigs.filter((m) => m.role === 'executor');
+    if (models.length) {
       await tx.modelConfig.createMany({
-        data: source.modelConfigs.map(({ id: _id, createdAt: _c, agentVersionId: _v, ...m }) => ({
+        data: models.map(({ id: _id, createdAt: _c, agentVersionId: _v, ...m }) => ({
           ...m,
           agentVersionId: draft.id,
         })),
@@ -571,7 +698,6 @@ export class AgentsAdminService {
         modelConfigs: { include: { provider: { select: { name: true } } } },
       },
     });
-    const roleOrder = { planner: 0, executor: 1, evaluator: 2 } as const;
     const toView = (v: (typeof versions)[number]): AgentVersionView => ({
       id: v.id,
       version: v.version,
@@ -582,10 +708,11 @@ export class AgentsAdminService {
       systemPrompt: v.systemPrompt,
       executionPolicy: executionPolicySchema.parse(v.executionPolicy ?? {}),
       memoryPolicy: memoryPolicySchema.parse(v.memoryPolicy ?? {}),
-      models: [...v.modelConfigs]
-        .sort((a, b) => roleOrder[a.role] - roleOrder[b.role])
+      // 예전 버전의 planner · evaluator 설정은 쓰지 않으므로 보여 주지 않는다
+      models: v.modelConfigs
+        .filter((m) => m.role === 'executor')
         .map((m) => ({
-          role: m.role,
+          role: 'executor' as const,
           providerId: m.providerId,
           providerName: m.provider.name,
           model: m.model,

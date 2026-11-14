@@ -55,15 +55,6 @@ import { Label } from '@/components/ui/label';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import { Progress as ProgressBar } from '@/components/ui/progress';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableFooter,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { type AdminTaskRow, failureLabel, formatElapsed, isLive, type TaskStatus } from './Tasks';
@@ -124,7 +115,7 @@ interface TraceResponse {
     agentVersion: number;
     registryVersion: number;
     traceId: string;
-    usage: Usage & { byRole: Record<'planner' | 'executor' | 'evaluator', Usage> };
+    usage: Usage;
     cost: { amount: string; currency: string };
   };
   stats: {
@@ -254,6 +245,7 @@ const STEP_TYPE: Record<string, { label: string; className: string }> = {
 const STEP_NAME: Record<string, string> = {
   'context.build': '컨텍스트 구성',
   'context.compress_notes': '작업 노트 압축',
+  'agent.turn': '모델 차례',
   'planner.create': '실행 계획 생성',
   'planner.revise': '재계획',
   'executor.tool': 'Tool 호출 판단',
@@ -346,6 +338,9 @@ function StepTypeChip({ type }: { type: string }) {
     </UiBadge>
   );
 }
+
+/** 작업 예산을 다 써 실패하면 재개 · 처음부터 모두 서버가 거부한다 (TASK_BUDGET_EXHAUSTED) */
+const BUDGET_EXHAUSTED = ['STEP_LIMIT_EXCEEDED', 'TOKEN_BUDGET_EXCEEDED'];
 
 /** 운영자 제어 — 헤더 버튼과 확인 창이 같은 문구를 쓴다 */
 const CONTROL_KINDS = ['pause', 'resume', 'cancel'] as const;
@@ -461,7 +456,11 @@ export function TaskDetailPage() {
               </Link>
             </Button>
             {operator &&
-              CONTROL_KINDS.filter((k) => CONTROL[k].from.includes(task.status)).map((k) => {
+              CONTROL_KINDS.filter(
+                (k) =>
+                  CONTROL[k].from.includes(task.status) &&
+                  !(k === 'resume' && BUDGET_EXHAUSTED.includes(task.failure?.code ?? '')),
+              ).map((k) => {
                 const { label, icon: Icon, variant } = CONTROL[k];
                 return (
                   <Button key={k} variant={variant} onClick={() => setControl(k)}>
@@ -491,7 +490,7 @@ export function TaskDetailPage() {
         </Stat>
         <Stat label="Tool 호출">{formatNumber(stats.toolCalls)}</Stat>
         <Stat label="재시도">{formatNumber(stats.retries)}</Stat>
-        <Stat label="재계획">{formatNumber(stats.replans)}</Stat>
+        <Stat label="계획 수정">{formatNumber(stats.replans)}</Stat>
         <Stat label="복구">{formatNumber(stats.recoveries)}</Stat>
         <Stat label="토큰">{formatNumber(task.usage.inputTokens + task.usage.outputTokens)}</Stat>
         <Stat label="비용">{formatMoney(task.cost.amount, task.cost.currency)}</Stat>
@@ -563,9 +562,6 @@ export function TaskDetailPage() {
               ]}
             />
           </Card>
-          <Card title="토큰 사용량" description="모델 역할별 입력 / 출력" flush>
-            <TokenTable usage={task.usage} />
-          </Card>
           {data.artifacts.length > 0 && <ArtifactsCard artifacts={data.artifacts} />}
           <FeedbackCard feedback={data.feedback} />
         </div>
@@ -610,9 +606,11 @@ function StatusNotices({
           {task.failure.message && <> — {task.failure.message}</>}
         </p>
         <p className="mt-1">
-          {task.failure.resumable
-            ? '마지막 checkpoint 부터 재개할 수 있어요.'
-            : '저장된 checkpoint 가 없어 처음부터 다시 실행해야 해요.'}
+          {BUDGET_EXHAUSTED.includes(task.failure.code)
+            ? '작업 예산을 다 써 재개하거나 처음부터 다시 실행할 수 없어요.'
+            : task.failure.resumable
+              ? '마지막 checkpoint 부터 재개할 수 있어요.'
+              : '저장된 checkpoint 가 없어 처음부터 다시 실행해야 해요.'}
         </p>
       </Notice>
     );
@@ -927,47 +925,6 @@ function FeedbackCard({ feedback }: { feedback: TraceResponse['feedback'] }) {
         </ul>
       )}
     </Card>
-  );
-}
-
-function TokenTable({ usage }: { usage: TraceResponse['task']['usage'] }) {
-  const rows: [string, Usage][] = [
-    ['Planner', usage.byRole.planner],
-    ['Executor', usage.byRole.executor],
-    ['Evaluator', usage.byRole.evaluator],
-  ];
-  return (
-    <Table className="[&_td]:px-4 [&_th]:px-4">
-      <TableHeader>
-        <TableRow className="hover:bg-transparent">
-          <TableHead className="h-9 text-xs text-muted-foreground">역할</TableHead>
-          <TableHead className="h-9 text-right text-xs text-muted-foreground">입력</TableHead>
-          <TableHead className="h-9 text-right text-xs text-muted-foreground">출력</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {rows.map(([role, u]) => (
-          <TableRow key={role}>
-            <TableCell>{role}</TableCell>
-            <TableCell className="text-right tabular-nums">{formatNumber(u.inputTokens)}</TableCell>
-            <TableCell className="text-right tabular-nums">
-              {formatNumber(u.outputTokens)}
-            </TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-      <TableFooter>
-        <TableRow className="font-semibold">
-          <TableCell>합계</TableCell>
-          <TableCell className="text-right tabular-nums">
-            {formatNumber(usage.inputTokens)}
-          </TableCell>
-          <TableCell className="text-right tabular-nums">
-            {formatNumber(usage.outputTokens)}
-          </TableCell>
-        </TableRow>
-      </TableFooter>
-    </Table>
   );
 }
 

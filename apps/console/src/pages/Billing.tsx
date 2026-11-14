@@ -10,15 +10,12 @@ import {
   TableIcon,
   XIcon,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { formatNumber, formatPercent } from '../../../shared/format';
 import { ApiError } from '../api';
 import { useApi, useAuth } from '../auth';
 import {
   Badge,
-  Card,
-  type Column,
-  DataTable,
   ErrorNotice,
   Field,
   Kpi,
@@ -26,7 +23,9 @@ import {
   Mono,
   Notice,
   PageHeader,
+  Panel,
   type Query,
+  SectionLabel,
   Time,
   useAction,
   useQuery,
@@ -156,11 +155,17 @@ export function BillingPage() {
     <>
       <PageHeader
         title="사용량 · 비용"
-        description="모델 호출 토큰과 비용입니다. 비용은 워크스페이스가 등록한 모델 단가로 계산해요 (기억 추출 호출도 포함)."
+        description={
+          report ? (
+            <UsageSummary report={report} range={range} />
+          ) : (
+            '모델 호출 토큰과 비용입니다. 비용은 워크스페이스가 등록한 모델 단가로 계산해요 (기억 추출 호출도 포함).'
+          )
+        }
         actions={
           <>
             <NativeSelect
-              containerClassName="w-auto"
+              className="w-auto"
               aria-label="Agent"
               value={agentId}
               onChange={(e) => setAgentId(e.target.value)}
@@ -189,29 +194,47 @@ export function BillingPage() {
         }
       />
       <ErrorNotice error={usage.error} onRetry={() => void usage.reload()} />
-      {!report && usage.loading ? (
-        <Loading />
-      ) : report ? (
-        <UsageSection report={report} range={range} />
-      ) : null}
-      <div className="mt-4 grid items-start gap-x-4 gap-y-0 xl:grid-cols-[minmax(0,1fr)_340px]">
-        <PricesCard
-          prices={prices}
-          unpriced={(report?.byModel ?? []).filter((m) => !m.priced)}
-          onSaved={() => void usage.reload()}
-        />
+      {!report && usage.loading ? <Loading /> : report ? <UsageSection report={report} /> : null}
+      <SectionLabel title="월 한도" />
+      <div className="grid items-start gap-3 @[60rem]:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+        {report && <BudgetKpi budget={report.budget} />}
         <BudgetCard report={report} onSaved={() => void usage.reload()} />
       </div>
+      <PricesCard
+        prices={prices}
+        unpriced={(report?.byModel ?? []).filter((m) => !m.priced)}
+        onSaved={() => void usage.reload()}
+      />
     </>
   );
 }
 
 /* ───────────── 사용량 ───────────── */
 
-function UsageSection({ report, range }: { report: UsageReport; range: Range }) {
-  const { totals, currency, budget } = report;
+/** 머리말 — 기간 합계를 문장으로 */
+function UsageSummary({ report, range }: { report: UsageReport; range: Range }) {
+  const { totals, currency } = report;
+  const days = fillDays(report).length;
+  return (
+    <>
+      {RANGE_LABEL[range]} 동안 모델을 <b>{formatNumber(totals.calls)}번</b> 호출했어요. 입력{' '}
+      <b>{compact(totals.inputTokens)} 토큰</b> 중 {compact(totals.cachedInputTokens)} 토큰은
+      캐시에서 읽었고, 출력은 <b>{compact(totals.outputTokens)} 토큰</b>이에요. 등록한 모델 단가로
+      계산한 비용은 <b>{money(totals.cost, currency)}</b>(하루 평균{' '}
+      {money(days ? totals.cost / days : 0, currency)})이고, 기억 추출 호출도 포함해요.
+    </>
+  );
+}
+
+function UsageSection({ report }: { report: UsageReport }) {
+  const { totals, budget } = report;
   const exceeded = budget.monthlyBudget !== null && budget.monthToDate >= budget.monthlyBudget;
   const days = useMemo(() => fillDays(report), [report]);
+  const basis = (
+    <span className="text-xs text-muted-foreground">
+      {totals.cost > 0 ? '비용 비중' : '토큰 비중'}
+    </span>
+  );
   return (
     <>
       {exceeded && (
@@ -233,29 +256,62 @@ function UsageSection({ report, range }: { report: UsageReport; range: Range }) 
           </span>
         </Notice>
       )}
-      <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Kpi
-          label={`비용 · ${RANGE_LABEL[range]}`}
-          value={money(totals.cost, currency)}
-          hint={`일 평균 ${money(days.length ? totals.cost / days.length : 0, currency)}`}
-        />
-        <Kpi
-          label="모델 호출"
-          value={formatNumber(totals.calls)}
-          hint={`${formatNumber(totals.unpricedCalls)}건 단가 없음`}
-        />
-        <Kpi
-          label="토큰"
-          value={compact(tokensOf(totals))}
-          hint={`입력 ${compact(totals.inputTokens)} (캐시 ${compact(totals.cachedInputTokens)}) · 출력 ${compact(totals.outputTokens)}`}
-        />
-        <BudgetKpi budget={budget} />
+      <DailyCard days={days} currency={report.currency} />
+      <SectionLabel title="토큰 구성" />
+      <Panel className="px-[18px] py-4">
+        <TokenMix totals={totals} />
+      </Panel>
+      <div className="grid gap-x-5 @[60rem]:grid-cols-2">
+        <div className="min-w-0">
+          <SectionLabel title="용도별" actions={basis} />
+          <Panel>
+            <ByPurposeRows report={report} />
+          </Panel>
+        </div>
+        <div className="min-w-0">
+          <SectionLabel title="모델별" count={report.byModel.length} actions={basis} />
+          <Panel>
+            <ByModelRows report={report} />
+          </Panel>
+        </div>
       </div>
-      <DailyCard days={days} currency={currency} />
-      <div className="grid gap-x-4 gap-y-0 xl:grid-cols-[minmax(0,1fr)_340px]">
-        <ByModelCard report={report} />
-        <ByPurposeCard report={report} />
+    </>
+  );
+}
+
+/** 캐시 입력은 입력 토큰에 포함된 몫이라 새 입력 = 입력 − 캐시 입력 */
+function TokenMix({ totals }: { totals: UsageTotals }) {
+  const sum = tokensOf(totals);
+  if (sum === 0)
+    return <p className="text-sm text-muted-foreground">이 기간에 기록된 토큰이 없어요</p>;
+  const parts = [
+    {
+      label: '캐시 입력',
+      value: totals.cachedInputTokens,
+      fill: 'bg-indigo-300 dark:bg-indigo-400/50',
+    },
+    { label: '새 입력', value: totals.inputTokens - totals.cachedInputTokens, fill: 'bg-primary' },
+    { label: '출력', value: totals.outputTokens, fill: 'bg-foreground/85' },
+  ];
+  return (
+    <>
+      <div
+        className="flex h-4 overflow-hidden rounded-md bg-muted"
+        role="img"
+        aria-label={`토큰 구성 — ${parts.map((p) => `${p.label} ${compact(p.value)}`).join(' · ')}`}
+      >
+        {parts.map((p) => (
+          <span key={p.label} className={p.fill} style={{ width: `${(p.value / sum) * 100}%` }} />
+        ))}
       </div>
+      <ul className="mt-2 flex flex-wrap gap-x-3.5 gap-y-1 text-[12.5px] text-muted-foreground">
+        {parts.map((p) => (
+          <li key={p.label} className="inline-flex items-center gap-1.5">
+            <span className={cn('size-[9px] rounded-[3px]', p.fill)} aria-hidden="true" />
+            {p.label} <span className="tabular-nums">{compact(p.value)}</span>
+          </li>
+        ))}
+      </ul>
     </>
   );
 }
@@ -353,81 +409,90 @@ function DailyCard({ days, currency }: { days: Day[]; currency: string }) {
   const format = (n: number) => (metric === 'cost' ? money(n, currency) : formatNumber(n));
   const empty = days.every((d) => value(d) === 0);
   return (
-    <Card
-      title={`일별 ${METRIC_LABEL[metric]}`}
-      description="UTC 날짜 기준"
-      actions={
-        <>
-          <ToggleGroup
-            type="single"
-            variant="outline"
-            size="sm"
-            aria-label="지표"
-            value={metric}
-            onValueChange={(v) => v && setMetric(v as Metric)}
-          >
-            {(Object.keys(METRIC_LABEL) as Metric[]).map((m) => (
-              <ToggleGroupItem key={m} value={m}>
-                {METRIC_LABEL[m]}
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-          <Button size="sm" variant="ghost" onClick={() => setAsTable((v) => !v)}>
-            {asTable ? <ChartColumnIcon aria-hidden="true" /> : <TableIcon aria-hidden="true" />}
-            {asTable ? '차트로 보기' : '표로 보기'}
-          </Button>
-        </>
-      }
-    >
-      {asTable ? (
-        <div className="max-h-80 overflow-auto">
-          <Table aria-label="일별 사용량">
-            <TableHeader className="bg-muted/50 [&_th]:text-xs [&_th]:text-muted-foreground">
-              <TableRow>
-                <TableHead>날짜</TableHead>
-                <TableHead className="text-right">호출</TableHead>
-                <TableHead className="text-right">입력 토큰</TableHead>
-                <TableHead className="text-right">출력 토큰</TableHead>
-                <TableHead className="text-right">비용</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {[...days].reverse().map((d) => (
-                <TableRow key={d.date}>
-                  <TableCell>{d.date}</TableCell>
-                  <TableCell className="text-right tabular-nums">{formatNumber(d.calls)}</TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {formatNumber(d.inputTokens)}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {formatNumber(d.outputTokens)}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {money(d.cost, currency)}
-                  </TableCell>
-                </TableRow>
+    <>
+      <SectionLabel
+        title={
+          <>
+            일별 {METRIC_LABEL[metric]}
+            <span className="ml-1.5 font-normal text-muted-foreground/80">UTC 날짜 기준</span>
+          </>
+        }
+        actions={
+          <>
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              size="sm"
+              aria-label="지표"
+              value={metric}
+              onValueChange={(v) => v && setMetric(v as Metric)}
+            >
+              {(Object.keys(METRIC_LABEL) as Metric[]).map((m) => (
+                <ToggleGroupItem key={m} value={m}>
+                  {METRIC_LABEL[m]}
+                </ToggleGroupItem>
               ))}
-            </TableBody>
-          </Table>
-        </div>
-      ) : empty ? (
-        <div className="grid h-44 place-items-center rounded-lg border border-dashed text-sm text-muted-foreground">
-          이 기간에 기록된 모델 호출이 없어요
-        </div>
-      ) : (
-        <BarChart
-          data={days.map((d) => ({
-            key: d.date,
-            label: d.date.slice(5).replace('-', '/'),
-            value: value(d),
-            detail: `호출 ${formatNumber(d.calls)} · 토큰 ${compact(tokensOf(d))} · ${money(d.cost, currency)}`,
-          }))}
-          format={format}
-          axisFormat={(n) => (metric === 'cost' ? money(n, currency) : compact(n))}
-          label={`일별 ${METRIC_LABEL[metric]}`}
-        />
-      )}
-    </Card>
+            </ToggleGroup>
+            <Button size="sm" variant="ghost" onClick={() => setAsTable((v) => !v)}>
+              {asTable ? <ChartColumnIcon aria-hidden="true" /> : <TableIcon aria-hidden="true" />}
+              {asTable ? '차트로 보기' : '표로 보기'}
+            </Button>
+          </>
+        }
+      />
+      <Panel className="p-4">
+        {asTable ? (
+          <div className="max-h-80 overflow-auto">
+            <Table aria-label="일별 사용량">
+              <TableHeader className="bg-muted/50 [&_th]:text-xs [&_th]:text-muted-foreground">
+                <TableRow>
+                  <TableHead>날짜</TableHead>
+                  <TableHead className="text-right">호출</TableHead>
+                  <TableHead className="text-right">입력 토큰</TableHead>
+                  <TableHead className="text-right">출력 토큰</TableHead>
+                  <TableHead className="text-right">비용</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {[...days].reverse().map((d) => (
+                  <TableRow key={d.date}>
+                    <TableCell>{d.date}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatNumber(d.calls)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatNumber(d.inputTokens)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatNumber(d.outputTokens)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {money(d.cost, currency)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        ) : empty ? (
+          <div className="grid h-44 place-items-center rounded-lg border border-dashed text-sm text-muted-foreground">
+            이 기간에 기록된 모델 호출이 없어요
+          </div>
+        ) : (
+          <BarChart
+            data={days.map((d) => ({
+              key: d.date,
+              label: d.date.slice(5).replace('-', '/'),
+              value: value(d),
+              detail: `호출 ${formatNumber(d.calls)} · 토큰 ${compact(tokensOf(d))} · ${money(d.cost, currency)}`,
+            }))}
+            format={format}
+            axisFormat={(n) => (metric === 'cost' ? money(n, currency) : compact(n))}
+            label={`일별 ${METRIC_LABEL[metric]}`}
+          />
+        )}
+      </Panel>
+    </>
   );
 }
 
@@ -588,110 +653,110 @@ function ShareBar({ ratio }: { ratio: number }) {
   );
 }
 
-function ByModelCard({ report }: { report: UsageReport }) {
+/** 비용이 있으면 비용 비중, 아직 비용이 없으면(단가 미등록) 토큰 비중 */
+function shareOf(report: UsageReport) {
   const totalCost = report.totals.cost;
   const totalTokens = tokensOf(report.totals);
-  const share = (r: UsageTotals) =>
+  return (r: UsageTotals) =>
     totalCost > 0 ? r.cost / totalCost : totalTokens > 0 ? tokensOf(r) / totalTokens : 0;
-  const rows = [...report.byModel].sort((a, b) => b.cost - a.cost || tokensOf(b) - tokensOf(a));
-  const columns: Column<(typeof rows)[number]>[] = [
-    {
-      key: 'model',
-      header: '모델',
-      render: (r) => (
-        <div>
-          <div className="flex items-center gap-1.5 [&_code]:break-normal [&_code]:whitespace-nowrap">
-            <Mono>{r.model}</Mono>
-            {!r.priced && <Badge tone="warning">단가 없음</Badge>}
-          </div>
-          <div className="text-xs text-muted-foreground">
-            {PROVIDER_LABEL[r.providerKind] ?? r.providerKind}
-          </div>
-        </div>
-      ),
-    },
-    {
-      key: 'calls',
-      header: '호출',
-      align: 'right',
-      render: (r) => <span className="tabular-nums">{formatNumber(r.calls)}</span>,
-    },
-    {
-      key: 'tokens',
-      header: '토큰 (입력 · 출력)',
-      align: 'right',
-      render: (r) => (
-        <span className="tabular-nums">
-          {compact(r.inputTokens)} · {compact(r.outputTokens)}
-        </span>
-      ),
-    },
-    {
-      key: 'cost',
-      header: '비용',
-      align: 'right',
-      render: (r) => <span className="tabular-nums">{money(r.cost, report.currency)}</span>,
-    },
-    {
-      key: 'share',
-      header: totalCost > 0 ? '비용 비중' : '토큰 비중',
-      width: '130px',
-      render: (r) => <ShareBar ratio={share(r)} />,
-    },
-  ];
+}
+
+const byWeight = (a: UsageTotals, b: UsageTotals) => b.cost - a.cost || tokensOf(b) - tokensOf(a);
+
+interface ShareRow {
+  key: string;
+  name: ReactNode;
+  sub: ReactNode;
+  ratio: number;
+  totals: UsageTotals;
+}
+
+/** 이름 · 비중 막대 · 비용 — 패널이 좁으면 막대를 아랫줄로 내린다 */
+function ShareRows({
+  rows,
+  currency,
+  label,
+  empty,
+}: {
+  rows: ShareRow[];
+  currency: string;
+  label: string;
+  empty: string;
+}) {
+  if (rows.length === 0)
+    return <p className="px-[18px] py-4 text-sm text-muted-foreground">{empty}</p>;
   return (
-    <Card title="모델별" flush>
-      <div className="[&_table]:min-w-[640px]">
-        <DataTable
-          label="모델별 사용량"
-          columns={columns}
-          rows={rows}
-          rowKey={(r) => `${r.providerKind}|${r.model}`}
-          empty="이 기간에 호출한 모델이 없어요"
-        />
-      </div>
-    </Card>
+    <ul className="@container flex flex-col gap-4 px-[18px] py-4" aria-label={label}>
+      {rows.map((r) => (
+        <li
+          key={r.key}
+          className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3.5 gap-y-1.5 @sm:grid-cols-[minmax(0,10rem)_minmax(3rem,1fr)_auto]"
+        >
+          <div className="min-w-0">
+            {r.name}
+            <div className="truncate text-xs text-muted-foreground">{r.sub}</div>
+          </div>
+          <div className="col-span-2 row-start-2 @sm:col-span-1 @sm:row-start-auto">
+            <ShareBar ratio={r.ratio} />
+          </div>
+          <div className="col-start-2 row-start-1 max-w-44 text-right @sm:col-start-auto @sm:row-start-auto @sm:max-w-none">
+            <div className="font-medium whitespace-nowrap tabular-nums">
+              {money(r.totals.cost, currency)}
+            </div>
+            <div className="text-xs text-muted-foreground tabular-nums">
+              호출 {formatNumber(r.totals.calls)} · 입력 {compact(r.totals.inputTokens)} · 출력{' '}
+              {compact(r.totals.outputTokens)}
+            </div>
+          </div>
+        </li>
+      ))}
+    </ul>
   );
 }
 
-function ByPurposeCard({ report }: { report: UsageReport }) {
-  const totalCost = report.totals.cost;
-  const totalTokens = tokensOf(report.totals);
-  const rows = [...report.byPurpose].sort((a, b) => b.cost - a.cost || tokensOf(b) - tokensOf(a));
+function ByModelRows({ report }: { report: UsageReport }) {
+  const share = shareOf(report);
   return (
-    <Card title="용도별" description={totalCost > 0 ? '비용 비중' : '토큰 비중'}>
-      {rows.length === 0 ? (
-        <p className="text-sm text-muted-foreground">이 기간에 기록이 없어요</p>
-      ) : (
-        <ul className="flex flex-col gap-3.5">
-          {rows.map((r) => (
-            <li key={r.purpose}>
-              <div className="mb-1 flex justify-between gap-2">
-                <span className="font-medium">{PURPOSE_LABEL[r.purpose] ?? r.purpose}</span>
-                <span className="whitespace-nowrap tabular-nums">
-                  {money(r.cost, report.currency)}
-                </span>
-              </div>
-              <ShareBar
-                ratio={
-                  totalCost > 0
-                    ? r.cost / totalCost
-                    : totalTokens > 0
-                      ? tokensOf(r) / totalTokens
-                      : 0
-                }
-              />
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                {r.purpose === 'memory'
-                  ? '작업이 끝난 뒤 기억할 내용 추리기'
-                  : '계획 · 실행 · 답변 · 검증'}{' '}
-                · 호출 {formatNumber(r.calls)} · 토큰 {compact(tokensOf(r))}
-              </p>
-            </li>
-          ))}
-        </ul>
-      )}
-    </Card>
+    <ShareRows
+      label="모델별 사용량"
+      currency={report.currency}
+      empty="이 기간에 호출한 모델이 없어요"
+      rows={[...report.byModel].sort(byWeight).map((r) => ({
+        key: `${r.providerKind}|${r.model}`,
+        name: (
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate font-mono text-[13px]" title={r.model}>
+              {r.model}
+            </span>
+            {!r.priced && <Badge tone="warning">단가 없음</Badge>}
+          </div>
+        ),
+        sub: PROVIDER_LABEL[r.providerKind] ?? r.providerKind,
+        ratio: share(r),
+        totals: r,
+      }))}
+    />
+  );
+}
+
+function ByPurposeRows({ report }: { report: UsageReport }) {
+  const share = shareOf(report);
+  return (
+    <ShareRows
+      label="용도별 사용량"
+      currency={report.currency}
+      empty="이 기간에 기록이 없어요"
+      rows={[...report.byPurpose].sort(byWeight).map((r) => ({
+        key: r.purpose,
+        name: <span className="font-medium">{PURPOSE_LABEL[r.purpose] ?? r.purpose}</span>,
+        sub:
+          r.purpose === 'memory'
+            ? '작업이 끝난 뒤 기억할 내용 추리기'
+            : '계획 · 실행 · 답변 · 검증',
+        ratio: share(r),
+        totals: r,
+      }))}
+    />
   );
 }
 
@@ -820,185 +885,192 @@ function PricesCard({
       : [];
 
   return (
-    <Card
-      title="모델 단가"
-      description="100만 토큰당 가격. 바꾼 단가는 이후 호출부터 적용되고, 이미 기록된 비용은 바뀌지 않아요."
-      actions={
-        editable ? (
+    <>
+      <SectionLabel
+        title="모델 단가"
+        actions={
+          editable ? (
+            <>
+              <Button
+                variant="outline"
+                disabled={!dirty || save.pending}
+                onClick={() => {
+                  setRows((prices.data ?? []).map(toRow));
+                  setCurrency(prices.data?.[0]?.currency ?? 'USD');
+                  setDirty(false);
+                  setLocalError(null);
+                  save.reset();
+                }}
+              >
+                <RotateCcwIcon aria-hidden="true" />
+                되돌리기
+              </Button>
+              <Button loading={save.pending} disabled={!dirty} onClick={() => void submit()}>
+                저장
+              </Button>
+            </>
+          ) : undefined
+        }
+      />
+      <Panel className="p-4">
+        <p className="mb-3 text-sm text-muted-foreground">
+          100만 토큰당 가격. 바꾼 단가는 이후 호출부터 적용되고, 이미 기록된 비용은 바뀌지 않아요.
+        </p>
+        {prices.loading && !prices.data ? (
+          <Loading />
+        ) : (
           <>
-            <Button
-              variant="outline"
-              disabled={!dirty || save.pending}
-              onClick={() => {
-                setRows((prices.data ?? []).map(toRow));
-                setCurrency(prices.data?.[0]?.currency ?? 'USD');
-                setDirty(false);
-                setLocalError(null);
-                save.reset();
-              }}
-            >
-              <RotateCcwIcon aria-hidden="true" />
-              되돌리기
-            </Button>
-            <Button loading={save.pending} disabled={!dirty} onClick={() => void submit()}>
-              저장
-            </Button>
-          </>
-        ) : undefined
-      }
-    >
-      {prices.loading && !prices.data ? (
-        <Loading />
-      ) : (
-        <>
-          <ErrorNotice error={prices.error} onRetry={() => void prices.reload()} />
-          {editable && missing.length > 0 && (
-            <Notice tone="warn">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span>
-                  단가가 없는 모델 {missing.length}개: {missing.map((m) => m.model).join(', ')}
-                </span>
-                <Button variant="outline" size="sm" onClick={() => addRows(missing)}>
-                  <PlusIcon aria-hidden="true" />줄 추가
-                </Button>
-              </div>
-            </Notice>
-          )}
-          <Table aria-label="모델 단가" className="min-w-[620px]">
-            <TableHeader className="bg-muted/50 [&_th]:text-xs [&_th]:text-muted-foreground">
-              <TableRow>
-                <TableHead>Provider</TableHead>
-                <TableHead>모델</TableHead>
-                <TableHead className="text-right">입력</TableHead>
-                <TableHead className="text-right">캐시 입력</TableHead>
-                <TableHead className="text-right">출력</TableHead>
-                {editable && <TableHead className="w-10" />}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((r, i) => (
-                <TableRow key={i} className="hover:bg-transparent">
-                  <TableCell className="px-2 py-1.5">
-                    <NativeSelect
-                      containerClassName="min-w-[130px]"
-                      aria-label={`${i + 1}번째 provider`}
-                      value={r.providerKind}
-                      disabled={!editable}
-                      onChange={(e) => change(i, { providerKind: e.target.value as ProviderKind })}
-                    >
-                      {PROVIDER_KINDS.map((k) => (
-                        <NativeSelectOption key={k} value={k}>
-                          {PROVIDER_LABEL[k]}
-                        </NativeSelectOption>
-                      ))}
-                    </NativeSelect>
-                  </TableCell>
-                  <TableCell className="px-2 py-1.5">
-                    <Input
-                      className="min-w-40 font-mono text-[12.5px]"
-                      aria-label={`${i + 1}번째 모델`}
-                      value={r.model}
-                      disabled={!editable}
-                      placeholder="deepseek-chat"
-                      onChange={(e) => change(i, { model: e.target.value })}
-                    />
-                  </TableCell>
-                  {(['input', 'cached', 'output'] as const).map((f) => (
-                    <TableCell key={f} className="px-2 py-1.5">
-                      <Input
-                        className="min-w-20 text-right tabular-nums"
-                        inputMode="decimal"
-                        aria-label={`${i + 1}번째 ${f === 'input' ? '입력' : f === 'cached' ? '캐시 입력' : '출력'} 단가`}
-                        value={r[f]}
+            <ErrorNotice error={prices.error} onRetry={() => void prices.reload()} />
+            {editable && missing.length > 0 && (
+              <Notice tone="warn">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span>
+                    단가가 없는 모델 {missing.length}개: {missing.map((m) => m.model).join(', ')}
+                  </span>
+                  <Button variant="outline" size="sm" onClick={() => addRows(missing)}>
+                    <PlusIcon aria-hidden="true" />줄 추가
+                  </Button>
+                </div>
+              </Notice>
+            )}
+            <Table aria-label="모델 단가" className="min-w-[620px]">
+              <TableHeader className="bg-muted/50 [&_th]:text-xs [&_th]:text-muted-foreground">
+                <TableRow>
+                  <TableHead>Provider</TableHead>
+                  <TableHead>모델</TableHead>
+                  <TableHead className="text-right">입력</TableHead>
+                  <TableHead className="text-right">캐시 입력</TableHead>
+                  <TableHead className="text-right">출력</TableHead>
+                  {editable && <TableHead className="w-10" />}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows.map((r, i) => (
+                  <TableRow key={i} className="hover:bg-transparent">
+                    <TableCell className="px-2 py-1.5">
+                      <NativeSelect
+                        className="min-w-[130px]"
+                        aria-label={`${i + 1}번째 provider`}
+                        value={r.providerKind}
                         disabled={!editable}
-                        placeholder={f === 'cached' ? '없음' : '0.00'}
-                        onChange={(e) => change(i, { [f]: e.target.value })}
+                        onChange={(e) =>
+                          change(i, { providerKind: e.target.value as ProviderKind })
+                        }
+                      >
+                        {PROVIDER_KINDS.map((k) => (
+                          <NativeSelectOption key={k} value={k}>
+                            {PROVIDER_LABEL[k]}
+                          </NativeSelectOption>
+                        ))}
+                      </NativeSelect>
+                    </TableCell>
+                    <TableCell className="px-2 py-1.5">
+                      <Input
+                        className="min-w-40 font-mono text-[12.5px]"
+                        aria-label={`${i + 1}번째 모델`}
+                        value={r.model}
+                        disabled={!editable}
+                        placeholder="deepseek-chat"
+                        onChange={(e) => change(i, { model: e.target.value })}
                       />
                     </TableCell>
-                  ))}
-                  {editable && (
-                    <TableCell className="px-2 py-1.5">
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            className="text-muted-foreground"
-                            aria-label={`${r.model || `${i + 1}번째`} 단가 삭제`}
-                            onClick={() => {
-                              setRows((prev) => prev.filter((_, j) => j !== i));
-                              setDirty(true);
-                            }}
-                          >
-                            <XIcon aria-hidden="true" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>단가 삭제</TooltipContent>
-                      </Tooltip>
-                    </TableCell>
-                  )}
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-          {rows.length === 0 && (
-            <div className="px-4 py-6 text-center text-sm text-muted-foreground">
-              등록한 단가가 없어요 — 모든 호출이 비용 0 으로 기록됩니다.
-            </div>
-          )}
-          <div className="my-2.5 flex items-center gap-2">
-            {editable && (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => addRows([{ providerKind: 'openai', model: '' }])}
-              >
-                <PlusIcon aria-hidden="true" />
-                단가 추가
-              </Button>
+                    {(['input', 'cached', 'output'] as const).map((f) => (
+                      <TableCell key={f} className="px-2 py-1.5">
+                        <Input
+                          className="min-w-20 text-right tabular-nums"
+                          inputMode="decimal"
+                          aria-label={`${i + 1}번째 ${f === 'input' ? '입력' : f === 'cached' ? '캐시 입력' : '출력'} 단가`}
+                          value={r[f]}
+                          disabled={!editable}
+                          placeholder={f === 'cached' ? '없음' : '0.00'}
+                          onChange={(e) => change(i, { [f]: e.target.value })}
+                        />
+                      </TableCell>
+                    ))}
+                    {editable && (
+                      <TableCell className="px-2 py-1.5">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              className="text-muted-foreground"
+                              aria-label={`${r.model || `${i + 1}번째`} 단가 삭제`}
+                              onClick={() => {
+                                setRows((prev) => prev.filter((_, j) => j !== i));
+                                setDirty(true);
+                              }}
+                            >
+                              <XIcon aria-hidden="true" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>단가 삭제</TooltipContent>
+                        </Tooltip>
+                      </TableCell>
+                    )}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+            {rows.length === 0 && (
+              <div className="px-4 py-6 text-center text-sm text-muted-foreground">
+                등록한 단가가 없어요 — 모든 호출이 비용 0 으로 기록됩니다.
+              </div>
             )}
-            <label className="ml-auto inline-flex items-center gap-1.5">
-              <span className="text-xs text-muted-foreground">통화</span>
-              <Input
-                className="w-[70px] uppercase"
-                value={currency}
-                maxLength={3}
-                disabled={!editable}
-                aria-label="단가 통화"
-                onChange={(e) => {
-                  setCurrency(e.target.value.toUpperCase());
-                  setDirty(true);
-                }}
-              />
-            </label>
-          </div>
-          {localError && <Notice tone="error">{localError}</Notice>}
-          {serverIssues.map((s) => (
-            <Notice key={s.path + s.message} tone="error">
-              {s.path ? `${s.path}: ` : ''}
-              {s.message}
-            </Notice>
-          ))}
-          {save.error && serverIssues.length === 0 && <ErrorNotice error={save.error} />}
-          {!editable && (
-            <p className="text-xs text-muted-foreground">단가는 Admin 이상만 바꿀 수 있어요.</p>
-          )}
-          {prices.data && prices.data.length > 0 && (
-            <p className="text-xs text-muted-foreground">
-              마지막 변경{' '}
-              <Time
-                iso={
-                  prices.data
-                    .map((p) => p.updatedAt)
-                    .sort()
-                    .at(-1) ?? null
-                }
-              />
-            </p>
-          )}
-        </>
-      )}
-    </Card>
+            <div className="my-2.5 flex items-center gap-2">
+              {editable && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => addRows([{ providerKind: 'openai', model: '' }])}
+                >
+                  <PlusIcon aria-hidden="true" />
+                  단가 추가
+                </Button>
+              )}
+              <label className="ml-auto inline-flex items-center gap-1.5">
+                <span className="text-xs text-muted-foreground">통화</span>
+                <Input
+                  className="w-[70px] uppercase"
+                  value={currency}
+                  maxLength={3}
+                  disabled={!editable}
+                  aria-label="단가 통화"
+                  onChange={(e) => {
+                    setCurrency(e.target.value.toUpperCase());
+                    setDirty(true);
+                  }}
+                />
+              </label>
+            </div>
+            {localError && <Notice tone="error">{localError}</Notice>}
+            {serverIssues.map((s) => (
+              <Notice key={s.path + s.message} tone="error">
+                {s.path ? `${s.path}: ` : ''}
+                {s.message}
+              </Notice>
+            ))}
+            {save.error && serverIssues.length === 0 && <ErrorNotice error={save.error} />}
+            {!editable && (
+              <p className="text-xs text-muted-foreground">단가는 Admin 이상만 바꿀 수 있어요.</p>
+            )}
+            {prices.data && prices.data.length > 0 && (
+              <p className="text-xs text-muted-foreground">
+                마지막 변경{' '}
+                <Time
+                  iso={
+                    prices.data
+                      .map((p) => p.updatedAt)
+                      .sort()
+                      .at(-1) ?? null
+                  }
+                />
+              </p>
+            )}
+          </>
+        )}
+      </Panel>
+    </>
   );
 }
 
@@ -1034,10 +1106,11 @@ function BudgetCard({ report, onSaved }: { report: UsageReport | undefined; onSa
   };
 
   return (
-    <Card
-      title="월 한도"
-      description="이번 달 비용이 한도에 닿으면 새 작업 요청을 402 BUDGET_EXCEEDED 로 거부해요. 실행 중인 작업은 끝까지 진행됩니다."
-    >
+    <Panel className="p-4">
+      <p className="mb-3 text-sm text-muted-foreground">
+        이번 달 비용이 한도에 닿으면 새 작업 요청을 402 BUDGET_EXCEEDED 로 거부해요. 실행 중인
+        작업은 끝까지 진행됩니다.
+      </p>
       {!budget ? (
         <Loading />
       ) : (
@@ -1106,6 +1179,6 @@ function BudgetCard({ report, onSaved }: { report: UsageReport | undefined; onSa
           )}
         </div>
       )}
-    </Card>
+    </Panel>
   );
 }

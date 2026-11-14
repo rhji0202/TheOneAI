@@ -1,8 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import type {
-  ModelRole,
-  ReasoningEffort as DbReasoningEffort,
-} from '../generated/prisma/client.js';
+import type { ReasoningEffort as DbReasoningEffort } from '../generated/prisma/client.js';
 import { PrismaService } from '../infrastructure/database/prisma.service.js';
 import { LlmClientFactory, type ProviderRecord } from '../llm/llm-client.factory.js';
 import {
@@ -17,8 +14,6 @@ import {
 import type { UsageMeter } from '../billing/usage-meter.js';
 import { RuntimeError } from './agent-runtime.js';
 import type { TaskRunInfo } from './run-context.js';
-
-export type { ModelRole };
 
 export interface ModelCall {
   messages: LlmMessage[];
@@ -45,89 +40,80 @@ interface RoleModel {
 }
 
 /**
- * 작업 1건의 역할별 모델 (C-03 모델 구성: model_configs).
- *  - executor 는 필수, planner · evaluator 가 없으면 executor 설정을 쓴다.
- *  - 기본 모델 호출이 재시도 후에도 실패하면 대체(fallback) 모델로 한 번 더 시도한다.
+ * 작업 1건의 모델 (C-03 모델 구성: model_configs 의 executor).
+ * Agent Loop · 대화 요약 · 기억 추출이 모두 이 모델을 쓴다.
+ * 기본 모델 호출이 재시도 후에도 실패하면 대체(fallback) 모델로 한 번 더 시도한다.
  */
 export class ModelRouter {
   private readonly logger = new Logger(ModelRouter.name);
 
   constructor(
-    private readonly roles: Record<ModelRole, RoleModel>,
+    private readonly config: RoleModel,
     /** 호출마다 실제로 응답한 모델의 사용량을 센다 (비용 · 사용량 기록) */
     private readonly meter: UsageMeter | null = null,
   ) {}
 
-  describe(role: ModelRole): string {
-    return this.roles[role].primary.label;
+  describe(): string {
+    return this.config.primary.label;
   }
 
-  async complete(role: ModelRole, call: ModelCall, signal: AbortSignal): Promise<LlmResponse> {
-    const config = this.roles[role];
+  async complete(call: ModelCall, signal: AbortSignal): Promise<LlmResponse> {
+    const config = this.config;
     try {
       return this.metered(
-        role,
         config.primary,
         await config.primary.client.complete(this.request(config, config.primary, call, signal)),
       );
     } catch (err) {
-      if (!this.shouldFallback(err, config, signal))
-        throw toRuntimeError(err, config.primary, role);
-      this.logger.warn(
-        `${role} 기본 모델 실패 → 대체 모델 ${config.fallback!.label}: ${String(err)}`,
-      );
+      if (!this.shouldFallback(err, config, signal)) throw toRuntimeError(err, config.primary);
+      this.logger.warn(`기본 모델 실패 → 대체 모델 ${config.fallback!.label}: ${String(err)}`);
       try {
         return this.metered(
-          role,
           config.fallback!,
           await config.fallback!.client.complete(
             this.request(config, config.fallback!, call, signal),
           ),
         );
       } catch (fallbackErr) {
-        throw toRuntimeError(fallbackErr, config.fallback!, role);
+        throw toRuntimeError(fallbackErr, config.fallback!);
       }
     }
   }
 
   /** 첫 텍스트가 나오기 전에 실패하면 대체 모델로 전환한다. */
-  async *stream(
-    role: ModelRole,
-    call: ModelCall,
-    signal: AbortSignal,
-  ): AsyncGenerator<LlmStreamEvent> {
-    const config = this.roles[role];
+  async *stream(call: ModelCall, signal: AbortSignal): AsyncGenerator<LlmStreamEvent> {
+    const config = this.config;
     let started = false;
     try {
       for await (const event of config.primary.client.stream(
         this.request(config, config.primary, call, signal),
       )) {
         started = true;
-        if (event.type === 'done') this.metered(role, config.primary, event.response);
+        if (event.type === 'done') this.metered(config.primary, event.response);
         yield event;
       }
       return;
     } catch (err) {
       if (started || !this.shouldFallback(err, config, signal))
-        throw toRuntimeError(err, config.primary, role);
+        throw toRuntimeError(err, config.primary);
       this.logger.warn(
-        `${role} 기본 모델 스트림 실패 → 대체 모델 ${config.fallback!.label}: ${String(err)}`,
+        `기본 모델 스트림 실패 → 대체 모델 ${config.fallback!.label}: ${String(err)}`,
       );
     }
     try {
       for await (const event of config.fallback!.client.stream(
         this.request(config, config.fallback!, call, signal),
       )) {
-        if (event.type === 'done') this.metered(role, config.fallback!, event.response);
+        if (event.type === 'done') this.metered(config.fallback!, event.response);
         yield event;
       }
     } catch (err) {
-      throw toRuntimeError(err, config.fallback!, role);
+      throw toRuntimeError(err, config.fallback!);
     }
   }
 
-  private metered(role: ModelRole, target: Target, response: LlmResponse): LlmResponse {
-    this.meter?.record(role, target, response.usage);
+  private metered(target: Target, response: LlmResponse): LlmResponse {
+    this.meter?.record('executor', target, response.usage);
     return response;
   }
 
@@ -159,9 +145,9 @@ export class ModelRouter {
 }
 
 /** 모델 오류 → task.failed 의 code · message (사용자에게 보여 줄 수 있는 수준) */
-function toRuntimeError(err: unknown, target: Target, role: ModelRole): unknown {
+function toRuntimeError(err: unknown, target: Target): unknown {
   if (!(err instanceof LlmError)) return err; // 취소 등은 그대로
-  const where = `${role} 모델(${target.label})`;
+  const where = `모델(${target.label})`;
   switch (err.code) {
     case 'not_configured':
       return new RuntimeError('MODEL_NOT_CONFIGURED', err.message);
@@ -190,14 +176,12 @@ export class ModelRouterFactory {
   ) {}
 
   async forTask(task: TaskRunInfo, meter: UsageMeter | null = null): Promise<ModelRouter> {
-    const configs = await this.prisma.withTenant(task.tenantId, (tx) =>
-      tx.modelConfig.findMany({
-        where: { agentVersionId: task.agentVersionId },
+    const executor = await this.prisma.withTenant(task.tenantId, (tx) =>
+      tx.modelConfig.findFirst({
+        where: { agentVersionId: task.agentVersionId, role: 'executor' },
         include: { provider: true, fallbackProvider: true },
       }),
     );
-    const byRole = new Map(configs.map((c) => [c.role, c]));
-    const executor = byRole.get('executor');
     if (!executor) {
       throw new RuntimeError(
         'MODEL_NOT_CONFIGURED',
@@ -205,29 +189,18 @@ export class ModelRouterFactory {
       );
     }
 
-    const build = async (config: typeof executor): Promise<RoleModel> => {
-      const primary = await this.target(config.provider, config.model);
-      const fallback =
-        config.fallbackProvider && config.fallbackModel
-          ? await this.target(config.fallbackProvider, config.fallbackModel).catch(() => null)
-          : null;
-      return {
-        primary,
-        fallback,
-        maxOutputTokens: config.maxOutputTokens,
-        temperature: config.temperature,
-        reasoning: toReasoning(config.reasoningEffort),
-      };
-    };
-
-    const executorModel = await build(executor);
-    const planner = byRole.get('planner');
-    const evaluator = byRole.get('evaluator');
+    const primary = await this.target(executor.provider, executor.model);
+    const fallback =
+      executor.fallbackProvider && executor.fallbackModel
+        ? await this.target(executor.fallbackProvider, executor.fallbackModel).catch(() => null)
+        : null;
     return new ModelRouter(
       {
-        executor: executorModel,
-        planner: planner ? await build(planner) : executorModel,
-        evaluator: evaluator ? await build(evaluator) : executorModel,
+        primary,
+        fallback,
+        maxOutputTokens: executor.maxOutputTokens,
+        temperature: executor.temperature,
+        reasoning: toReasoning(executor.reasoningEffort),
       },
       meter,
     );

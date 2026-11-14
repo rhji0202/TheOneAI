@@ -74,7 +74,7 @@ export function App({
   const [rootEl, setRootEl] = useState<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const store = options.storage;
-  const viewKey = `theoneai:${options.widgetKey}:view`;
+  const viewKey = `theonewidget:${options.widgetKey}:view`;
 
   const boot = useCallback(async () => {
     setState({ status: 'loading' });
@@ -162,6 +162,8 @@ export function App({
   const openTask = (t: TaskSummary) =>
     setView({ name: 'chat', conversationId: t.conversationId, taskId: t.id });
   const tone = view.name === 'chat' ? (TONE[header.status ?? ''] ?? IDLE_TONE) : TONE.online!;
+  // 콘솔에서 올린 위젯 아이콘 — 위젯 헤더에 쓴다 (없으면 Agent 아바타 · 기본 아이콘). 런처 버튼은 늘 기본 아이콘
+  const icon = b.theme.iconUrl ? `${api.base}${b.theme.iconUrl}` : null;
 
   return (
     <PortalContainerContext value={rootEl}>
@@ -183,7 +185,9 @@ export function App({
             <header className="flex flex-none items-center gap-0.5 border-b py-2 pr-2 pl-3">
               {view.name === 'home' ? (
                 <Avatar className="mr-2 size-9" aria-hidden="true">
-                  {b.agent.avatarUrl && <AvatarImage src={b.agent.avatarUrl} alt="" />}
+                  {(icon ?? b.agent.avatarUrl) && (
+                    <AvatarImage src={(icon ?? b.agent.avatarUrl)!} alt="" />
+                  )}
                   <AvatarFallback className="bg-primary text-primary-foreground">
                     <SparklesIcon className="size-4.5" />
                   </AvatarFallback>
@@ -319,7 +323,7 @@ function HeaderButton({
 }
 
 function anonymousId(store: Storage | null | undefined, key: string): string {
-  const name = `theoneai:${key}:anon`;
+  const name = `theonewidget:${key}:anon`;
   try {
     const existing = store?.getItem(name);
     if (existing && /^[A-Za-z0-9_-]{16,64}$/.test(existing)) return existing;

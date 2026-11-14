@@ -81,6 +81,13 @@ const waitStep = (taskId: string, name: string, stepStatus = 'running') =>
       (await steps(taskId)).find((s) => s.name === name && s.status === stepStatus) ?? null,
   );
 
+/** n 번째 모델 차례가 실행 중일 때까지 — [느린답변] 은 세 번째 차례가 답변이다 */
+const waitTurn = (taskId: string, n: number) =>
+  waitFor(async () => {
+    const turn = (await steps(taskId)).filter((s) => s.name === 'agent.turn')[n - 1];
+    return turn?.status === 'running' ? turn : null;
+  });
+
 async function tenantRows<T>(fn: (tx: TestContext['owner']) => Promise<T>) {
   return ctx.owner.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT set_config('app.tenant_id', ${ctx.tenantA.tenantId}, true)`;
@@ -90,13 +97,15 @@ async function tenantRows<T>(fn: (tx: TestContext['owner']) => Promise<T>) {
 
 const requestsFor = (tag: string): RecordedRequest[] =>
   ctx.llm.requests.filter((r) => r.body.messages.some((m) => (m.content ?? '').includes(tag)));
-const workCount = (tag: string) =>
-  requestsFor(tag).filter((r) => r.role.startsWith('Executor (work')).length;
+const agentCount = (tag: string) => requestsFor(tag).filter((r) => r.role === 'Agent').length;
+/** 할 일 목록을 만든 횟수 — 재개 · 복구가 앞 차례를 다시 하지 않았는가 */
+const planCreated = async (taskId: string) =>
+  (await events(taskId)).filter((e) => e.type === 'plan.created').length;
 
 describe('일시정지 · checkpoint 재개', () => {
   it('실행 중 일시정지 → 현재 단계를 마치고 paused → 재개하면 끝난 단계는 건너뛴다', async () => {
     const { taskId } = await send('[느린분석] 일시정지 #pause');
-    await waitStep(taskId, 'executor.reason');
+    await waitStep(taskId, 'agent.turn');
     const paused = await api(ctx.baseUrl, 'POST', `/v1/admin/tasks/${taskId}/pause`, {
       token: ownerToken,
       body: { reason: '점검' },
@@ -104,8 +113,8 @@ describe('일시정지 · checkpoint 재개', () => {
     expect(paused.status).toBe(202);
     const done = await waitStatus(taskId, ['paused']);
     expect(done.status).toBe('paused');
-    // 일시정지 전에 시작한 단계는 끝까지 실행되어 checkpoint 를 남겼다
-    expect((await steps(taskId)).find((s) => s.name === 'executor.reason')).toMatchObject({
+    // 일시정지 전에 시작한 차례는 끝까지 실행되어 checkpoint 를 남겼다
+    expect((await steps(taskId)).filter((s) => s.name === 'agent.turn').at(-1)).toMatchObject({
       status: 'succeeded',
       checkpointAt: expect.any(Date),
     });
@@ -116,11 +125,11 @@ describe('일시정지 · checkpoint 재개', () => {
     });
     expect(resumed.status).toBe(202);
     await waitStatus(taskId, ['completed']);
-    expect(workCount('#pause')).toBe(1);
+    // 끝난 차례는 다시 하지 않는다: 할 일 2번 + 답변 1번
+    expect(agentCount('#pause')).toBe(3);
     const evts = await events(taskId);
     expect(evts.find((e) => e.type === 'task.resumed')?.payload).toMatchObject({
       reason: 'resume',
-      fromPlanIndex: 2,
     });
     expect(evts.filter((e) => e.type === 'task.status').map((e) => e.payload.status)).toEqual([
       'queued',
@@ -130,11 +139,12 @@ describe('일시정지 · checkpoint 재개', () => {
       'running',
     ]);
     const names = (await steps(taskId)).map((s) => s.name);
-    expect(names.filter((n) => n === 'executor.reason')).toHaveLength(1);
+    expect(names.filter((n) => n === 'agent.turn')).toHaveLength(3);
     expect(names.filter((n) => n === 'context.build')).toHaveLength(2);
+    expect(await planCreated(taskId)).toBe(1);
   });
 
-  it('[두번실패] 답변 단계에서 실패 → resumable → checkpoint 부터 재개하면 분석을 반복하지 않고 끝난다', async () => {
+  it('[두번실패] 답변 차례에서 실패 → resumable → checkpoint 부터 재개하면 앞 차례를 반복하지 않고 끝난다', async () => {
     const { taskId } = await send('[두번실패] 재개 #fail-twice');
     const failed = await waitStatus(taskId, ['failed']);
     expect(failed.failure).toMatchObject({ code: 'MODEL_ERROR', resumable: true });
@@ -145,7 +155,9 @@ describe('일시정지 · checkpoint 재개', () => {
     });
     expect(res.status).toBe(202);
     await waitStatus(taskId, ['completed']);
-    expect(workCount('#fail-twice')).toBe(1);
+    // 할 일 2번 + 실패한 답변(최초 · 재시도) 2번 + 재개한 답변 1번
+    expect(agentCount('#fail-twice')).toBe(5);
+    expect(await planCreated(taskId)).toBe(1);
     const task = await tenantRows((tx) => tx.task.findUniqueOrThrow({ where: { id: taskId } }));
     // 실패한 실행의 토큰도 작업 합계에 남는다
     expect(task.inputTokens).toBeGreaterThan(0);
@@ -186,7 +198,7 @@ describe('Worker 장애 복구', () => {
   it('답변 중 Worker 가 죽으면 복구 잡이 마지막 checkpoint 부터 다시 실행한다', async () => {
     const execution = ctx.app.get(TaskExecutionService);
     const { taskId } = await send('[느린답변] 복구 #recover');
-    await waitStep(taskId, 'executor.respond');
+    await waitTurn(taskId, 3);
     expect(execution.abandon(taskId)).toBe(true);
     await waitFor(async () => (!execution.isRunning(taskId) ? true : null));
     expect((await status(taskId)).status).toBe('running'); // 죽은 Worker 는 상태를 바꾸지 못한다
@@ -199,16 +211,14 @@ describe('Worker 장애 복구', () => {
     const evts = await events(taskId);
     expect(evts.find((e) => e.type === 'task.recovering')?.payload).toMatchObject({
       reason: 'worker_lost',
-      fromPlanIndex: 2,
     });
     expect(evts.find((e) => e.type === 'task.resumed')?.payload).toMatchObject({
       reason: 'recover',
-      fromPlanIndex: 2,
+      turn: 2,
     });
-    expect(workCount('#recover')).toBe(1);
-    expect(
-      requestsFor('#recover').filter((r) => r.role.startsWith('Executor (respond')),
-    ).toHaveLength(2);
+    // 할 일 2번 + 끊긴 답변 1번 + 다시 한 답변 1번
+    expect(agentCount('#recover')).toBe(4);
+    expect(await planCreated(taskId)).toBe(1);
     const task = await tenantRows((tx) => tx.task.findUniqueOrThrow({ where: { id: taskId } }));
     expect(task.recoveryCount).toBe(1);
     // 최종 답변 메시지는 하나만 저장된다
@@ -220,7 +230,7 @@ describe('Worker 장애 복구', () => {
   it('복구 한도를 넘으면 failed(RECOVERY_LIMIT_EXCEEDED) — 사용자가 재개할 수 있다', async () => {
     const execution = ctx.app.get(TaskExecutionService);
     const { taskId } = await send('[느린답변] 한도 #limit');
-    await waitStep(taskId, 'executor.respond');
+    await waitTurn(taskId, 3);
     execution.abandon(taskId);
     await waitFor(async () => (!execution.isRunning(taskId) ? true : null));
     await tenantRows((tx) => tx.task.update({ where: { id: taskId }, data: { recoveryCount: 3 } }));
@@ -235,7 +245,7 @@ describe('Worker 장애 복구', () => {
 
   it('heartbeat 가 살아 있는 작업은 복구하지 않는다', async () => {
     const { taskId } = await send('[느린분석] 살아 있음 #alive');
-    await waitStep(taskId, 'executor.reason');
+    await waitStep(taskId, 'agent.turn');
     expect(await ctx.app.get(TaskRecoveryService).recover(ctx.tenantA.tenantId, taskId)).toBe(
       'skipped',
     );
@@ -244,21 +254,21 @@ describe('Worker 장애 복구', () => {
 
   it('Worker 종료 시 실행 중 작업을 recovering 으로 넘기고 이어서 끝낸다', async () => {
     const { taskId } = await send('[느린답변] 종료 #shutdown');
-    await waitStep(taskId, 'executor.respond');
+    await waitTurn(taskId, 3);
     await ctx.app.get(TaskExecutionService).shutdown();
     await waitStatus(taskId, ['completed'], 20_000);
     const evts = await events(taskId);
     expect(evts.find((e) => e.type === 'task.recovering')?.payload).toMatchObject({
       reason: 'worker_shutdown',
     });
-    expect(workCount('#shutdown')).toBe(1);
+    expect(await planCreated(taskId)).toBe(1);
   });
 });
 
 describe('실행 중 추가 지시 (steer)', () => {
-  it('다음 단계부터 요청에 반영되고, 끝난 작업에는 보낼 수 없다', async () => {
+  it('다음 차례부터 요청에 반영되고, 끝난 작업에는 보낼 수 없다', async () => {
     const { taskId, eventsUrl } = await send('[느린분석] 요금 비교 #steer');
-    await waitStep(taskId, 'executor.reason');
+    await waitStep(taskId, 'agent.turn');
     const steer = await api<{ messageId: string }>(
       ctx.baseUrl,
       'POST',
@@ -273,8 +283,12 @@ describe('실행 중 추가 지시 (steer)', () => {
     expect(sse.map((e: SseEvent) => e.event)).toEqual(
       expect.arrayContaining(['task.steered', 'task.steer_applied']),
     );
-    const respond = requestsFor('#steer').find((r) => r.role.startsWith('Executor (respond'))!;
-    expect(respond.body.messages.at(-1)!.content).toContain('STEER-MARK');
+    const answer = requestsFor('#steer')
+      .filter((r) => r.role === 'Agent')
+      .at(-1)!;
+    expect(
+      answer.body.messages.some((m) => m.role === 'user' && m.content?.includes('STEER-MARK')),
+    ).toBe(true);
     const saved = await tenantRows((tx) =>
       tx.message.findUniqueOrThrow({ where: { id: steer.body.messageId } }),
     );
@@ -290,7 +304,7 @@ describe('실행 중 추가 지시 (steer)', () => {
 });
 
 describe('콘솔 작업 조회 (C-02)', () => {
-  it('목록 · 트레이스(계획 · 단계 · checkpoint · 역할별 토큰) · 단계 상세', async () => {
+  it('목록 · 트레이스(할 일 목록 · 단계 · checkpoint · 토큰) · 단계 상세', async () => {
     const list = await api<{
       items: Array<{ id: string; status: string; agentName: string; endUserPseudonym: string }>;
     }>(ctx.baseUrl, 'GET', '/v1/admin/tasks?status=completed&limit=50', { token: ownerToken });
@@ -321,21 +335,18 @@ describe('콘솔 작업 조회 (C-02)', () => {
       tx.task.findFirst({ where: { title: { contains: '#pause' } }, select: { id: true } }),
     ))!;
     const trace = await api<{
-      task: { usage: { byRole: Record<string, { inputTokens: number }> } };
+      task: { usage: { inputTokens: number } };
       plans: unknown[];
       steps: Array<{ id: string; name: string; checkpoint: { label: string } | null }>;
     }>(ctx.baseUrl, 'GET', `/v1/admin/tasks/${pauseTask.id}/trace`, { token: ownerToken });
     expect(trace.status).toBe(200);
     expect(trace.body.plans.length).toBeGreaterThanOrEqual(1);
-    expect(trace.body.task.usage.byRole.executor!.inputTokens).toBeGreaterThan(0);
+    expect(trace.body.task.usage.inputTokens).toBeGreaterThan(0);
     const cp = trace.body.steps.find((s) => s.checkpoint)!;
     expect(cp.checkpoint!.label).toMatch(/^cp-\d+$/);
-    const detail = await api<{ checkpoint: { data: { nextPlanIndex: number } } }>(
-      ctx.baseUrl,
-      'GET',
-      `/v1/admin/tasks/${pauseTask.id}/steps/${cp.id}`,
-      { token: ownerToken },
-    );
-    expect(detail.body.checkpoint.data.nextPlanIndex).toBe(2);
+    const detail = await api<{
+      checkpoint: { data: { workingMemory: { loop: { turns: number } } } };
+    }>(ctx.baseUrl, 'GET', `/v1/admin/tasks/${pauseTask.id}/steps/${cp.id}`, { token: ownerToken });
+    expect(detail.body.checkpoint.data.workingMemory.loop.turns).toBeGreaterThanOrEqual(1);
   });
 });

@@ -7,7 +7,12 @@ import type { TaskStatus } from '../generated/prisma/client.js';
 import { PrismaService, type TenantTx } from '../infrastructure/database/prisma.service.js';
 import { TaskQueueService } from '../infrastructure/queue/task-queue.service.js';
 import { BillingService } from '../billing/billing.service.js';
-import { taskSummarySelect, toTaskSummary, type TaskSummaryView } from './task-views.js';
+import {
+  isBudgetExhausted,
+  taskSummarySelect,
+  toTaskSummary,
+  type TaskSummaryView,
+} from './task-views.js';
 
 /** 위젯(사용자 본인) 또는 콘솔(테넌트 전체)의 작업 제어 범위 */
 export interface ControlScope {
@@ -156,6 +161,7 @@ export class TaskControlService {
         const task = await this.lock(tx, taskId, scope);
         if (task.status !== 'failed' && task.status !== 'paused')
           throw new AppError(409, 'TASK_NOT_RESUMABLE');
+        if (isBudgetExhausted(task.failure_code)) throw new AppError(409, 'TASK_BUDGET_EXHAUSTED');
         await this.billing.assertWithinBudget(tx, tenantId);
         let fromStepId: string | undefined;
         if (opts.mode === 'checkpoint') {
@@ -238,10 +244,10 @@ export class TaskControlService {
   private async lock(tx: TenantTx, taskId: string, scope: ControlScope) {
     const rows = scope.endUserId
       ? await tx.$queryRaw<LockedTask[]>`
-          SELECT status, conversation_id, last_checkpoint_step_id FROM tasks
+          SELECT status, conversation_id, last_checkpoint_step_id, failure_code FROM tasks
           WHERE id = ${taskId}::uuid AND end_user_id = ${scope.endUserId}::uuid FOR UPDATE`
       : await tx.$queryRaw<LockedTask[]>`
-          SELECT status, conversation_id, last_checkpoint_step_id FROM tasks
+          SELECT status, conversation_id, last_checkpoint_step_id, failure_code FROM tasks
           WHERE id = ${taskId}::uuid FOR UPDATE`;
     const task = rows[0];
     if (!task) throw AppError.notFound('작업을 찾을 수 없습니다');
@@ -257,4 +263,5 @@ interface LockedTask {
   status: TaskStatus;
   conversation_id: string;
   last_checkpoint_step_id: string | null;
+  failure_code: string | null;
 }

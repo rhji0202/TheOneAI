@@ -26,6 +26,7 @@ import type { AgentTaskJobData } from '../infrastructure/queue/queues.js';
 import { TaskQueueService } from '../infrastructure/queue/task-queue.service.js';
 import { BillingService } from '../billing/billing.service.js';
 import { parseStoredPlan } from '../tasks/plan.js';
+import { isBudgetExhausted } from '../tasks/task-views.js';
 
 export const HEARTBEAT_MS = 15_000;
 
@@ -341,10 +342,6 @@ export class TaskExecutionService {
       return this.events.append(tx, tenantId, taskId, 'task.completed', {
         result: {
           messageId: result.messageId,
-          ...(result.correctionMessageId
-            ? { correctionMessageId: result.correctionMessageId }
-            : {}),
-          verification: result.verification,
           summary: {
             steps: task.completedSteps,
             toolCalls,
@@ -488,7 +485,7 @@ export class TaskExecutionService {
       return this.events.append(tx, tenantId, taskId, 'task.failed', {
         code,
         message,
-        resumable: checkpoint !== null,
+        resumable: checkpoint !== null && !isBudgetExhausted(code),
         lastCheckpoint: checkpoint,
       });
     });
